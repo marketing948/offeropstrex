@@ -15,7 +15,6 @@ This runbook covers a fresh internal host or VPS deployment for OfferOps. It is 
 - Required environment variables:
   ```sh
   export DATABASE_URL=postgres://offerops:offerops_local_only@localhost:5432/offeropstrex
-  export SESSION_SECRET=replace-with-a-real-internal-secret
   export ENABLE_VOLUUM=false
   export VITE_ENABLE_VOLUUM=false
   ```
@@ -23,7 +22,7 @@ This runbook covers a fresh internal host or VPS deployment for OfferOps. It is 
   - `5432` for local Postgres from `docker-compose.yml`.
   - API `PORT`, for example `3000`.
   - Frontend `PORT`, for example `5173`.
-  - For browser use, serve the frontend and `/api` on the same origin, or put a reverse proxy in front of both. The frontend uses relative `/api` requests and the current Vite config does not define a dev proxy.
+  - For production-style browser use, serve the frontend and `/api` on the same origin, or put a reverse proxy in front of both. In Vite dev, `/api` is proxied to `API_PROXY_TARGET` or `http://localhost:3000` by default.
 
 ## Fresh Clone To Internal Run
 
@@ -44,7 +43,6 @@ Set runtime environment:
 
 ```sh
 export DATABASE_URL=postgres://offerops:offerops_local_only@localhost:5432/offeropstrex
-export SESSION_SECRET=replace-with-a-real-internal-secret
 export ENABLE_VOLUUM=false
 export VITE_ENABLE_VOLUUM=false
 ```
@@ -60,6 +58,16 @@ Push the DB schema:
 
 ```sh
 pnpm --filter @workspace/db run push
+```
+
+Bootstrap the first internal admin and workspace:
+
+```sh
+BOOTSTRAP_ADMIN_EMAIL=admin@example.internal \
+BOOTSTRAP_ADMIN_PASSWORD=replace-with-a-real-internal-password \
+BOOTSTRAP_ADMIN_NAME="Internal Admin" \
+BOOTSTRAP_WORKSPACE_NAME="Default Workspace" \
+pnpm --filter @workspace/api-server run bootstrap:internal
 ```
 
 Build library declarations before checking the API package:
@@ -91,7 +99,7 @@ PORT=3000 node --enable-source-maps ./artifacts/api-server/dist/index.mjs
 Start the frontend:
 
 ```sh
-PORT=5173 BASE_PATH=/ pnpm --filter @workspace/offerops run dev
+PORT=5173 BASE_PATH=/ API_PROXY_TARGET=http://localhost:3000 pnpm --filter @workspace/offerops run dev
 ```
 
 For a built frontend preview:
@@ -124,7 +132,7 @@ Expected response:
 Check that the frontend can reach the API:
 
 - Preferred internal shape: expose the frontend and API behind one origin, with `/api/*` routed to the API server and all other paths routed to the frontend.
-- Fallback smoke check: open the frontend URL and verify browser network requests to `/api/*` return API responses, not the frontend HTML.
+- Vite dev shape: `PORT=5173 BASE_PATH=/ API_PROXY_TARGET=http://localhost:3000 pnpm --filter @workspace/offerops run dev`, then verify browser network requests to `/api/*` return API responses, not the frontend HTML.
 
 Local URLs with the example ports:
 
@@ -136,7 +144,7 @@ Local URLs with the example ports:
 
 `DATABASE_URL must be set`:
 
-- Export `DATABASE_URL` in the same shell that runs DB, API, or route-test commands.
+- Export `DATABASE_URL` in the same shell that runs DB, bootstrap, API, or route-test commands.
 - Use `.env.example` as the local placeholder format, but do not commit real secrets.
 
 `ECONNREFUSED` to Postgres:
