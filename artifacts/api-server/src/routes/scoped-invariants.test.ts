@@ -2,9 +2,10 @@ import { after, afterEach, before, beforeEach, describe, test } from "node:test"
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import app from "../app.ts";
 import {
+  batchTrafficSourceRunsTable,
   campaignsTable,
   db,
   employeesTable,
@@ -178,6 +179,70 @@ async function seedCampaignOpsBase() {
 }
 
 describe("route scoped invariants", { concurrency: false }, () => {
+  test("manual batch creation initializes traffic-source workflow memory", async () => {
+    const workspaceId = await createWorkspace("batch-memory");
+    const employeeId = await createEmployee();
+    await assign(employeeId, workspaceId);
+
+    const [firstSource] = await db
+      .insert(workspaceTrafficSourcesTable)
+      .values({ workspaceId, name: `First Source ${Date.now()}`, position: 1, isActive: true })
+      .returning({ id: workspaceTrafficSourcesTable.id });
+    const [secondSource] = await db
+      .insert(workspaceTrafficSourcesTable)
+      .values({ workspaceId, name: `Second Source ${Date.now()}`, position: 2, isActive: true })
+      .returning({ id: workspaceTrafficSourcesTable.id });
+    await db
+      .insert(workspaceTrafficSourcesTable)
+      .values({ workspaceId, name: `Inactive Source ${Date.now()}`, position: 3, isActive: false });
+
+    const created = await request("POST", "/testing-batches", employeeId, {
+      workspaceId,
+      employeeId,
+      batchName: `Memory Batch ${Date.now()}`,
+      affiliateNetwork: "Network",
+      geo: "DE",
+      batchTag: `memory_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
+    });
+    assert.equal(created.response.status, 201);
+    assert.equal(created.json.currentWorkspaceTrafficSourceId, firstSource.id);
+    assert.equal(created.json.averageVisitsThresholdPerOffer, 25000);
+    assert.deepEqual(created.json.optimizationCriteria, {});
+    assert.equal(created.json.optimizationRunStatus, "not_ready");
+    assert.equal(created.json.optimizationWinnersCount, 0);
+    assert.equal(created.json.scalingCandidatesCount, 0);
+    assert.equal(created.json.lastOptimizationRunAt, null);
+    assert.equal(created.json.scalingExportStatus, "not_exported");
+
+    const runs = await db
+      .select()
+      .from(batchTrafficSourceRunsTable)
+      .where(eq(batchTrafficSourceRunsTable.batchId, created.json.id))
+      .orderBy(asc(batchTrafficSourceRunsTable.position));
+
+    assert.equal(runs.length, 2);
+    assert.equal(runs[0].trafficSourceId, firstSource.id);
+    assert.equal(runs[0].status, "active");
+    assert.ok(runs[0].startedAt);
+    assert.equal(runs[1].trafficSourceId, secondSource.id);
+    assert.equal(runs[1].status, "pending");
+    assert.equal(runs[1].startedAt, null);
+
+    const [batch] = await db
+      .select({
+        currentWorkspaceTrafficSourceId: testingBatchesTable.currentWorkspaceTrafficSourceId,
+        averageVisitsThresholdPerOffer: testingBatchesTable.averageVisitsThresholdPerOffer,
+        optimizationRunStatus: testingBatchesTable.optimizationRunStatus,
+        scalingExportStatus: testingBatchesTable.scalingExportStatus,
+      })
+      .from(testingBatchesTable)
+      .where(eq(testingBatchesTable.id, created.json.id));
+    assert.equal(batch.currentWorkspaceTrafficSourceId, firstSource.id);
+    assert.equal(batch.averageVisitsThresholdPerOffer, 25000);
+    assert.equal(batch.optimizationRunStatus, "not_ready");
+    assert.equal(batch.scalingExportStatus, "not_exported");
+  });
+
   test("per-user workspace activation is isolated", async () => {
     const wsOne = await createWorkspace("activation-one");
     const wsTwo = await createWorkspace("activation-two");

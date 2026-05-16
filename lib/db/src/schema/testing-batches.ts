@@ -1,10 +1,12 @@
 import { pgTable, text, serial, timestamp, integer, numeric, pgEnum, unique, jsonb, date } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { employeesTable } from "./employees";
 import { workspacesTable, voluumTrafficSourcesTable } from "./workspaces";
 import { affiliateNetworksTable } from "./affiliate-networks";
 import { geosTable } from "./geos";
+import { workspaceTrafficSourcesTable } from "./workspace-traffic-sources";
 
 // Phase 2: Spec-canonical batch lifecycle (Automation Bible §6).
 // Replaces legacy 12-state enum with the 6-state state machine the
@@ -48,8 +50,16 @@ export const testingBatchesTable = pgTable("testing_batches", {
   // and walks through it via traffic_source_step. current_traffic_source_id
   // is the row in the snapshot the batch is currently testing on.
   currentTrafficSourceId: integer("current_traffic_source_id").references(() => voluumTrafficSourcesTable.id, { onDelete: "set null" }),
+  currentWorkspaceTrafficSourceId: integer("current_workspace_traffic_source_id").references(() => workspaceTrafficSourcesTable.id, { onDelete: "set null" }),
   trafficSourceStep: integer("traffic_source_step").notNull().default(0),
   trafficSourceOrderSnapshot: jsonb("traffic_source_order_snapshot"),
+  averageVisitsThresholdPerOffer: integer("average_visits_threshold_per_offer").notNull().default(25000),
+  optimizationCriteria: jsonb("optimization_criteria").notNull().default(sql`'{}'::jsonb`),
+  optimizationRunStatus: text("optimization_run_status").notNull().default("not_ready"),
+  optimizationWinnersCount: integer("optimization_winners_count").notNull().default(0),
+  scalingCandidatesCount: integer("scaling_candidates_count").notNull().default(0),
+  lastOptimizationRunAt: timestamp("last_optimization_run_at", { withTimezone: true }),
+  scalingExportStatus: text("scaling_export_status").notNull().default("not_exported"),
   // Pivot Phase 2 (Task #25): re-pointed to the new manual
   // `affiliate_networks` table (was previously a FK into the
   // Voluum-synced `voluum_affiliate_networks`, which is dead weight

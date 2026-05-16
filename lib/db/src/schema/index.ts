@@ -24,4 +24,5 @@ export * from "./affiliate-networks";
 export * from "./geos";
 export * from "./campaigns";
 export * from "./batch-results";
+export * from "./batch-traffic-source-runs";
 export * from "./worker-affiliate-networks";

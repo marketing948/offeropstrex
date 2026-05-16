@@ -1,7 +1,8 @@
 import { Router, type IRouter } from "express";
-import { eq, and, inArray } from "drizzle-orm";
+import { asc, eq, and, inArray } from "drizzle-orm";
 import {
   db,
+  batchTrafficSourceRunsTable,
   testingBatchesTable,
   employeesTable,
   employeeWorkspaceAssignmentsTable,
@@ -84,6 +85,7 @@ function serializeBatch(
     liveAt: batch.liveAt ? batch.liveAt.toISOString() : null,
     conditionsMetAt: batch.conditionsMetAt ? batch.conditionsMetAt.toISOString() : null,
     lastSyncAt: batch.lastSyncAt ? batch.lastSyncAt.toISOString() : null,
+    lastOptimizationRunAt: batch.lastOptimizationRunAt ? batch.lastOptimizationRunAt.toISOString() : null,
     employeeName: empId != null ? enrich?.employeeNames.get(empId) ?? null : null,
     affiliateNetworkName: affNetId != null ? enrich?.affiliateNetworkNames.get(affNetId) ?? null : null,
     geoCode: geoLookup?.code ?? null,
@@ -328,13 +330,49 @@ router.post("/testing-batches", async (req, res): Promise<void> => {
     vertical: body.vertical ?? null,
   };
 
+  const trafficSourceRuns = await db
+    .select({
+      id: workspaceTrafficSourcesTable.id,
+      position: workspaceTrafficSourcesTable.position,
+    })
+    .from(workspaceTrafficSourcesTable)
+    .where(
+      and(
+        eq(workspaceTrafficSourcesTable.workspaceId, wsId),
+        eq(workspaceTrafficSourcesTable.isActive, true),
+      ),
+    )
+    .orderBy(asc(workspaceTrafficSourcesTable.position));
+
   // Re-spread workspaceId explicitly so the workspace-isolation lint
   // (scripts/src/check-workspace-isolation.ts) finds the literal
   // `workspaceId:` token inside the .values(...) block.
-  const [batch] = await db
-    .insert(testingBatchesTable)
-    .values({ ...insertValues, workspaceId: wsId })
-    .returning();
+  const batch = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(testingBatchesTable)
+      .values({
+        ...insertValues,
+        workspaceId: wsId,
+        currentWorkspaceTrafficSourceId: trafficSourceRuns[0]?.id ?? null,
+      })
+      .returning();
+
+    if (trafficSourceRuns.length > 0) {
+      const now = new Date();
+      await tx.insert(batchTrafficSourceRunsTable).values(
+        trafficSourceRuns.map((source, index) => ({
+          workspaceId: wsId,
+          batchId: inserted.id,
+          trafficSourceId: source.id,
+          position: source.position,
+          status: index === 0 ? "active" as const : "pending" as const,
+          startedAt: index === 0 ? now : null,
+        })),
+      );
+    }
+
+    return inserted;
+  });
 
   // Pivot Phase 3: BatchCreated still emits for audit; the rule
   // (batch-created.ts) is a no-op in this phase. Phase 4 will rebuild
