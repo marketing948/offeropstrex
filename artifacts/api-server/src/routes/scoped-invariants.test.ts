@@ -383,6 +383,60 @@ describe("route scoped invariants", { concurrency: false }, () => {
     assert.equal(ownership.response.status, 400);
   });
 
+  test("same-workspace non-owner cannot update or complete another worker's task", async () => {
+    const seed = await seedCampaignOpsBase();
+    const otherEmployeeId = await createEmployee();
+    await assign(otherEmployeeId, seed.workspaceId);
+    const [task] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        employeeId: seed.employeeId,
+        relatedBatchId: seed.batchId,
+        taskType: "create_voluum_campaign_ios",
+        title: "Create campaign",
+      })
+      .returning({ id: todoTasksTable.id });
+
+    const patch = await request("PATCH", `/todo-tasks/${task.id}`, otherEmployeeId, { status: "IN_PROGRESS" });
+    assert.equal(patch.response.status, 403);
+
+    const complete = await request("POST", `/todo-tasks/${task.id}/complete`, otherEmployeeId, {
+      trafficSourceId: seed.sourceOneId,
+      voluumCampaignId: "voluum-campaign-1",
+      voluumCampaignName: "Voluum Campaign 1",
+      campaignName: "Internal Campaign 1",
+    });
+    assert.equal(complete.response.status, 403);
+
+    const [taskAfter] = await db
+      .select({ status: todoTasksTable.status, relatedCampaignId: todoTasksTable.relatedCampaignId })
+      .from(todoTasksTable)
+      .where(eq(todoTasksTable.id, task.id));
+    assert.equal(taskAfter.status, "TODO");
+    assert.equal(taskAfter.relatedCampaignId, null);
+  });
+
+  test("batch owner can update a related task assigned to another worker", async () => {
+    const seed = await seedCampaignOpsBase();
+    const assignedEmployeeId = await createEmployee();
+    await assign(assignedEmployeeId, seed.workspaceId);
+    const [task] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        employeeId: assignedEmployeeId,
+        relatedBatchId: seed.batchId,
+        taskType: "all_traffic_sources_tested",
+        title: "All sources tested",
+      })
+      .returning({ id: todoTasksTable.id });
+
+    const patch = await request("PATCH", `/todo-tasks/${task.id}`, seed.employeeId, { status: "IN_PROGRESS" });
+    assert.equal(patch.response.status, 200);
+    assert.equal(patch.json.status, "IN_PROGRESS");
+  });
+
   test("take_campaign_live and find_winners typed behavior", async () => {
     const seed = await seedCampaignOpsBase();
     const [campaign] = await db
@@ -407,6 +461,16 @@ describe("route scoped invariants", { concurrency: false }, () => {
         title: "Take live",
       })
       .returning({ id: todoTasksTable.id });
+
+    const missingLiveData = await request("POST", `/todo-tasks/${takeLive.id}/complete`, seed.employeeId, {});
+    assert.equal(missingLiveData.response.status, 400);
+
+    const [beforeLiveCampaign] = await db
+      .select()
+      .from(campaignsTable)
+      .where(eq(campaignsTable.id, campaign.id));
+    assert.equal(beforeLiveCampaign.status, "voluum_created");
+    assert.equal(beforeLiveCampaign.liveStartedAt, null);
 
     const live = await request("POST", `/todo-tasks/${takeLive.id}/complete`, seed.employeeId, {
       trafficSourceCampaignId: "ts-campaign-1",

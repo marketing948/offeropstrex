@@ -13,6 +13,7 @@ import {
 import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access";
 import { requireWorkspaceFromBody } from "../lib/require-workspace";
 import { emit, emitWithinTx } from "../engine/event-bus.ts";
+import { getEmployeeFromToken } from "./auth";
 
 const router: IRouter = Router();
 
@@ -36,6 +37,33 @@ function serializeTask(
     batchName: batchName ?? null,
     dueDate: task.dueDate ?? null,
   };
+}
+
+async function requireTaskOwnerOrAdmin(
+  req: import("express").Request,
+  res: import("express").Response,
+  task: Pick<typeof todoTasksTable.$inferSelect, "employeeId" | "relatedBatchId">,
+): Promise<boolean> {
+  const employee = await getEmployeeFromToken(req);
+  if (!employee) {
+    res.status(401).json({ error: "Unauthorized" });
+    return false;
+  }
+  if (employee.role === "admin" || employee.id === task.employeeId) {
+    return true;
+  }
+  if (task.relatedBatchId != null) {
+    const [batch] = await db
+      .select({ employeeId: testingBatchesTable.employeeId })
+      .from(testingBatchesTable)
+      .where(eq(testingBatchesTable.id, task.relatedBatchId))
+      .limit(1);
+    if (batch?.employeeId === employee.id) {
+      return true;
+    }
+  }
+  res.status(403).json({ error: "Only the task assignee, batch owner, or an admin can update this task" });
+  return false;
 }
 
 router.get("/todo-tasks", async (req, res): Promise<void> => {
@@ -148,11 +176,14 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
       workspaceId: todoTasksTable.workspaceId,
       status: todoTasksTable.status,
       taskType: todoTasksTable.taskType,
+      employeeId: todoTasksTable.employeeId,
+      relatedBatchId: todoTasksTable.relatedBatchId,
     })
     .from(todoTasksTable)
     .where(eq(todoTasksTable.id, params.data.id));
   if (!existing) { res.status(404).json({ error: "Task not found" }); return; }
   if ((await requireWorkspaceAccess(req, res, existing.workspaceId)) === null) return;
+  if (!(await requireTaskOwnerOrAdmin(req, res, existing))) return;
 
   if (
     CAMPAIGN_OPS_TASK_TYPES.has(existing.taskType) &&
@@ -250,6 +281,14 @@ const takeCampaignLiveSchema = z.object({
   trafficSourceCampaignId: z.string().trim().nullable().optional(),
   trafficSourceCampaignUrl: z.string().trim().nullable().optional(),
   notes: z.string().nullable().optional(),
+}).superRefine((data, ctx) => {
+  if (!data.trafficSourceCampaignId && !data.trafficSourceCampaignUrl) {
+    ctx.addIssue({
+      code: "custom",
+      message: "trafficSourceCampaignId or trafficSourceCampaignUrl is required",
+      path: ["trafficSourceCampaignId"],
+    });
+  }
 });
 const findWinnersSchema = z.object({
   winnersCount: z.number().int().min(0),
@@ -285,6 +324,7 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
     return;
   }
   if ((await requireWorkspaceAccess(req, res, task.workspaceId)) === null) return;
+  if (!(await requireTaskOwnerOrAdmin(req, res, task))) return;
   if (task.status === "DONE") {
     res.status(409).json({ error: "Task already complete" });
     return;
