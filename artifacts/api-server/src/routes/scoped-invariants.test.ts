@@ -223,9 +223,13 @@ describe("route scoped invariants", { concurrency: false }, () => {
     assert.equal(runs.length, 2);
     assert.equal(runs[0].trafficSourceId, firstSource.id);
     assert.equal(runs[0].status, "active");
+    assert.equal(runs[0].iosStatus, "active");
+    assert.equal(runs[0].androidStatus, "active");
     assert.ok(runs[0].startedAt);
     assert.equal(runs[1].trafficSourceId, secondSource.id);
     assert.equal(runs[1].status, "pending");
+    assert.equal(runs[1].iosStatus, "pending");
+    assert.equal(runs[1].androidStatus, "pending");
     assert.equal(runs[1].startedAt, null);
 
     const [batch] = await db
@@ -313,6 +317,17 @@ describe("route scoped invariants", { concurrency: false }, () => {
 
   test("typed CampaignOps completion succeeds atomically with follow-up", async () => {
     const seed = await seedCampaignOpsBase();
+    await db.insert(batchTrafficSourceRunsTable).values({
+      workspaceId: seed.workspaceId,
+      batchId: seed.batchId,
+      trafficSourceId: seed.sourceOneId,
+      position: 1,
+      status: "active",
+      iosStatus: "active",
+      androidStatus: "active",
+      startedAt: new Date(),
+    });
+
     const [task] = await db
       .insert(todoTasksTable)
       .values({
@@ -340,6 +355,13 @@ describe("route scoped invariants", { concurrency: false }, () => {
       .where(eq(campaignsTable.id, json.campaignId));
     assert.equal(campaign.status, "voluum_created");
 
+    const [runAfterIos] = await db
+      .select()
+      .from(batchTrafficSourceRunsTable)
+      .where(and(eq(batchTrafficSourceRunsTable.batchId, seed.batchId), eq(batchTrafficSourceRunsTable.trafficSourceId, seed.sourceOneId)));
+    assert.equal(runAfterIos.iosCampaignId, campaign.id);
+    assert.equal(runAfterIos.androidCampaignId, null);
+
     const [event] = await db
       .select()
       .from(eventsTable)
@@ -351,6 +373,32 @@ describe("route scoped invariants", { concurrency: false }, () => {
       .from(todoTasksTable)
       .where(and(eq(todoTasksTable.relatedCampaignId, campaign.id), eq(todoTasksTable.taskType, "take_campaign_live")));
     assert.equal(followUp.status, "TODO");
+
+    const [androidTask] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        employeeId: seed.employeeId,
+        relatedBatchId: seed.batchId,
+        taskType: "create_voluum_campaign_android",
+        title: "Create Android campaign",
+        trafficSourceId: seed.sourceOneId,
+      })
+      .returning({ id: todoTasksTable.id });
+    const android = await request("POST", `/todo-tasks/${androidTask.id}/complete`, seed.employeeId, {
+      trafficSourceId: seed.sourceOneId,
+      voluumCampaignId: `voluum-android-${Date.now()}`,
+      voluumCampaignName: "Android Voluum Campaign",
+      campaignName: "Android Manual Campaign",
+    });
+    assert.equal(android.response.status, 200);
+
+    const [runAfterAndroid] = await db
+      .select()
+      .from(batchTrafficSourceRunsTable)
+      .where(and(eq(batchTrafficSourceRunsTable.batchId, seed.batchId), eq(batchTrafficSourceRunsTable.trafficSourceId, seed.sourceOneId)));
+    assert.equal(runAfterAndroid.iosCampaignId, campaign.id);
+    assert.equal(runAfterAndroid.androidCampaignId, android.json.campaignId);
   });
 
   test("typed CampaignOps completion rolls back on follow-up failure", async () => {

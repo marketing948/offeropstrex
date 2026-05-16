@@ -1,14 +1,24 @@
-import { pgTable, serial, timestamp, integer, pgEnum, unique } from "drizzle-orm/pg-core";
+import { pgTable, serial, timestamp, integer, text, pgEnum, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { workspacesTable } from "./workspaces";
 import { testingBatchesTable } from "./testing-batches";
 import { workspaceTrafficSourcesTable } from "./workspace-traffic-sources";
+import { campaignsTable } from "./campaigns";
 
 export const batchTrafficSourceRunStatusEnum = pgEnum("batch_traffic_source_run_status", [
   "pending",
   "active",
   "completed",
+  "failed",
+  "skipped",
+]);
+
+export const batchTrafficSourcePlatformStatusEnum = pgEnum("batch_traffic_source_platform_status", [
+  "pending",
+  "active",
+  "completed",
+  "failed",
   "skipped",
 ]);
 
@@ -19,6 +29,14 @@ export const batchTrafficSourceRunsTable = pgTable("batch_traffic_source_runs", 
   trafficSourceId: integer("traffic_source_id").notNull().references(() => workspaceTrafficSourcesTable.id, { onDelete: "restrict" }),
   position: integer("position").notNull(),
   status: batchTrafficSourceRunStatusEnum("status").notNull().default("pending"),
+  iosStatus: batchTrafficSourcePlatformStatusEnum("ios_status").notNull().default("pending"),
+  androidStatus: batchTrafficSourcePlatformStatusEnum("android_status").notNull().default("pending"),
+  iosCampaignId: integer("ios_campaign_id").references(() => campaignsTable.id, { onDelete: "set null" }),
+  androidCampaignId: integer("android_campaign_id").references(() => campaignsTable.id, { onDelete: "set null" }),
+  iosFailureReason: text("ios_failure_reason"),
+  androidFailureReason: text("android_failure_reason"),
+  iosCompletedAt: timestamp("ios_completed_at", { withTimezone: true }),
+  androidCompletedAt: timestamp("android_completed_at", { withTimezone: true }),
   startedAt: timestamp("started_at", { withTimezone: true }),
   completedAt: timestamp("completed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

@@ -366,6 +366,8 @@ router.post("/testing-batches", async (req, res): Promise<void> => {
           trafficSourceId: source.id,
           position: source.position,
           status: index === 0 ? "active" as const : "pending" as const,
+          iosStatus: index === 0 ? "active" as const : "pending" as const,
+          androidStatus: index === 0 ? "active" as const : "pending" as const,
           startedAt: index === 0 ? now : null,
         })),
       );

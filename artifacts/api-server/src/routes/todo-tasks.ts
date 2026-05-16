@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { eq, and } from "drizzle-orm";
-import { db, todoTasksTable, employeesTable, testingBatchesTable, campaignsTable, workspaceTrafficSourcesTable } from "@workspace/db";
+import { db, todoTasksTable, employeesTable, testingBatchesTable, campaignsTable, workspaceTrafficSourcesTable, batchTrafficSourceRunsTable } from "@workspace/db";
 import { z } from "zod/v4";
 import {
   CreateTodoTaskBody,
@@ -445,6 +445,22 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
           })
           .returning();
         resolvedCampaignId = c.id;
+
+        await tx
+          .update(batchTrafficSourceRunsTable)
+          .set(
+            platformFromType === "ios"
+              ? { iosCampaignId: c.id }
+              : { androidCampaignId: c.id },
+          )
+          .where(
+            and(
+              eq(batchTrafficSourceRunsTable.workspaceId, task.workspaceId),
+              eq(batchTrafficSourceRunsTable.batchId, task.relatedBatchId!),
+              eq(batchTrafficSourceRunsTable.trafficSourceId, parsedCreate.trafficSourceId),
+              eq(batchTrafficSourceRunsTable.status, "active"),
+            ),
+          );
       } else if (task.taskType === "take_campaign_live" && parsedTakeLive !== null) {
         const updatedCampaign = await tx
           .update(campaignsTable)
