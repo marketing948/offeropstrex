@@ -1,0 +1,121 @@
+CRITICAL VOLUUM WORKSPACE ISOLATION FIX
+
+The current Voluum integration is not acceptable unless every single Voluum API request is strictly scoped to the selected Voluum workspace.
+
+Goal:
+OfferOps workspace Trexondigital must only import Voluum data from the Trexondigital Voluum workspace.
+OfferOps workspace Joffeca must only import Voluum data from the Joffeca Voluum workspace.
+No campaign, offer, traffic source, affiliate network, or report row from another Voluum workspace may ever be imported, displayed, mapped, or synced.
+
+Important:
+There is a difference between:
+1. OfferOps internal workspace id = numeric local database id
+2. Voluum workspace id = the real workspace identifier from Voluum API
+
+Do not confuse them.
+
+Required architecture:
+
+1. Each OfferOps workspace must store:
+   - voluumAccessId
+   - voluumAccessKey
+   - voluumApiBaseUrl
+   - voluumWorkspaceId
+   - voluumWorkspaceName
+
+2. The sync route must fail hard if voluumWorkspaceId is missing.
+   Do not allow fallback to unscoped Voluum requests.
+
+3. Every Voluum fetch function must receive voluumWorkspaceId and apply it to the API request:
+   - traffic sources
+   - affiliate networks
+   - offers
+   - campaigns
+   - reports / metrics
+
+4. Remove or disable any old global Voluum settings:
+   - voluum_access_id
+   - voluum_access_key
+   - voluum_api_base_url
+   - voluum_mapping_*
+   These legacy global settings are dangerous because they can mix data across workspaces.
+
+5. Remove or rewrite this unsafe route:
+   GET /sync/voluum/campaigns?workspace_id=N
+   It currently calls fetchVoluumCampaigns(token, apiBaseUrl) without passing voluumWorkspaceId.
+   This is unscoped and can return campaigns from the wrong Voluum workspace.
+
+6. Rewrite fetchVoluumReport.
+   It currently calls:
+   GET /report?from=...&to=...&groupBy=campaign,day...
+   without Voluum workspace filtering.
+   This is unsafe.
+
+   The report request must include the Voluum workspace filter exactly as Voluum expects it.
+   If the correct parameter name is uncertain, inspect Voluum panel network requests in browser DevTools while switching/filtering workspace in Voluum.
+   Use the exact same parameter/header/body that Voluum panel uses.
+   Do not guess.
+
+7. Add a Voluum workspace discovery/test route:
+   POST /sync/voluum/workspaces/:id/test-metadata
+
+   It should:
+   - authenticate to Voluum
+   - fetch available Voluum workspaces
+   - show their real Voluum IDs and names
+   - allow admin to select the correct Voluum workspace id
+   - save it into workspaces.voluumWorkspaceId
+
+8. Add hard validation after every API response:
+   For every imported item, verify that the returned item belongs to the configured voluumWorkspaceId.
+   Accept common field names:
+   - workspaceId
+   - workspace.id
+   - workspaceName
+   - workspace.name
+
+   If Voluum response does not include workspace data, then the request itself must be proven scoped by the API URL/params/header.
+   Log the final request URL and workspace id.
+
+9. Database isolation:
+   Every Voluum table must be unique by OfferOps workspace id + Voluum object id:
+   - voluum_traffic_sources: unique(workspace_id, voluum_id)
+   - voluum_affiliate_networks: unique(workspace_id, voluum_id)
+   - voluum_campaigns: unique(workspace_id, campaign_id)
+   - voluum_offers: unique(workspace_id, offer_id)
+   - voluum_campaign_mappings: unique(workspace_id, campaign_id)
+
+10. All reads in the UI must require workspace_id and filter by workspace_id.
+    Never return Voluum data without workspace_id.
+
+11. Admin may switch between OfferOps workspaces, but data must still be isolated.
+    Admin visibility is UI permission only.
+    It must not merge data from multiple workspaces into one result.
+
+12. Employees may only see workspaces assigned to them.
+    If employee has multiple workspaces, they can switch between them.
+    Still, each API call must include only one workspace_id.
+
+13. Testing requirement:
+    Create two OfferOps workspaces:
+    - Trexondigital with Voluum Workspace ID A
+    - Joffeca with Voluum Workspace ID B
+
+    Sync Trexondigital:
+    - confirm only Voluum workspace A campaigns/offers/networks/sources are inserted
+    - confirm no workspace B rows exist under Trexondigital
+
+    Sync Joffeca:
+    - confirm only Voluum workspace B data is inserted
+
+    Then run SQL checks:
+    - no campaign_id from Joffeca appears under Trexondigital workspace_id
+    - no offer_id from Joffeca appears under Trexondigital workspace_id
+    - no traffic source or affiliate network crosses workspace boundaries
+
+Acceptance criteria:
+The app must not sync anything from Voluum unless a valid voluumWorkspaceId is configured.
+Every Voluum request must be scoped to that voluumWorkspaceId.
+Every database insert/update must include the OfferOps workspace_id.
+Every UI query must filter by OfferOps workspace_id.
+No global Voluum sync or global mapping may remain.

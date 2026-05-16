@@ -1,0 +1,189 @@
+We should rename and redesign the first navigation tab.
+
+Current:
+Operation
+
+New:
+Operations Hub
+
+Important:
+This should become the main command center of OfferOps.
+
+The previous Overview + Performance sections should be merged into this single unified Operations Hub.
+
+OfferOps is not just an analytics dashboard.
+It should feel like a Media Buying Operating System / Mission Control center.
+
+====================================================
+OPERATIONS HUB STRUCTURE
+====================================================
+
+The Operations Hub should be the first page users see after login.
+
+====================================================
+1. LIVE OPERATIONS
+====================================================
+
+Show real-time operational status:
+
+Cards:
+- Active Live Campaigns
+- Running Batches
+- Campaigns Near Click Cap
+- Ready For Optimization
+- Pending Scale Tasks
+- Overdue Tasks
+
+Add quick links:
+- View Live Campaigns
+- Open Optimization Queue
+- Open Tasks
+
+====================================================
+2. ACTION CENTER
+====================================================
+
+Show items requiring immediate attention.
+
+Examples:
+- Campaigns that reached click target
+- Batches waiting for optimization
+- Winners not moved to scale
+- Missing traffic source assignments
+- Overdue tasks
+- Campaigns with poor ROI
+- Stuck batches
+
+Each item should have:
+- priority
+- assigned employee
+- related batch/campaign
+- direct action button
+
+====================================================
+3. PERFORMANCE SNAPSHOT
+====================================================
+
+Keep only high-level metrics.
+
+Cards:
+- Spend
+- Revenue
+- Profit
+- ROI
+- Winners Found
+- Scale Campaigns
+
+Graphs:
+- Daily Profit Trend
+- Testing Volume Trend
+- Winners Trend
+- ROI Trend
+
+Do not overload with analytics.
+
+====================================================
+4. EMPLOYEE ACTIVITY
+====================================================
+
+Leaderboard-style section.
+
+Show:
+- Most Winners Found
+- Most Optimizations Completed
+- Highest ROI
+- Most Active Employee
+- Fastest Optimizer
+
+Add:
+- weekly rankings
+- monthly rankings
+
+====================================================
+5. TESTING PIPELINE
+====================================================
+
+Visual lifecycle flow:
+
+New Batch
+→ Assigned
+→ Live Testing
+→ Cap Reached
+→ Optimization
+→ Scaling
+→ Completed
+
+Show counts in each stage.
+
+Allow clicking each stage to filter relevant items.
+
+====================================================
+6. STRATEGIC INSIGHTS
+====================================================
+
+Show intelligent operational insights.
+
+Examples:
+- Best performing GEO this week
+- Best traffic source
+- Underperforming campaigns
+- Optimization bottlenecks
+- High ROI batches
+- Untested traffic source opportunities
+
+====================================================
+7. TODAY'S PRIORITIES
+====================================================
+
+Critical section.
+
+Show the highest-priority actions required today.
+
+Examples:
+- Optimize Batch X
+- Launch next traffic source test
+- Move winners to scale
+- Review poor ROI campaign
+
+Sort by:
+- urgency
+- impact
+- overdue status
+
+====================================================
+8. WORKSPACE CONTEXT
+====================================================
+
+All Operations Hub data should be scoped to the currently selected Workspace.
+
+The selected workspace should control:
+- campaigns
+- batches
+- traffic sources
+- reports
+- goals
+- tasks
+- insights
+
+====================================================
+9. DESIGN DIRECTION
+====================================================
+
+The Operations Hub should feel:
+- operational
+- strategic
+- action-driven
+- clean SaaS style
+- executive-level
+- fast to scan
+
+Avoid:
+- duplicate metrics
+- unnecessary analytics clutter
+- spreadsheet feel
+
+The page should immediately answer:
+“What needs attention right now?”
+“What should the team do next?”
+“Where are the bottlenecks?”
+“What is driving profit?”

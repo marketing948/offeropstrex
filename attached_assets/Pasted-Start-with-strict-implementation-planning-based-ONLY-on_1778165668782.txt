@@ -1,0 +1,143 @@
+Start with strict implementation planning based ONLY on the Automation Bible specification.
+
+The Automation Bible is now the SINGLE SOURCE OF TRUTH.
+
+Do NOT preserve or reuse old automation behavior unless it explicitly matches the new specification.
+
+Use the following implementation rules and assumptions:
+
+1. OFFER_READY_FOR_LIVE_TESTING → LIVE_TESTS trigger:
+LIVE_TESTS is ALWAYS a manual worker action.
+
+The system must NEVER automatically move a batch into LIVE_TESTS.
+
+A worker manually changes the batch status after:
+- both tracker campaigns exist
+- live traffic-source campaigns were launched
+- testing actually started
+
+2. GEO validation:
+Do NOT hardcode a GEO whitelist.
+
+Allow GEO regex:
+^[a-z]{2,3}$
+
+3. Manual "New Testing Batch" modal:
+Remove it from normal worker flow entirely.
+
+Keep it ONLY as:
+- admin-only
+- hidden under advanced/admin tools
+- emergency/manual recovery tool
+
+Normal batch creation MUST happen ONLY through:
+- Voluum sync
+- valid offer tags
+
+4. Architecture priority order:
+Backend architecture MUST come before UI implementation.
+
+Implementation order:
+1. Workspace isolation enforcement
+2. Database schema migration
+3. Event engine
+4. Rule engine
+5. Sync rewrite
+6. Tracker tag validator
+7. Notifications system
+8. Admin backend
+9. Worker workflow UI
+10. Dashboard polish
+
+5. Core implementation philosophy:
+The system MUST be event-driven.
+
+The system MUST NOT contain automation spaghetti logic.
+
+Every workflow transition must happen ONLY through:
+- validated events
+- validated rules
+- validated states
+
+6. Required audit and migration behavior:
+- Identify obsolete automation logic
+- Delete deprecated workflow behavior
+- Detect schema mismatches
+- Detect naming inconsistencies
+- Detect violations of workspace isolation
+- Detect invalid state transitions
+- Detect duplicate or conflicting automations
+
+7. Campaign terminology:
+Use strict naming:
+
+- “Tracker Campaign” = Voluum campaign
+- “Live Campaign” = real traffic-source campaign
+
+Never mix the two concepts.
+
+8. Batch rules:
+- A batch can belong to ONLY ONE affiliate network
+- A batch can belong to ONLY ONE GEO
+- A batch can be tested on ONLY ONE traffic source at a time
+- Traffic source progression is sequential only
+
+9. Sync rules:
+Sync MUST ONLY:
+- import NEW offers
+- import NEW tracker campaigns
+- update stats
+
+Sync MUST NOT:
+- recreate static entities
+- recreate existing entities
+- globally mix workspaces
+
+10. Deduplication rules:
+Offers:
+- deduplicate ONLY by voluum_offer_id
+
+Tracker Campaigns:
+- deduplicate ONLY by voluum_campaign_id
+
+NEVER deduplicate by tags.
+
+11. Offer winner logic:
+An offer is considered a winner ONLY IF:
+ROI > -100
+
+12. TESTED logic:
+A batch becomes TESTED ONLY IF:
+EVERY offer inside the batch has:
+visits >= 20000
+
+13. Missing tracker campaign behavior:
+If only one tracker campaign exists:
+- batch stays in WAITING_FOR_TRACKER_CAMPAIGNS
+- missing task remains TODO
+- task remains flashing
+- notifications remain active
+
+14. Traffic source order:
+Traffic source order is admin-defined.
+
+Changing traffic source order MUST NOT affect batches already in progress.
+
+Only NEW batches use the updated order.
+
+15. Implementation requirement:
+Before building UI features:
+- complete backend migration
+- complete state machine
+- complete event engine
+- complete sync rewrite
+- complete rule engine
+
+UI must remain secondary until workflow logic is stable.
+
+Now:
+- switch to implementation planning mode
+- generate implementation phases
+- generate dependency-based project tasks
+- organize tasks by backend-first architecture
+- prepare the system for phased migration from legacy automation logic

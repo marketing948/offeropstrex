@@ -1,0 +1,4423 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: OfferOps API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: auth
+    description: Authentication
+  - name: workspace-members
+    description: User-workspace access assignments
+  - name: employees
+    description: Employee management
+  - name: goals
+    description: Goal management
+  - name: daily-reports
+    description: Daily report management
+  - name: testing-batches
+    description: Testing batch management
+  - name: offers
+    description: Offer management
+  - name: performance
+    description: Performance data
+  - name: todo-tasks
+    description: Todo task management
+  - name: admin
+    description: Admin-only operations (Phase 8)
+  - name: dashboard
+    description: Dashboard and analytics
+  - name: settings
+    description: Application settings
+  - name: notifications
+    description: In-app notifications
+  - name: queues
+    description: Workflow queue summaries
+  - name: sync
+    description: Voluum data sync and workspace management
+  - name: workspace-traffic-sources
+    description: Per-workspace traffic-source rotation order (Phase 8)
+  - name: affiliate-networks
+    description: Manual affiliate-network lookup (Pivot Phase 2)
+  - name: geos
+    description: Manual GEO lookup (Pivot Phase 2)
+  - name: campaigns
+    description: Manual campaign rows per testing batch (Pivot Phase 4+)
+  - name: batch-results
+    description: Manual batch performance results (Pivot Phase 4+)
+paths:
+  /affiliate-networks:
+    get:
+      operationId: listAffiliateNetworks
+      tags: [affiliate-networks]
+      summary: List affiliate networks (workspace-scoped)
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of affiliate networks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AffiliateNetwork"
+    post:
+      operationId: createAffiliateNetwork
+      tags: [affiliate-networks]
+      summary: Create an affiliate network (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAffiliateNetworkBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AffiliateNetwork"
+        "409":
+          description: Duplicate name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /affiliate-networks/{id}:
+    patch:
+      operationId: updateAffiliateNetwork
+      tags: [affiliate-networks]
+      summary: Update an affiliate network (admin)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAffiliateNetworkBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AffiliateNetwork"
+    delete:
+      operationId: deleteAffiliateNetwork
+      tags: [affiliate-networks]
+      summary: Delete an affiliate network (admin)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "409":
+          description: In use by batches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /geos:
+    get:
+      operationId: listGeos
+      tags: [geos]
+      summary: List GEOs (workspace-scoped)
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of GEOs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Geo"
+    post:
+      operationId: createGeo
+      tags: [geos]
+      summary: Create a GEO (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGeoBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Geo"
+        "409":
+          description: Duplicate code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /geos/{id}:
+    patch:
+      operationId: updateGeo
+      tags: [geos]
+      summary: Update a GEO (admin)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateGeoBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Geo"
+    delete:
+      operationId: deleteGeo
+      tags: [geos]
+      summary: Delete a GEO (admin)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "409":
+          description: In use by batches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /campaigns:
+    get:
+      operationId: listCampaigns
+      tags: [campaigns]
+      summary: List campaigns (workspace-scoped, optional batch filter)
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: batch_id
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of campaigns
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Campaign"
+    post:
+      operationId: createCampaign
+      tags: [campaigns]
+      summary: Create a manual campaign row
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCampaignBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Campaign"
+        "404":
+          description: Batch not found in workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Duplicate campaign for batch+platform
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /campaigns/{id}:
+    patch:
+      operationId: updateCampaign
+      tags: [campaigns]
+      summary: Update a campaign row (status flips emit CampaignStatusChanged)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCampaignBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Campaign"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /batch-results:
+    get:
+      operationId: listBatchResults
+      tags: [batch-results]
+      summary: List batch results (workspace-scoped, optional batch filter)
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: batch_id
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of batch results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BatchResult"
+    post:
+      operationId: recordBatchResult
+      tags: [batch-results]
+      summary: Record (upsert) batch results — one row per batch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordBatchResultBody"
+      responses:
+        "201":
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchResult"
+        "404":
+          description: Batch not found in workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /batch-results/{id}:
+    patch:
+      operationId: updateBatchResult
+      tags: [batch-results]
+      summary: Update an existing batch results row
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBatchResultBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchResult"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /testing-batches/{id}/campaigns-go-live:
+    post:
+      operationId: campaignsGoLive
+      tags: [testing-batches]
+      summary: |
+        Pivot Phase 5 atomic go-live — stamps batch.live_at and flips
+        both batch campaigns from `ready` to `live` in a single
+        transaction. Idempotent: a campaign already `live` is left as-is.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Updated batch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestingBatch"
+        "404":
+          description: Batch not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginBody"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Logout
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Get current user
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Employee"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/my-workspaces:
+    get:
+      operationId: getMyWorkspaces
+      tags: [auth]
+      summary: Get workspaces accessible to the current user
+      description: Admins see all workspaces. Employees see only assigned workspaces.
+      responses:
+        "200":
+          description: List of accessible workspaces
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VoluumWorkspace"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /workspace-members:
+    get:
+      operationId: listWorkspaceMembers
+      tags: [workspace-members]
+      summary: List members of a workspace
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of workspace members
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkspaceMember"
+    post:
+      operationId: addWorkspaceMember
+      tags: [workspace-members]
+      summary: Assign an employee to a workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddWorkspaceMemberBody"
+      responses:
+        "201":
+          description: Assignment created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceMember"
+        "409":
+          description: Already assigned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /workspace-members/{id}:
+    delete:
+      operationId: removeWorkspaceMember
+      tags: [workspace-members]
+      summary: Remove an employee from a workspace
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /employees:
+    get:
+      operationId: listEmployees
+      tags: [employees]
+      summary: List employees
+      description: |
+        When `workspace_id` is provided, returns only employees assigned to that
+        workspace (admins are always included, since they implicitly have access
+        to all workspaces). When omitted, returns the global employee list and
+        requires admin authentication (used by the workspace member-add picker).
+      parameters:
+        - name: workspace_id
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of employees
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Employee"
+
+    post:
+      operationId: createEmployee
+      tags: [employees]
+      summary: Create employee
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEmployeeBody"
+      responses:
+        "201":
+          description: Employee created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Employee"
+
+  /employees/{id}:
+    get:
+      operationId: getEmployee
+      tags: [employees]
+      summary: Get employee by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Employee
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Employee"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    patch:
+      operationId: updateEmployee
+      tags: [employees]
+      summary: Update employee
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEmployeeBody"
+      responses:
+        "200":
+          description: Updated employee
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Employee"
+
+    delete:
+      operationId: deleteEmployee
+      tags: [employees]
+      summary: Delete employee
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /goals:
+    get:
+      operationId: listGoals
+      tags: [goals]
+      summary: List goals
+      parameters:
+        - name: employee_id
+          in: query
+          schema:
+            type: integer
+        - name: period_type
+          in: query
+          schema:
+            type: string
+            enum: [weekly, monthly]
+      responses:
+        "200":
+          description: List of goals
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Goal"
+
+    post:
+      operationId: createGoal
+      tags: [goals]
+      summary: Create goal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGoalBody"
+      responses:
+        "201":
+          description: Goal created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Goal"
+
+  /goals/{id}:
+    get:
+      operationId: getGoal
+      tags: [goals]
+      summary: Get goal by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Goal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Goal"
+
+    patch:
+      operationId: updateGoal
+      tags: [goals]
+      summary: Update goal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateGoalBody"
+      responses:
+        "200":
+          description: Updated goal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Goal"
+
+    delete:
+      operationId: deleteGoal
+      tags: [goals]
+      summary: Delete goal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /daily-reports:
+    get:
+      operationId: listDailyReports
+      tags: [daily-reports]
+      summary: List daily reports
+      parameters:
+        - name: employee_id
+          in: query
+          schema:
+            type: integer
+        - name: date_from
+          in: query
+          schema:
+            type: string
+        - name: date_to
+          in: query
+          schema:
+            type: string
+        - name: workspace_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of daily reports
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DailyReport"
+
+    post:
+      operationId: createDailyReport
+      tags: [daily-reports]
+      summary: Create daily report
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDailyReportBody"
+      responses:
+        "201":
+          description: Daily report created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyReport"
+
+  /daily-reports/{id}:
+    get:
+      operationId: getDailyReport
+      tags: [daily-reports]
+      summary: Get daily report by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Daily report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyReport"
+
+    patch:
+      operationId: updateDailyReport
+      tags: [daily-reports]
+      summary: Update daily report
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDailyReportBody"
+      responses:
+        "200":
+          description: Updated daily report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyReport"
+
+  /weekly-reports:
+    get:
+      operationId: listWeeklyReports
+      tags: [daily-reports]
+      summary: List weekly aggregated reports
+      parameters:
+        - name: employee_id
+          in: query
+          schema:
+            type: integer
+        - name: week_start
+          in: query
+          schema:
+            type: string
+        - name: workspace_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of weekly reports
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WeeklyReport"
+
+  /testing-batches:
+    post:
+      operationId: createTestingBatch
+      tags: [testing-batches]
+      summary: Create a testing batch (manual flow — Pivot Phase 3)
+      description: |
+        Worker-accessible manual batch creation. Accepts the new
+        spec payload (affiliateNetworkId / geoId / trafficSourceId /
+        assignedWorkerId / testRound / startDate / testDurationHours)
+        and ALSO accepts the legacy text payload for backward compat
+        (with a deprecation log).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTestingBatchBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestingBatch"
+        "400":
+          description: Invalid body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    get:
+      operationId: listTestingBatches
+      tags: [testing-batches]
+      summary: List testing batches
+      parameters:
+        - name: employee_id
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: geo
+          in: query
+          schema:
+            type: string
+        - name: affiliate_network
+          in: query
+          schema:
+            type: string
+        - name: traffic_source
+          in: query
+          schema:
+            type: string
+        - name: workspace_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of testing batches
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TestingBatch"
+
+  /testing-batches/{id}:
+    get:
+      operationId: getTestingBatch
+      tags: [testing-batches]
+      summary: Get testing batch by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Testing batch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestingBatch"
+
+    patch:
+      operationId: updateTestingBatch
+      tags: [testing-batches]
+      summary: Update testing batch (triggers automation if status -> tested)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTestingBatchBody"
+      responses:
+        "200":
+          description: Updated testing batch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestingBatch"
+
+    delete:
+      operationId: deleteTestingBatch
+      tags: [testing-batches]
+      summary: Delete testing batch
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /testing-batches/{id}/go-live:
+    post:
+      operationId: goLiveBatch
+      tags: [testing-batches]
+      summary: Mark batch as live (campaign active in tracker)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Batch is now live
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestingBatch"
+
+  /testing-batches/{id}/mark-ready:
+    post:
+      operationId: markBatchReady
+      tags: [testing-batches]
+      summary: Mark batch as ready for optimization (conditions met)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Batch moved to ready_for_optimization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestingBatch"
+
+  /testing-batches/{id}/start-optimization:
+    post:
+      operationId: startOptimization
+      tags: [testing-batches]
+      summary: Start optimizing a batch
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Batch moved to optimizing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestingBatch"
+
+  /testing-batches/{id}/complete-optimization:
+    post:
+      operationId: completeOptimization
+      tags: [testing-batches]
+      summary: Complete optimization and trigger next-source automation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Batch completed, next tasks generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestingBatch"
+
+  /offers:
+    get:
+      operationId: listOffers
+      tags: [offers]
+      summary: List offers
+      parameters:
+        - name: batch_id
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: workspace_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of offers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Offer"
+
+    post:
+      operationId: createOffer
+      tags: [offers]
+      summary: Create offer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOfferBody"
+      responses:
+        "201":
+          description: Offer created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Offer"
+
+  /offers/{id}:
+    get:
+      operationId: getOffer
+      tags: [offers]
+      summary: Get offer by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Offer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Offer"
+
+    patch:
+      operationId: updateOffer
+      tags: [offers]
+      summary: Update offer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOfferBody"
+      responses:
+        "200":
+          description: Updated offer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Offer"
+
+    delete:
+      operationId: deleteOffer
+      tags: [offers]
+      summary: Delete offer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /offers/{id}/classify:
+    post:
+      operationId: classifyOffer
+      tags: [offers]
+      summary: Classify an offer (winner, loser, retest, scaling)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClassifyOfferBody"
+      responses:
+        "200":
+          description: Offer classified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Offer"
+
+  /performance:
+    get:
+      operationId: listPerformance
+      tags: [performance]
+      summary: List performance records
+      parameters:
+        - name: batch_id
+          in: query
+          schema:
+            type: integer
+        - name: date_from
+          in: query
+          schema:
+            type: string
+        - name: date_to
+          in: query
+          schema:
+            type: string
+        - name: workspace_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of performance records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Performance"
+
+    post:
+      operationId: createPerformance
+      tags: [performance]
+      summary: Create performance record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePerformanceBody"
+      responses:
+        "201":
+          description: Performance record created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Performance"
+
+  /performance/{id}:
+    patch:
+      operationId: updatePerformance
+      tags: [performance]
+      summary: Update performance record
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePerformanceBody"
+      responses:
+        "200":
+          description: Updated performance record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Performance"
+
+    delete:
+      operationId: deletePerformance
+      tags: [performance]
+      summary: Delete performance record
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /todo-tasks:
+    get:
+      operationId: listTodoTasks
+      tags: [todo-tasks]
+      summary: List todo tasks
+      parameters:
+        - name: employee_id
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: priority
+          in: query
+          schema:
+            type: string
+        - name: task_type
+          in: query
+          schema:
+            type: string
+            enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS]
+        - name: workspace_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of todo tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TodoTask"
+
+    post:
+      operationId: createTodoTask
+      tags: [todo-tasks]
+      summary: Create todo task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTodoTaskBody"
+      responses:
+        "201":
+          description: Todo task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodoTask"
+
+  /todo-tasks/{id}:
+    get:
+      operationId: getTodoTask
+      tags: [todo-tasks]
+      summary: Get todo task by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Todo task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodoTask"
+
+    patch:
+      operationId: updateTodoTask
+      tags: [todo-tasks]
+      summary: Update todo task
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTodoTaskBody"
+      responses:
+        "200":
+          description: Updated todo task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodoTask"
+
+    delete:
+      operationId: deleteTodoTask
+      tags: [todo-tasks]
+      summary: Delete todo task
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /admin/batches/manual:
+    post:
+      operationId: createManualBatch
+      tags: [admin]
+      summary: Admin-only manual batch creation (Phase 8e)
+      description: |
+        Replaces the worker-accessible POST /testing-batches. Requires
+        admin role and an explicit `workspaceId` in the body. Returns
+        403 to non-admins.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTestingBatchBody"
+      responses:
+        "201":
+          description: Batch created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestingBatch"
+        "400":
+          description: Missing or invalid body
+        "403":
+          description: Admin access required
+
+  /admin/suspicious-batches:
+    get:
+      operationId: listSuspiciousBatches
+      tags: [admin]
+      summary: Admin-only suspicious-batch review queue (Phase 8d)
+      description: |
+        Returns batches in the requested workspace that have at least
+        one unresolved (unread) `SUSPICIOUS_BATCH_UPDATE` notification.
+        Sorted newest-first by the most recent suspicious notification.
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Suspicious batch queue
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SuspiciousBatchQueueItem"
+        "403":
+          description: Admin access required
+
+  /dashboard/admin-summary:
+    get:
+      operationId: getAdminDashboardSummary
+      tags: [dashboard]
+      summary: Get admin dashboard summary KPIs
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: employee_id
+          in: query
+          schema:
+            type: integer
+        - name: date_from
+          in: query
+          schema:
+            type: string
+        - name: date_to
+          in: query
+          schema:
+            type: string
+        - name: geo
+          in: query
+          schema:
+            type: string
+        - name: affiliate_network
+          in: query
+          schema:
+            type: string
+        - name: traffic_source
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Admin dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminDashboardSummary"
+
+  /dashboard/employee-summary:
+    get:
+      operationId: getEmployeeDashboardSummary
+      tags: [dashboard]
+      summary: Get employee dashboard summary
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: employee_id
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Employee dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmployeeDashboardSummary"
+
+  /dashboard/batch-status-breakdown:
+    get:
+      operationId: getBatchStatusBreakdown
+      tags: [dashboard]
+      summary: Get batch count grouped by status
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Batch status breakdown
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BatchStatusCount"
+
+  /dashboard/employee-leaderboard:
+    get:
+      operationId: getEmployeeLeaderboard
+      tags: [dashboard]
+      summary: Get employee leaderboard for current week
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: date_from
+          in: query
+          schema:
+            type: string
+        - name: date_to
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Employee leaderboard
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EmployeeLeaderboardEntry"
+
+  /dashboard/goal-progress:
+    get:
+      operationId: getGoalProgress
+      tags: [dashboard]
+      summary: Get goal progress for all employees
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: period_type
+          in: query
+          schema:
+            type: string
+            enum: [weekly, monthly]
+        - name: employee_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Goal progress per employee
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GoalProgress"
+
+  /dashboard/breakdowns:
+    get:
+      operationId: getDashboardBreakdowns
+      tags: [dashboard]
+      summary: Get four manual-data breakdown views (worker / traffic source / GEO / affiliate network)
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Dashboard breakdowns
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardBreakdowns"
+
+  /queues:
+    get:
+      operationId: getQueues
+      tags: [queues]
+      summary: Get workflow queue summary (batches grouped by lifecycle stage)
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: employee_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Queue summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueSummary"
+
+  /notifications:
+    get:
+      operationId: listNotifications
+      tags: [notifications]
+      summary: List notifications for an employee
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: employee_id
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: unread_only
+          in: query
+          schema:
+            type: boolean
+        - name: unread
+          in: query
+          description: Phase 7 alias for unread_only
+          schema:
+            type: boolean
+        - name: type
+          in: query
+          description: Filter by notification type (Phase 7 — Bible §9 enum)
+          schema:
+            $ref: "#/components/schemas/NotificationType"
+        - name: severity
+          in: query
+          description: Filter by notification severity
+          schema:
+            $ref: "#/components/schemas/NotificationSeverity"
+      responses:
+        "200":
+          description: List of notifications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Notification"
+
+  /notifications/read-all:
+    post:
+      operationId: markAllNotificationsRead
+      tags: [notifications]
+      summary: Mark all notifications as read for an employee
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarkAllReadBody"
+      responses:
+        "200":
+          description: All marked as read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /notifications/{id}/read:
+    patch:
+      operationId: markNotificationRead
+      tags: [notifications]
+      summary: Mark a single notification as read
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Notification marked as read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notification"
+
+  /sync/voluum/status:
+    get:
+      operationId: getVoluumSyncStatus
+      tags: [sync]
+      summary: Get last Voluum sync status
+      responses:
+        "200":
+          description: Sync status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoluumSyncStatus"
+
+  /sync/voluum/trigger:
+    post:
+      operationId: triggerVoluumSync
+      tags: [sync]
+      summary: Trigger a Voluum data sync
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TriggerVoluumSyncBody"
+      responses:
+        "200":
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoluumSyncResult"
+
+  /sync/voluum/campaigns:
+    get:
+      operationId: getVoluumCampaigns
+      tags: [sync]
+      summary: Fetch campaigns from Voluum API
+      parameters:
+        - name: workspace_id
+          in: query
+          schema:
+            type: integer
+          description: Workspace whose Voluum credentials to use
+      responses:
+        "200":
+          description: Voluum campaigns
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VoluumCampaign"
+
+  /sync/voluum/campaigns-synced:
+    get:
+      operationId: listSyncedVoluumCampaigns
+      tags: [sync]
+      summary: List Voluum campaigns synced into the DB for a workspace
+      parameters:
+        - name: workspace_id
+          in: query
+          schema:
+            type: integer
+        - name: include_archived
+          in: query
+          description: Admin-only. When `"true"`, include soft-deleted (archived) rows. Ignored for non-admins.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Synced Voluum campaigns
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VoluumCampaignSynced"
+
+  /sync/voluum/offers:
+    get:
+      operationId: listSyncedVoluumOffers
+      tags: [sync]
+      summary: List Voluum offers synced into the DB for a workspace
+      parameters:
+        - name: workspace_id
+          in: query
+          schema:
+            type: integer
+        - name: unmapped_only
+          in: query
+          schema:
+            type: string
+        - name: include_archived
+          in: query
+          description: Admin-only. When `"true"`, include soft-deleted (archived) rows. Ignored for non-admins.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Synced Voluum offers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VoluumOfferSynced"
+
+  /sync/voluum/offers/{id}/assign-batch:
+    post:
+      operationId: assignVoluumOfferToBatch
+      tags: [sync]
+      summary: Assign a synced Voluum offer to an OfferOps batch
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                batchId:
+                  type: ["integer", "null"]
+              required:
+                - batchId
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /sync/voluum/workspaces/{id}/auto-group-offers:
+    post:
+      operationId: autoGroupVoluumOffers
+      tags: [sync]
+      summary: Trigger batch auto-grouping from synced offers for a workspace
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Grouping result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  batchesCreated:
+                    type: integer
+                  offersGrouped:
+                    type: integer
+                required:
+                  - success
+                  - batchesCreated
+                  - offersGrouped
+
+  /sync/voluum/mappings:
+    get:
+      operationId: listVoluumMappings
+      tags: [sync]
+      summary: List campaign to batch mappings
+      parameters:
+        - name: workspace_id
+          in: query
+          schema:
+            type: integer
+        - name: include_archived
+          in: query
+          description: Admin-only. When `"true"`, include soft-deleted (archived) rows. Ignored for non-admins.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of mappings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VoluumMapping"
+    post:
+      operationId: createVoluumMapping
+      tags: [sync]
+      summary: Create or update a campaign to batch mapping
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVoluumMappingBody"
+      responses:
+        "201":
+          description: Created mapping
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoluumMapping"
+
+  /sync/voluum/mappings/{campaignId}:
+    delete:
+      operationId: deleteVoluumMapping
+      tags: [sync]
+      summary: Delete a campaign to batch mapping
+      parameters:
+        - name: campaignId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /sync/voluum/workspaces:
+    get:
+      operationId: listVoluumWorkspaces
+      tags: [sync]
+      summary: List all linked Voluum workspaces
+      responses:
+        "200":
+          description: List of workspaces
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VoluumWorkspace"
+    post:
+      operationId: createVoluumWorkspace
+      tags: [sync]
+      summary: Create and link a new Voluum workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVoluumWorkspaceBody"
+      responses:
+        "201":
+          description: Created workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoluumWorkspace"
+
+  /sync/voluum/workspaces/{id}:
+    patch:
+      operationId: updateVoluumWorkspace
+      tags: [sync]
+      summary: Update a Voluum workspace
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVoluumWorkspaceBody"
+      responses:
+        "200":
+          description: Updated workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoluumWorkspace"
+    delete:
+      operationId: deleteVoluumWorkspace
+      tags: [sync]
+      summary: Delete a Voluum workspace
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /sync/voluum/workspaces/{id}/sync:
+    post:
+      operationId: syncVoluumWorkspace
+      tags: [sync]
+      summary: Sync traffic sources and affiliate networks for a workspace
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoluumWorkspaceSyncResult"
+
+  /sync/voluum/workspaces/{id}/test-metadata:
+    post:
+      operationId: testVoluumWorkspaceMetadata
+      tags: [sync]
+      summary: Dry-run fetch of Voluum workspaces, traffic sources, and affiliate networks without importing
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Test metadata result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoluumMetadataTestResult"
+
+  /sync/voluum/workspaces/{id}/set-active:
+    patch:
+      operationId: setActiveVoluumWorkspace
+      tags: [sync]
+      summary: Set a workspace as the active workspace
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Updated workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoluumWorkspace"
+
+  /sync/voluum/traffic-sources:
+    get:
+      operationId: listVoluumTrafficSources
+      tags: [sync]
+      summary: List synced traffic sources from Voluum
+      parameters:
+        - name: workspace_id
+          in: query
+          schema:
+            type: integer
+        - name: include_archived
+          in: query
+          description: Admin-only. When `"true"`, include soft-deleted (archived) rows. Ignored for non-admins.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of traffic sources
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VoluumTrafficSource"
+
+  /sync/voluum/affiliate-networks:
+    get:
+      operationId: listVoluumAffiliateNetworks
+      tags: [sync]
+      summary: List synced affiliate networks from Voluum
+      parameters:
+        - name: workspace_id
+          in: query
+          schema:
+            type: integer
+        - name: include_archived
+          in: query
+          description: Admin-only. When `"true"`, include soft-deleted (archived) rows. Ignored for non-admins.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of affiliate networks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VoluumAffiliateNetwork"
+
+  /admin/workspace-traffic-sources:
+    get:
+      operationId: listWorkspaceTrafficSources
+      tags: [workspace-traffic-sources]
+      summary: |
+        Phase 8 — list a workspace's traffic-source rotation order. Sorted by
+        `position` ascending. Readable by any workspace member (Pivot Phase 3
+        opened this up so workers can pick a traffic source when creating a
+        manual batch); writes remain admin-only.
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of workspace traffic sources, ordered by position
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkspaceTrafficSource"
+    post:
+      operationId: createWorkspaceTrafficSource
+      tags: [workspace-traffic-sources]
+      summary: Append a traffic source to the workspace rotation. Admin-only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkspaceTrafficSourceBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceTrafficSource"
+
+  /admin/workspace-traffic-sources/reorder:
+    patch:
+      operationId: reorderWorkspaceTrafficSources
+      tags: [workspace-traffic-sources]
+      summary: |
+        Atomically renumber positions for a workspace. Body provides the
+        complete ordered list of source ids (every active+inactive id in the
+        workspace). Admin-only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReorderWorkspaceTrafficSourcesBody"
+      responses:
+        "200":
+          description: Updated rotation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkspaceTrafficSource"
+
+  /admin/workspace-traffic-sources/{id}:
+    patch:
+      operationId: updateWorkspaceTrafficSource
+      tags: [workspace-traffic-sources]
+      summary: Update name / isActive of a workspace traffic source. Admin-only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWorkspaceTrafficSourceBody"
+      responses:
+        "200":
+          description: Updated row
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceTrafficSource"
+    delete:
+      operationId: deleteWorkspaceTrafficSource
+      tags: [workspace-traffic-sources]
+      summary: |
+        Delete a workspace traffic source. Rejected with 409 if any active
+        testing batch's `traffic_source_order_snapshot` references this id —
+        keeps in-flight rotations consistent. Admin-only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "409":
+          description: Conflict — referenced by an in-flight batch snapshot
+
+  /settings/traffic-source-device-plan:
+    get:
+      operationId: getTrafficSourceDevicePlan
+      tags: [settings]
+      summary: List enabled (traffic_source, device) pairs for a workspace
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of plan rows (only enabled ones; one row per (workspace, traffic source, device))
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TrafficSourceDevicePlan"
+    put:
+      operationId: putTrafficSourceDevicePlan
+      tags: [settings]
+      summary: Replace the workspace's enabled (traffic_source, device) pairs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutTrafficSourceDevicePlanBody"
+      responses:
+        "200":
+          description: Updated plan
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TrafficSourceDevicePlan"
+
+  /settings/voluum:
+    get:
+      operationId: getVoluumSettings
+      tags: [settings]
+      summary: Get Voluum API settings
+      responses:
+        "200":
+          description: Voluum settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoluumSettings"
+
+    patch:
+      operationId: updateVoluumSettings
+      tags: [settings]
+      summary: Update Voluum API settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVoluumSettingsBody"
+      responses:
+        "200":
+          description: Updated Voluum settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoluumSettings"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+      required:
+        - success
+
+    LoginBody:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required:
+        - email
+        - password
+
+    AuthResponse:
+      type: object
+      properties:
+        employee:
+          $ref: "#/components/schemas/Employee"
+        token:
+          type: string
+      required:
+        - employee
+        - token
+
+    Employee:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [admin, employee]
+        status:
+          type: string
+          enum: [active, inactive]
+        createdAt:
+          type: string
+      required:
+        - id
+        - name
+        - email
+        - role
+        - status
+        - createdAt
+
+    CreateEmployeeBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        password:
+          type: string
+        role:
+          type: string
+          enum: [admin, employee]
+        status:
+          type: string
+          enum: [active, inactive]
+      required:
+        - name
+        - email
+        - password
+        - role
+
+    UpdateEmployeeBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        password:
+          type: string
+        role:
+          type: string
+          enum: [admin, employee]
+        status:
+          type: string
+          enum: [active, inactive]
+
+    Goal:
+      type: object
+      properties:
+        id:
+          type: integer
+        employeeId:
+          type: integer
+        periodType:
+          type: string
+          enum: [weekly, monthly]
+        periodStart:
+          type: string
+        periodEnd:
+          type: string
+        targetOffersUploaded:
+          type: ["integer", "null"]
+        targetBatchesCreated:
+          type: ["integer", "null"]
+        targetBatchesTested:
+          type: ["integer", "null"]
+        targetCampaignsMovedToMain:
+          type: ["integer", "null"]
+        targetGeosTested:
+          type: ["integer", "null"]
+        targetTrafficSourcesTested:
+          type: ["integer", "null"]
+        targetProfitOptional:
+          type: ["number", "null"]
+        notes:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - employeeId
+        - periodType
+        - periodStart
+        - periodEnd
+        - createdAt
+
+    CreateGoalBody:
+      type: object
+      properties:
+        employeeId:
+          type: integer
+        periodType:
+          type: string
+          enum: [weekly, monthly]
+        periodStart:
+          type: string
+        periodEnd:
+          type: string
+        targetOffersUploaded:
+          type: ["integer", "null"]
+        targetBatchesCreated:
+          type: ["integer", "null"]
+        targetBatchesTested:
+          type: ["integer", "null"]
+        targetCampaignsMovedToMain:
+          type: ["integer", "null"]
+        targetGeosTested:
+          type: ["integer", "null"]
+        targetTrafficSourcesTested:
+          type: ["integer", "null"]
+        targetProfitOptional:
+          type: ["number", "null"]
+        notes:
+          type: ["string", "null"]
+      required:
+        - employeeId
+        - periodType
+        - periodStart
+        - periodEnd
+
+    UpdateGoalBody:
+      type: object
+      properties:
+        periodType:
+          type: string
+          enum: [weekly, monthly]
+        periodStart:
+          type: string
+        periodEnd:
+          type: string
+        targetOffersUploaded:
+          type: ["integer", "null"]
+        targetBatchesCreated:
+          type: ["integer", "null"]
+        targetBatchesTested:
+          type: ["integer", "null"]
+        targetCampaignsMovedToMain:
+          type: ["integer", "null"]
+        targetGeosTested:
+          type: ["integer", "null"]
+        targetTrafficSourcesTested:
+          type: ["integer", "null"]
+        targetProfitOptional:
+          type: ["number", "null"]
+        notes:
+          type: ["string", "null"]
+
+    DailyReport:
+      type: object
+      properties:
+        id:
+          type: integer
+        employeeId:
+          type: integer
+        reportDate:
+          type: string
+        offersUploaded:
+          type: integer
+        batchesCreated:
+          type: integer
+        batchesTested:
+          type: integer
+        campaignsMovedToMain:
+          type: integer
+        campaignsClosed:
+          type: integer
+        notes:
+          type: ["string", "null"]
+        workspaceId:
+          type: ["integer", "null"]
+        createdAt:
+          type: string
+        employeeName:
+          type: ["string", "null"]
+      required:
+        - id
+        - employeeId
+        - reportDate
+        - offersUploaded
+        - batchesCreated
+        - batchesTested
+        - campaignsMovedToMain
+        - campaignsClosed
+        - createdAt
+
+    CreateDailyReportBody:
+      type: object
+      properties:
+        employeeId:
+          type: integer
+        reportDate:
+          type: string
+        offersUploaded:
+          type: integer
+        batchesCreated:
+          type: integer
+        batchesTested:
+          type: integer
+        campaignsMovedToMain:
+          type: integer
+        campaignsClosed:
+          type: integer
+        notes:
+          type: ["string", "null"]
+        workspaceId:
+          type: ["integer", "null"]
+      required:
+        - employeeId
+        - reportDate
+        - offersUploaded
+        - batchesCreated
+        - batchesTested
+        - campaignsMovedToMain
+        - campaignsClosed
+
+    UpdateDailyReportBody:
+      type: object
+      properties:
+        reportDate:
+          type: string
+        offersUploaded:
+          type: integer
+        batchesCreated:
+          type: integer
+        batchesTested:
+          type: integer
+        campaignsMovedToMain:
+          type: integer
+        campaignsClosed:
+          type: integer
+        notes:
+          type: ["string", "null"]
+
+    WeeklyReport:
+      type: object
+      properties:
+        employeeId:
+          type: integer
+        employeeName:
+          type: string
+        weekStart:
+          type: string
+        weekEnd:
+          type: string
+        totalOffersUploaded:
+          type: integer
+        totalBatchesCreated:
+          type: integer
+        totalBatchesTested:
+          type: integer
+        totalCampaignsMovedToMain:
+          type: integer
+        totalCampaignsClosed:
+          type: integer
+        reportCount:
+          type: integer
+      required:
+        - employeeId
+        - employeeName
+        - weekStart
+        - weekEnd
+        - totalOffersUploaded
+        - totalBatchesCreated
+        - totalBatchesTested
+        - totalCampaignsMovedToMain
+        - totalCampaignsClosed
+        - reportCount
+
+    TestingBatch:
+      type: object
+      properties:
+        id:
+          type: integer
+        employeeId:
+          type: integer
+        batchName:
+          type: string
+        affiliateNetwork:
+          type: string
+        geo:
+          type: string
+        trafficSource:
+          type: string
+        vertical:
+          type: ["string", "null"]
+        numberOfOffers:
+          type: ["integer", "null"]
+        trackerCampaignId:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [NEW_BATCH, WAITING_FOR_TRACKER_CAMPAIGNS, OFFER_READY_FOR_LIVE_TESTING, LIVE_TESTS, TESTED, COMPLETED]
+        testStartDate:
+          type: ["string", "null"]
+        testEndDate:
+          type: ["string", "null"]
+        testBudget:
+          type: ["number", "null"]
+        notes:
+          type: ["string", "null"]
+        clicksThreshold:
+          type: ["integer", "null"]
+        spendThreshold:
+          type: ["number", "null"]
+        daysThreshold:
+          type: ["integer", "null"]
+        conditionsMetAt:
+          type: ["string", "null"]
+        liveAt:
+          type: ["string", "null"]
+        trafficSourceVoluumId:
+          type: ["string", "null"]
+        affiliateNetworkVoluumId:
+          type: ["string", "null"]
+        workspaceId:
+          type: ["integer", "null"]
+        batchTag:
+          type: ["string", "null"]
+        voluumCampaignId:
+          type: ["string", "null"]
+        voluumCampaignName:
+          type: ["string", "null"]
+        lastSyncAt:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        employeeName:
+          type: ["string", "null"]
+        affiliateNetworkId:
+          type: ["integer", "null"]
+        geoId:
+          type: ["integer", "null"]
+        currentTrafficSourceId:
+          type: ["integer", "null"]
+        testRound:
+          type: ["integer", "null"]
+        startDate:
+          type: ["string", "null"]
+        testDurationHours:
+          type: ["integer", "null"]
+        affiliateNetworkName:
+          type: ["string", "null"]
+        geoCode:
+          type: ["string", "null"]
+        geoName:
+          type: ["string", "null"]
+        trafficSourceName:
+          type: ["string", "null"]
+      required:
+        - id
+        - employeeId
+        - batchName
+        - affiliateNetwork
+        - geo
+        - trafficSource
+        - status
+        - createdAt
+
+    CreateTestingBatchBody:
+      type: object
+      properties:
+        employeeId:
+          type: integer
+        batchName:
+          type: string
+        affiliateNetwork:
+          type: string
+        geo:
+          type: string
+        trafficSource:
+          type: string
+        trafficSourceVoluumId:
+          type: ["string", "null"]
+        affiliateNetworkVoluumId:
+          type: ["string", "null"]
+        vertical:
+          type: ["string", "null"]
+        numberOfOffers:
+          type: ["integer", "null"]
+        trackerCampaignId:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [NEW_BATCH, WAITING_FOR_TRACKER_CAMPAIGNS, OFFER_READY_FOR_LIVE_TESTING, LIVE_TESTS, TESTED, COMPLETED]
+        testStartDate:
+          type: ["string", "null"]
+        testEndDate:
+          type: ["string", "null"]
+        testBudget:
+          type: ["number", "null"]
+        notes:
+          type: ["string", "null"]
+        clicksThreshold:
+          type: ["integer", "null"]
+        spendThreshold:
+          type: ["number", "null"]
+        daysThreshold:
+          type: ["integer", "null"]
+        workspaceId:
+          type: ["integer", "null"]
+        batchTag:
+          type: ["string", "null"]
+        affiliateNetworkId:
+          type: ["integer", "null"]
+        geoId:
+          type: ["integer", "null"]
+        trafficSourceId:
+          type: ["integer", "null"]
+        assignedWorkerId:
+          type: ["integer", "null"]
+        testRound:
+          type: ["integer", "null"]
+        startDate:
+          type: ["string", "null"]
+        testDurationHours:
+          type: ["integer", "null"]
+      required:
+        - batchName
+
+    UpdateTestingBatchBody:
+      type: object
+      properties:
+        batchName:
+          type: string
+        affiliateNetwork:
+          type: string
+        geo:
+          type: string
+        trafficSource:
+          type: string
+        trafficSourceVoluumId:
+          type: ["string", "null"]
+        affiliateNetworkVoluumId:
+          type: ["string", "null"]
+        vertical:
+          type: ["string", "null"]
+        numberOfOffers:
+          type: ["integer", "null"]
+        trackerCampaignId:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [NEW_BATCH, WAITING_FOR_TRACKER_CAMPAIGNS, OFFER_READY_FOR_LIVE_TESTING, LIVE_TESTS, TESTED, COMPLETED]
+        testStartDate:
+          type: ["string", "null"]
+        testEndDate:
+          type: ["string", "null"]
+        testBudget:
+          type: ["number", "null"]
+        notes:
+          type: ["string", "null"]
+        clicksThreshold:
+          type: ["integer", "null"]
+        spendThreshold:
+          type: ["number", "null"]
+        daysThreshold:
+          type: ["integer", "null"]
+        workspaceId:
+          type: ["integer", "null"]
+        batchTag:
+          type: ["string", "null"]
+        affiliateNetworkId:
+          type: ["integer", "null"]
+        geoId:
+          type: ["integer", "null"]
+        trafficSourceId:
+          type: ["integer", "null"]
+        assignedWorkerId:
+          type: ["integer", "null"]
+        testRound:
+          type: ["integer", "null"]
+        startDate:
+          type: ["string", "null"]
+        testDurationHours:
+          type: ["integer", "null"]
+        liveAt:
+          type: ["string", "null"]
+
+    Offer:
+      type: object
+      properties:
+        id:
+          type: integer
+        batchId:
+          type: integer
+        offerId:
+          type: ["string", "null"]
+        offerName:
+          type: string
+        affiliateNetwork:
+          type: ["string", "null"]
+        geo:
+          type: ["string", "null"]
+        vertical:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [uploaded, testing, winner, loser, retest, scaling, rejected, moved_to_main, closed]
+        notes:
+          type: ["string", "null"]
+        workspaceId:
+          type: ["integer", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - batchId
+        - offerName
+        - status
+        - createdAt
+
+    CreateOfferBody:
+      type: object
+      properties:
+        batchId:
+          type: integer
+        offerId:
+          type: ["string", "null"]
+        offerName:
+          type: string
+        affiliateNetwork:
+          type: ["string", "null"]
+        geo:
+          type: ["string", "null"]
+        vertical:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [uploaded, testing, winner, loser, retest, scaling, rejected, moved_to_main, closed]
+        notes:
+          type: ["string", "null"]
+        workspaceId:
+          type: ["integer", "null"]
+      required:
+        - batchId
+        - offerName
+
+    UpdateOfferBody:
+      type: object
+      properties:
+        offerId:
+          type: ["string", "null"]
+        offerName:
+          type: string
+        affiliateNetwork:
+          type: ["string", "null"]
+        geo:
+          type: ["string", "null"]
+        vertical:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [uploaded, testing, winner, loser, retest, scaling, rejected, moved_to_main, closed]
+        notes:
+          type: ["string", "null"]
+
+    ClassifyOfferBody:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [winner, loser, retest, scaling]
+        notes:
+          type: ["string", "null"]
+      required:
+        - status
+
+    Performance:
+      type: object
+      properties:
+        id:
+          type: integer
+        batchId:
+          type: integer
+        date:
+          type: string
+        spend:
+          type: ["number", "null"]
+        clicks:
+          type: ["integer", "null"]
+        conversions:
+          type: ["integer", "null"]
+        revenue:
+          type: ["number", "null"]
+        profit:
+          type: ["number", "null"]
+        roi:
+          type: ["number", "null"]
+        cpa:
+          type: ["number", "null"]
+        epc:
+          type: ["number", "null"]
+        cvr:
+          type: ["number", "null"]
+      required:
+        - id
+        - batchId
+        - date
+
+    CreatePerformanceBody:
+      type: object
+      properties:
+        batchId:
+          type: integer
+        date:
+          type: string
+        spend:
+          type: ["number", "null"]
+        clicks:
+          type: ["integer", "null"]
+        conversions:
+          type: ["integer", "null"]
+        revenue:
+          type: ["number", "null"]
+        profit:
+          type: ["number", "null"]
+        roi:
+          type: ["number", "null"]
+        cpa:
+          type: ["number", "null"]
+        epc:
+          type: ["number", "null"]
+        cvr:
+          type: ["number", "null"]
+      required:
+        - batchId
+        - date
+
+    UpdatePerformanceBody:
+      type: object
+      properties:
+        date:
+          type: string
+        spend:
+          type: ["number", "null"]
+        clicks:
+          type: ["integer", "null"]
+        conversions:
+          type: ["integer", "null"]
+        revenue:
+          type: ["number", "null"]
+        profit:
+          type: ["number", "null"]
+        roi:
+          type: ["number", "null"]
+        cpa:
+          type: ["number", "null"]
+        epc:
+          type: ["number", "null"]
+        cvr:
+          type: ["number", "null"]
+
+    TodoTask:
+      type: object
+      properties:
+        id:
+          type: integer
+        employeeId:
+          type: integer
+        relatedBatchId:
+          type: ["integer", "null"]
+        title:
+          type: string
+        description:
+          type: ["string", "null"]
+        taskType:
+          type: string
+          enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, GO_LIVE_TRAFFIC_SOURCE_CAMPAIGN, MOVE_WINNERS_TO_SCALED_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS, CREATE_IOS_CAMPAIGN, CREATE_ANDROID_CAMPAIGN, GO_LIVE, OPTIMIZATION_FOLLOWUP]
+        priority:
+          type: string
+          enum: [low, medium, high]
+        status:
+          type: string
+          enum: [TODO, IN_PROGRESS, BLOCKED, DONE]
+        dueDate:
+          type: ["string", "null"]
+        workspaceId:
+          type: ["integer", "null"]
+        trafficSourceName:
+          type: ["string", "null"]
+        device:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        employeeName:
+          type: ["string", "null"]
+        batchName:
+          type: ["string", "null"]
+      required:
+        - id
+        - employeeId
+        - title
+        - taskType
+        - priority
+        - status
+        - createdAt
+
+    CreateTodoTaskBody:
+      type: object
+      properties:
+        employeeId:
+          type: integer
+        relatedBatchId:
+          type: ["integer", "null"]
+        title:
+          type: string
+        description:
+          type: ["string", "null"]
+        taskType:
+          type: string
+          enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, GO_LIVE_TRAFFIC_SOURCE_CAMPAIGN, MOVE_WINNERS_TO_SCALED_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS, CREATE_IOS_CAMPAIGN, CREATE_ANDROID_CAMPAIGN, GO_LIVE, OPTIMIZATION_FOLLOWUP]
+        priority:
+          type: string
+          enum: [low, medium, high]
+        status:
+          type: string
+          enum: [TODO, IN_PROGRESS, BLOCKED, DONE]
+        dueDate:
+          type: ["string", "null"]
+        workspaceId:
+          type: ["integer", "null"]
+        trafficSourceName:
+          type: ["string", "null"]
+        device:
+          type: ["string", "null"]
+      required:
+        - employeeId
+        - title
+        - taskType
+        - priority
+
+    UpdateTodoTaskBody:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: ["string", "null"]
+        taskType:
+          type: string
+          enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, GO_LIVE_TRAFFIC_SOURCE_CAMPAIGN, MOVE_WINNERS_TO_SCALED_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS, CREATE_IOS_CAMPAIGN, CREATE_ANDROID_CAMPAIGN, GO_LIVE, OPTIMIZATION_FOLLOWUP]
+        priority:
+          type: string
+          enum: [low, medium, high]
+        status:
+          type: string
+          enum: [TODO, IN_PROGRESS, BLOCKED, DONE]
+        dueDate:
+          type: ["string", "null"]
+        relatedBatchId:
+          type: ["integer", "null"]
+
+    TrafficSourceDevicePlan:
+      type: object
+      properties:
+        id:
+          type: integer
+        workspaceId:
+          type: integer
+        trafficSourceName:
+          type: string
+        device:
+          type: string
+        enabled:
+          type: boolean
+        createdAt:
+          type: string
+      required:
+        - id
+        - workspaceId
+        - trafficSourceName
+        - device
+        - enabled
+        - createdAt
+
+    PutTrafficSourceDevicePlanBody:
+      type: object
+      properties:
+        workspaceId:
+          type: integer
+        pairs:
+          type: array
+          items:
+            type: object
+            properties:
+              trafficSourceName:
+                type: string
+              device:
+                type: string
+            required:
+              - trafficSourceName
+              - device
+      required:
+        - workspaceId
+        - pairs
+
+    SuspiciousBatchQueueItem:
+      type: object
+      properties:
+        batchId:
+          type: integer
+        batchName:
+          type: ["string", "null"]
+        status:
+          type: string
+        affiliateNetwork:
+          type: ["string", "null"]
+        geo:
+          type: ["string", "null"]
+        employeeId:
+          type: ["integer", "null"]
+        unresolvedCount:
+          type: integer
+        lastNotifiedAt:
+          type: string
+      required:
+        - batchId
+        - status
+        - unresolvedCount
+        - lastNotifiedAt
+
+    AdminDashboardSummary:
+      type: object
+      properties:
+        offersUploadedToday:
+          type: integer
+        offersUploadedThisWeek:
+          type: integer
+        batchesCreatedThisWeek:
+          type: integer
+        batchesTestedThisWeek:
+          type: integer
+        campaignsMovedToMain:
+          type: integer
+        campaignsClosed:
+          type: integer
+        openTasksCount:
+          type: integer
+        totalSpend:
+          type: number
+        totalRevenue:
+          type: number
+        totalProfit:
+          type: number
+        averageRoi:
+          type: number
+        totalBatchesCreated:
+          type: integer
+        winnersFoundThisWeek:
+          type: integer
+        campaignsLive:
+          type: integer
+        campaignsTesting:
+          type: integer
+        campaignsTested:
+          type: integer
+        campaignsClosedTotal:
+          type: integer
+      required:
+        - offersUploadedToday
+        - offersUploadedThisWeek
+        - batchesCreatedThisWeek
+        - batchesTestedThisWeek
+        - campaignsMovedToMain
+        - campaignsClosed
+        - openTasksCount
+        - totalSpend
+        - totalRevenue
+        - totalProfit
+        - averageRoi
+        - totalBatchesCreated
+        - winnersFoundThisWeek
+        - campaignsLive
+        - campaignsTesting
+        - campaignsTested
+        - campaignsClosedTotal
+
+    EmployeeDashboardSummary:
+      type: object
+      properties:
+        employee:
+          $ref: "#/components/schemas/Employee"
+        weeklyGoal:
+          $ref: "#/components/schemas/Goal"
+        monthlyGoal:
+          $ref: "#/components/schemas/Goal"
+        weeklyProgress:
+          $ref: "#/components/schemas/GoalProgressData"
+        monthlyProgress:
+          $ref: "#/components/schemas/GoalProgressData"
+        openTasksCount:
+          type: integer
+        recentBatchesCount:
+          type: integer
+      required:
+        - employee
+        - openTasksCount
+        - recentBatchesCount
+
+    GoalProgressData:
+      type: object
+      properties:
+        offersUploaded:
+          type: integer
+        batchesCreated:
+          type: integer
+        batchesTested:
+          type: integer
+        campaignsMovedToMain:
+          type: integer
+        campaignsClosed:
+          type: integer
+      required:
+        - offersUploaded
+        - batchesCreated
+        - batchesTested
+        - campaignsMovedToMain
+        - campaignsClosed
+
+    BatchStatusCount:
+      type: object
+      properties:
+        status:
+          type: string
+        count:
+          type: integer
+      required:
+        - status
+        - count
+
+    EmployeeLeaderboardEntry:
+      type: object
+      properties:
+        employeeId:
+          type: integer
+        employeeName:
+          type: string
+        offersUploaded:
+          type: integer
+        batchesCreated:
+          type: integer
+        batchesTested:
+          type: integer
+        campaignsMovedToMain:
+          type: integer
+        openTasks:
+          type: integer
+      required:
+        - employeeId
+        - employeeName
+        - offersUploaded
+        - batchesCreated
+        - batchesTested
+        - campaignsMovedToMain
+        - openTasks
+
+    GoalProgress:
+      type: object
+      properties:
+        employeeId:
+          type: integer
+        employeeName:
+          type: string
+        goal:
+          $ref: "#/components/schemas/Goal"
+        progress:
+          $ref: "#/components/schemas/GoalProgressData"
+      required:
+        - employeeId
+        - employeeName
+        - progress
+
+    DashboardBreakdownRow:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        batches:
+          type: integer
+        tested:
+          type: integer
+        clicks:
+          type: integer
+        cost:
+          type: number
+        revenue:
+          type: number
+        profit:
+          type: number
+        roi:
+          type: number
+        conversions:
+          type: integer
+        winners:
+          type: integer
+      required:
+        - key
+        - label
+        - batches
+        - tested
+        - clicks
+        - cost
+        - revenue
+        - profit
+        - roi
+        - conversions
+        - winners
+
+    DashboardBreakdowns:
+      type: object
+      properties:
+        byWorker:
+          type: array
+          items:
+            $ref: "#/components/schemas/DashboardBreakdownRow"
+        byTrafficSource:
+          type: array
+          items:
+            $ref: "#/components/schemas/DashboardBreakdownRow"
+        byGeo:
+          type: array
+          items:
+            $ref: "#/components/schemas/DashboardBreakdownRow"
+        byNetwork:
+          type: array
+          items:
+            $ref: "#/components/schemas/DashboardBreakdownRow"
+      required:
+        - byWorker
+        - byTrafficSource
+        - byGeo
+        - byNetwork
+
+    VoluumSettings:
+      type: object
+      properties:
+        accessId:
+          type: ["string", "null"]
+        accessKey:
+          type: ["string", "null"]
+        apiBaseUrl:
+          type: ["string", "null"]
+      required:
+        - accessId
+        - accessKey
+        - apiBaseUrl
+
+    UpdateVoluumSettingsBody:
+      type: object
+      properties:
+        accessId:
+          type: ["string", "null"]
+        accessKey:
+          type: ["string", "null"]
+        apiBaseUrl:
+          type: ["string", "null"]
+
+    VoluumSyncStatus:
+      type: object
+      properties:
+        lastSyncAt:
+          type: ["string", "null"]
+        lastSyncStatus:
+          type: ["string", "null"]
+        lastSyncMessage:
+          type: ["string", "null"]
+        lastSyncRowsImported:
+          type: ["integer", "null"]
+        isConfigured:
+          type: boolean
+      required:
+        - lastSyncAt
+        - lastSyncStatus
+        - lastSyncMessage
+        - lastSyncRowsImported
+        - isConfigured
+
+    TriggerVoluumSyncBody:
+      type: object
+      properties:
+        dateFrom:
+          type: string
+        dateTo:
+          type: string
+
+    VoluumSyncResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        rowsImported:
+          type: integer
+        rowsSkipped:
+          type: integer
+        message:
+          type: string
+        syncedAt:
+          type: string
+      required:
+        - success
+        - rowsImported
+        - rowsSkipped
+        - message
+        - syncedAt
+
+    VoluumCampaign:
+      type: object
+      properties:
+        campaignId:
+          type: string
+        campaignName:
+          type: string
+        trafficSourceName:
+          type: ["string", "null"]
+        status:
+          type: ["string", "null"]
+        primaryTag:
+          type: ["string", "null"]
+        allTags:
+          type: ["string", "null"]
+      required:
+        - campaignId
+        - campaignName
+        - trafficSourceName
+        - status
+
+    VoluumCampaignSynced:
+      type: object
+      properties:
+        id:
+          type: integer
+        workspaceId:
+          type: integer
+        campaignId:
+          type: string
+        campaignName:
+          type: string
+        trafficSourceName:
+          type: ["string", "null"]
+        trafficSourceId:
+          type: ["string", "null"]
+        affiliateNetworkName:
+          type: ["string", "null"]
+        affiliateNetworkId:
+          type: ["string", "null"]
+        country:
+          type: ["string", "null"]
+        status:
+          type: ["string", "null"]
+        isActive:
+          type: boolean
+        syncedAt:
+          type: ["string", "null"]
+      required:
+        - id
+        - workspaceId
+        - campaignId
+        - campaignName
+        - isActive
+
+    VoluumOfferSynced:
+      type: object
+      properties:
+        id:
+          type: integer
+        workspaceId:
+          type: integer
+        offerId:
+          type: string
+        offerName:
+          type: string
+        affiliateNetworkName:
+          type: ["string", "null"]
+        affiliateNetworkId:
+          type: ["string", "null"]
+        country:
+          type: ["string", "null"]
+        offerUrl:
+          type: ["string", "null"]
+        primaryTag:
+          type: ["string", "null"]
+        allTags:
+          type: ["string", "null"]
+        status:
+          type: ["string", "null"]
+        isActive:
+          type: boolean
+        batchId:
+          type: ["integer", "null"]
+        syncedAt:
+          type: ["string", "null"]
+      required:
+        - id
+        - workspaceId
+        - offerId
+        - offerName
+        - isActive
+
+    VoluumMapping:
+      type: object
+      properties:
+        id:
+          type: integer
+        workspaceId:
+          type: integer
+        campaignId:
+          type: string
+        campaignName:
+          type: string
+        batchId:
+          type: integer
+        createdAt:
+          type: string
+      required:
+        - id
+        - workspaceId
+        - campaignId
+        - campaignName
+        - batchId
+        - createdAt
+
+    CreateVoluumMappingBody:
+      type: object
+      properties:
+        campaignId:
+          type: string
+        campaignName:
+          type: string
+        batchId:
+          type: integer
+        workspaceId:
+          type: ["integer", "null"]
+      required:
+        - campaignId
+        - campaignName
+        - batchId
+
+    WorkspaceTrafficSource:
+      type: object
+      properties:
+        id:
+          type: integer
+        workspaceId:
+          type: integer
+        name:
+          type: string
+        voluumTrafficSourceId:
+          type: ["string", "null"]
+        position:
+          type: integer
+        isActive:
+          type: boolean
+      required:
+        - id
+        - workspaceId
+        - name
+        - position
+        - isActive
+
+    CreateWorkspaceTrafficSourceBody:
+      type: object
+      properties:
+        workspaceId:
+          type: integer
+        name:
+          type: string
+          minLength: 1
+        voluumTrafficSourceId:
+          type: ["string", "null"]
+        isActive:
+          type: boolean
+      required:
+        - workspaceId
+        - name
+
+    UpdateWorkspaceTrafficSourceBody:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        voluumTrafficSourceId:
+          type: ["string", "null"]
+        isActive:
+          type: boolean
+
+    ReorderWorkspaceTrafficSourcesBody:
+      type: object
+      properties:
+        workspaceId:
+          type: integer
+        orderedIds:
+          type: array
+          items:
+            type: integer
+      required:
+        - workspaceId
+        - orderedIds
+
+    NotificationType:
+      type: string
+      description: |
+        Phase 2 / Bible §9 spec-canonical notification taxonomy.
+        Replaces the legacy `ready_for_optimization` / `batch_live`
+        / `winner_scaled` etc. set, which is dropped.
+      enum:
+        - NEW_BATCH_CREATED
+        - TRACKER_CAMPAIGN_MISSING
+        - INVALID_TAG
+        - DUPLICATE_TRACKER_CAMPAIGN
+        - SUSPICIOUS_BATCH_UPDATE
+        - API_SYNC_FAILURE
+        - TASK_OVERDUE
+
+    NotificationSeverity:
+      type: string
+      enum: [info, warning, high, critical]
+
+    Notification:
+      type: object
+      properties:
+        id:
+          type: integer
+        employeeId:
+          type: integer
+        batchId:
+          type: ["integer", "null"]
+        type:
+          $ref: "#/components/schemas/NotificationType"
+        severity:
+          $ref: "#/components/schemas/NotificationSeverity"
+        message:
+          type: string
+        read:
+          type: boolean
+        workspaceId:
+          type: ["integer", "null"]
+        createdAt:
+          type: string
+        batchName:
+          type: ["string", "null"]
+      required:
+        - id
+        - employeeId
+        - type
+        - severity
+        - message
+        - read
+        - createdAt
+
+    MarkAllReadBody:
+      type: object
+      properties:
+        employeeId:
+          type: integer
+        workspaceId:
+          type: integer
+      required:
+        - employeeId
+        - workspaceId
+
+    QueueItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        batchName:
+          type: string
+        affiliateNetwork:
+          type: string
+        geo:
+          type: string
+        trafficSource:
+          type: string
+        status:
+          type: string
+        employeeId:
+          type: integer
+        employeeName:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        conditionsMetAt:
+          type: ["string", "null"]
+        liveAt:
+          type: ["string", "null"]
+        offerCounts:
+          type: object
+          properties:
+            total:
+              type: integer
+            winner:
+              type: integer
+            loser:
+              type: integer
+            retest:
+              type: integer
+            pending:
+              type: integer
+          required: [total, winner, loser, retest, pending]
+      required:
+        - id
+        - batchName
+        - affiliateNetwork
+        - geo
+        - trafficSource
+        - status
+        - employeeId
+        - createdAt
+        - offerCounts
+
+    QueueSummary:
+      type: object
+      properties:
+        liveTesting:
+          type: array
+          items:
+            $ref: "#/components/schemas/QueueItem"
+        readyForOptimization:
+          type: array
+          items:
+            $ref: "#/components/schemas/QueueItem"
+        optimizing:
+          type: array
+          items:
+            $ref: "#/components/schemas/QueueItem"
+        retestsPending:
+          type: array
+          items:
+            $ref: "#/components/schemas/QueueItem"
+        scaling:
+          type: array
+          items:
+            $ref: "#/components/schemas/QueueItem"
+      required:
+        - liveTesting
+        - readyForOptimization
+        - optimizing
+        - retestsPending
+        - scaling
+
+    WorkspaceMember:
+      type: object
+      properties:
+        id:
+          type: integer
+        employeeId:
+          type: integer
+        workspaceId:
+          type: integer
+        role:
+          type: string
+          enum: [workspace_admin, employee]
+        createdAt:
+          type: string
+        employeeName:
+          type: string
+        employeeEmail:
+          type: string
+        employeeRole:
+          type: string
+      required:
+        - id
+        - employeeId
+        - workspaceId
+        - role
+        - createdAt
+        - employeeName
+        - employeeEmail
+        - employeeRole
+
+    AddWorkspaceMemberBody:
+      type: object
+      properties:
+        employeeId:
+          type: integer
+        workspaceId:
+          type: integer
+        role:
+          type: string
+          enum: [workspace_admin, employee]
+      required:
+        - employeeId
+        - workspaceId
+
+    VoluumWorkspace:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: ["string", "null"]
+        isActive:
+          type: boolean
+        isDefault:
+          type: boolean
+        voluumAccessId:
+          type: ["string", "null"]
+        voluumAccessKey:
+          type: ["string", "null"]
+        voluumApiBaseUrl:
+          type: ["string", "null"]
+        voluumWorkspaceId:
+          type: ["string", "null"]
+        voluumWorkspaceName:
+          type: ["string", "null"]
+        syncInterval:
+          type: string
+          enum: [manual, 5min, 15min, hourly]
+        syncStatus:
+          type: ["string", "null"]
+        lastSyncAt:
+          type: ["string", "null"]
+        trafficSourcesSynced:
+          type: integer
+        networksSynced:
+          type: integer
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - name
+        - isActive
+        - isDefault
+        - syncInterval
+        - trafficSourcesSynced
+        - networksSynced
+        - createdAt
+        - updatedAt
+
+    CreateVoluumWorkspaceBody:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        voluumAccessId:
+          type: string
+        voluumAccessKey:
+          type: string
+        voluumApiBaseUrl:
+          type: string
+        voluumWorkspaceId:
+          type: string
+        voluumWorkspaceName:
+          type: string
+        syncInterval:
+          type: string
+          enum: [manual, 5min, 15min, hourly]
+      required:
+        - name
+
+    UpdateVoluumWorkspaceBody:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        voluumAccessId:
+          type: string
+        voluumAccessKey:
+          type: string
+        voluumApiBaseUrl:
+          type: string
+        voluumWorkspaceId:
+          type: string
+        voluumWorkspaceName:
+          type: string
+        syncInterval:
+          type: string
+          enum: [manual, 5min, 15min, hourly]
+
+    VoluumWorkspaceSyncResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        trafficSourcesImported:
+          type: integer
+        affiliateNetworksImported:
+          type: integer
+        trafficSourcesUpdated:
+          type: integer
+        affiliateNetworksUpdated:
+          type: integer
+        trafficSourcesSkipped:
+          type: integer
+        affiliateNetworksSkipped:
+          type: integer
+        trafficSourceErrors:
+          type: integer
+        affiliateNetworkErrors:
+          type: integer
+        trafficSourcesSynced:
+          type: integer
+        networksSynced:
+          type: integer
+        voluumWorkspaceId:
+          type: ["string", "null"]
+        warnings:
+          type: array
+          items:
+            type: string
+        syncedAt:
+          type: string
+      required:
+        - success
+        - trafficSourcesImported
+        - affiliateNetworksImported
+        - trafficSourcesSynced
+        - networksSynced
+        - warnings
+        - syncedAt
+
+    VoluumMetadataTestResult:
+      type: object
+      properties:
+        voluumWorkspaces:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+            required: [id, name]
+        trafficSources:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+            required: [id, name]
+        affiliateNetworks:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+            required: [id, name]
+      required:
+        - voluumWorkspaces
+        - trafficSources
+        - affiliateNetworks
+
+    VoluumTrafficSource:
+      type: object
+      properties:
+        id:
+          type: integer
+        workspaceId:
+          type: integer
+        voluumId:
+          type: string
+        name:
+          type: string
+        isActive:
+          type: boolean
+        syncedAt:
+          type: ["string", "null"]
+      required:
+        - id
+        - workspaceId
+        - voluumId
+        - name
+        - isActive
+
+    VoluumAffiliateNetwork:
+      type: object
+      properties:
+        id:
+          type: integer
+        workspaceId:
+          type: integer
+        voluumId:
+          type: string
+        name:
+          type: string
+        isActive:
+          type: boolean
+        syncedAt:
+          type: ["string", "null"]
+      required:
+        - id
+        - workspaceId
+        - voluumId
+        - name
+        - isActive
+
+    AffiliateNetwork:
+      type: object
+      properties:
+        id:
+          type: integer
+        workspaceId:
+          type: integer
+        name:
+          type: string
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - workspaceId
+        - name
+        - isActive
+        - createdAt
+        - updatedAt
+
+    CreateAffiliateNetworkBody:
+      type: object
+      properties:
+        workspaceId:
+          type: integer
+        name:
+          type: string
+        isActive:
+          type: boolean
+      required:
+        - workspaceId
+        - name
+
+    UpdateAffiliateNetworkBody:
+      type: object
+      properties:
+        name:
+          type: string
+        isActive:
+          type: boolean
+
+    Geo:
+      type: object
+      properties:
+        id:
+          type: integer
+        workspaceId:
+          type: integer
+        code:
+          type: string
+        name:
+          type: string
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - workspaceId
+        - code
+        - name
+        - isActive
+        - createdAt
+        - updatedAt
+
+    CreateGeoBody:
+      type: object
+      properties:
+        workspaceId:
+          type: integer
+        code:
+          type: string
+        name:
+          type: string
+        isActive:
+          type: boolean
+      required:
+        - workspaceId
+        - code
+        - name
+
+    UpdateGeoBody:
+      type: object
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        isActive:
+          type: boolean
+
+    Campaign:
+      type: object
+      properties:
+        id:
+          type: integer
+        workspaceId:
+          type: integer
+        batchId:
+          type: integer
+        platform:
+          type: string
+          enum: [ios, android]
+        campaignName:
+          type: string
+        trafficSourceId:
+          type: ["integer", "null"]
+        campaignUrl:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [draft, ready, live, tested, closed]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - workspaceId
+        - batchId
+        - platform
+        - campaignName
+        - status
+        - createdAt
+        - updatedAt
+
+    BatchResult:
+      type: object
+      properties:
+        id:
+          type: integer
+        workspaceId:
+          type: integer
+        batchId:
+          type: integer
+        clicks:
+          type: integer
+        cost:
+          type: string
+        revenue:
+          type: string
+        conversions:
+          type: integer
+        roi:
+          type: ["string", "null"]
+        winnersCount:
+          type: integer
+        notes:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - workspaceId
+        - batchId
+        - clicks
+        - cost
+        - revenue
+        - conversions
+        - winnersCount
+        - createdAt
+        - updatedAt
+
+    CreateCampaignBody:
+      type: object
+      properties:
+        workspaceId:
+          type: integer
+        batchId:
+          type: integer
+        platform:
+          type: string
+          enum: [ios, android]
+        campaignName:
+          type: string
+        trafficSourceId:
+          type: ["integer", "null"]
+        campaignUrl:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [draft, ready, live, tested, closed]
+      required:
+        - workspaceId
+        - batchId
+        - platform
+        - campaignName
+
+    UpdateCampaignBody:
+      type: object
+      properties:
+        campaignName:
+          type: string
+        trafficSourceId:
+          type: ["integer", "null"]
+        campaignUrl:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [draft, ready, live, tested, closed]
+
+    RecordBatchResultBody:
+      type: object
+      properties:
+        workspaceId:
+          type: integer
+        batchId:
+          type: integer
+        clicks:
+          type: integer
+        cost:
+          oneOf:
+            - type: number
+            - type: string
+        revenue:
+          oneOf:
+            - type: number
+            - type: string
+        conversions:
+          type: integer
+        roi:
+          oneOf:
+            - type: number
+            - type: string
+            - type: "null"
+        winnersCount:
+          type: integer
+        notes:
+          type: ["string", "null"]
+      required:
+        - workspaceId
+        - batchId
+
+    UpdateBatchResultBody:
+      type: object
+      properties:
+        clicks:
+          type: integer
+        cost:
+          oneOf:
+            - type: number
+            - type: string
+        revenue:
+          oneOf:
+            - type: number
+            - type: string
+        conversions:
+          type: integer
+        roi:
+          oneOf:
+            - type: number
+            - type: string
+            - type: "null"
+        winnersCount:
+          type: integer
+        notes:
+          type: ["string", "null"]

@@ -1,0 +1,202 @@
+We need to make the entire app strictly workspace-scoped based on the selected Voluum workspace.
+
+====================================================
+1. WORKSPACE CONTEXT EVERYWHERE
+====================================================
+
+Add a small Workspace Selector to every main tab/page:
+- Operations Hub
+- Batches
+- Live Campaigns
+- Tasks
+- Traffic Plans
+- Reports
+- Settings
+- User Profile / My Goals
+
+The selected workspace controls all displayed data.
+
+When workspace is selected:
+- show only traffic sources from that Voluum workspace
+- show only affiliate networks from that Voluum workspace
+- show only campaigns from that Voluum workspace
+- show only offers from that Voluum workspace
+- show only batches from that workspace
+- show only tasks/reports/goals related to that workspace
+
+Every major entity must include:
+workspaceId
+voluumWorkspaceId
+
+====================================================
+2. NO CROSS-WORKSPACE DATA MIXING
+====================================================
+
+Do not mix data between Voluum workspaces.
+
+If workspace = TrexonDigital:
+Only TrexonDigital data should appear.
+
+If workspace = another Voluum workspace:
+Only that workspace data should appear.
+
+This applies to:
+- dropdowns
+- filters
+- reports
+- dashboards
+- tasks
+- batches
+- campaign mapping
+- winner exports
+- goals
+- scoring
+
+====================================================
+3. VOLUUM METADATA BY WORKSPACE
+====================================================
+
+Traffic Sources and Affiliate Networks must be synced per workspace.
+
+Example:
+Workspace A traffic sources should not appear inside Workspace B.
+
+Tables should store:
+- workspaceId
+- voluumWorkspaceId
+- voluumEntityId
+- entityName
+- syncedAt
+
+====================================================
+4. AUTOMATIC OFFER IMPORT FROM VOLUUM
+====================================================
+
+We need automatic import of new offers from Voluum into OfferOps.
+
+Example:
+If 250 offers are uploaded to Voluum with:
+
+Affiliate Network: Yieldkit
+GEO: Germany / DE
+Tag: ykdebatch1
+
+Then OfferOps should automatically import them as a new batch.
+
+Batch created in OfferOps:
+Yieldkit - DE - {todayDate} [250 Offers]
+
+Also store:
+- batchTag: ykdebatch1
+- affiliateNetwork: Yieldkit
+- GEO: DE
+- offerCount: 250
+- voluumWorkspaceId
+- workspaceId
+- uploadedAt / detectedAt
+- offers list
+
+====================================================
+5. BATCH DETECTION BY TAG
+====================================================
+
+Add support for detecting batches by Voluum tag.
+
+If multiple offers share the same tag:
+ykdebatch1
+
+Group them into one OfferOps Batch.
+
+Batch grouping rule:
+workspaceId + affiliateNetwork + GEO + tag
+
+If same tag already exists:
+- update existing batch
+- add new offers if found
+- update offer count
+
+If tag does not exist:
+- create new batch automatically
+
+====================================================
+6. IMPORTED OFFERS STRUCTURE
+====================================================
+
+For each imported offer, store:
+- offerId
+- offerName
+- offerClickId if available
+- affiliateNetwork
+- GEO
+- batchTag
+- workspaceId
+- voluumWorkspaceId
+- voluumOfferId
+- currentStatus
+- createdAt
+- syncedAt
+
+====================================================
+7. OFFEROPS WORKFLOW AFTER IMPORT
+====================================================
+
+After the 250 Yieldkit Germany offers are imported:
+
+1. Create batch:
+Yieldkit - DE - {date} [250 Offers]
+
+2. Show it in Batches tab under selected workspace.
+
+3. Status:
+NEW_BATCH
+
+4. Employee can open Batch Details and set:
+- target clicks
+- daily budget
+- planned runtime
+- notes
+
+5. Employee creates/assigns Voluum campaign for this batch.
+
+6. Once campaign exists and is mapped:
+- it appears in Live Campaigns
+- employee manually marks it Live
+- Voluum sync tracks clicks/conversions/profit/ROI
+- when click cap is reached, optimization task is created
+
+====================================================
+8. UNMAPPED OFFERS QUEUE
+====================================================
+
+If Voluum offers are imported but missing:
+- tag
+- affiliate network
+- GEO
+- workspace mapping
+
+Show them in:
+Unmapped Voluum Offers
+
+Actions:
+- Create batch manually
+- Assign to existing batch
+- Add/edit batch tag
+- Ignore
+
+====================================================
+9. IMPORTANT PRODUCT PRINCIPLE
+====================================================
+
+The selected Voluum workspace must define the entire operational context.
+
+Voluum is the source of truth for:
+- offers
+- offer names
+- traffic sources
+- affiliate networks
+- campaigns
+- workspace metadata
+- performance data
+
+OfferOps should group imported Voluum offers into operational batches using:
+workspace + affiliate network + GEO + tag.

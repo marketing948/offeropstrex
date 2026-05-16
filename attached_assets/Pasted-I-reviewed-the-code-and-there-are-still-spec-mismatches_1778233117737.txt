@@ -1,0 +1,52 @@
+I reviewed the code and there are still spec mismatches. Please fix these before considering the app complete.
+
+Critical corrections:
+
+1. BatchCreated must NOT immediately move the batch to WAITING_FOR_TRACKER_CAMPAIGNS.
+A newly created batch should stay NEW_BATCH until exactly one tracker campaign is imported.
+Only then transition to WAITING_FOR_TRACKER_CAMPAIGNS.
+
+2. Initial CREATE_IOS_TRACKER_CAMPAIGN and CREATE_ANDROID_TRACKER_CAMPAIGN tasks must be created with flashing=true.
+Right now they are created with flashing=false.
+
+3. OfferImported must not be a no-op.
+Move the batch creation / offer attachment / notification / task generation flow fully into the OfferImported → BatchCreated event flow.
+The sync route should emit events, not own core automation logic.
+
+4. TESTED logic must follow the Automation Bible:
+Batch becomes TESTED only when EVERY offer in the batch has visits >= 20000.
+Do not use generic clicksThreshold as the main tested condition unless it is clearly an admin override.
+
+5. When PAUSE_TRAFFIC_SOURCE_CAMPAIGNS is marked DONE, the engine must:
+- find the next enabled traffic source from the batch snapshot/order
+- increment traffic_source_step
+- set current_traffic_source_id
+- create new CREATE_IOS_TRACKER_CAMPAIGN task
+- create new CREATE_ANDROID_TRACKER_CAMPAIGN task
+- reset batch status to NEW_BATCH
+
+6. Keep traffic source order snapshot behavior:
+Admin reorder changes must not affect batches already in progress.
+
+7. Make sure tracker campaign import works strictly by tag:
+sl_gb_batch1_ios_clickadu
+sl_gb_batch1_android_clickadu
+
+8. Invalid tracker campaign tags must create admin notifications and must not attach to any batch.
+
+9. Remove or fully neutralize remaining legacy lifecycle paths that can mutate batch/task state outside the event engine.
+
+After fixing, run:
+- typecheck
+- API server tests
+- engine tests
+- workspace isolation check
+- no-direct-domain-mutations check
+- API server boot check
+
+Then give me a short report with:
+- what was fixed
+- which files changed
+- test results
+- any remaining risks
+Do not stop unless there is a critical blocker.

@@ -1,0 +1,1 @@
+export default function EmployeeDetail() { return <div>Employee Detail Placeholder</div>; }

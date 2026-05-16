@@ -1,0 +1,289 @@
+STOP FEATURE WORK.
+
+The current implementation still does not match the canonical workflow spec.
+
+Observed problem from real test:
+- Offer with valid tag was imported correctly.
+- Voluum campaign was imported correctly.
+- But the system did not connect the campaign to the batch.
+- It also did not create/complete the required workflow tasks.
+
+This means the app is still importing data, but it is NOT running the deterministic workflow correctly.
+
+Implement the following STRICT SPEC exactly. Do not improvise.
+
+==================================================
+SOURCE OF TRUTH
+==================================================
+
+OfferOps is the workflow source of truth.
+Voluum is only a validation source.
+
+Voluum sync may import/observe entities, but workflow state must be driven by internal batches, tasks, statuses, and reconciliation.
+
+==================================================
+OFFER IMPORT
+==================================================
+
+Import ONLY Voluum offers with valid offer tag:
+
+<affiliate>_<geo>_batch<number>
+
+Example:
+lb_de_batch1
+
+If an offer has no valid tag:
+- do not import it
+- do not save it
+- do not show it
+- do not create any batch/task/event from it
+
+When at least 1 valid offer exists, create or repair batch:
+
+batchTag = lb_de_batch1
+
+All future offers with the same tag must automatically attach to the same batch.
+
+If new offers are added to an existing batch, create an in-app notification.
+
+==================================================
+BATCH INITIAL STATE
+==================================================
+
+New batch must be:
+
+status = NEW_BATCH
+batchTag = lb_de_batch1
+currentTrafficSourceId = first enabled traffic source in admin-defined order
+
+Traffic source order is controlled only by admin in Settings.
+
+A batch can only be active in ONE traffic source at a time.
+
+Every batch must go through ALL enabled traffic sources, regardless of performance.
+
+==================================================
+CAMPAIGN TAG FORMAT
+==================================================
+
+Tracker campaign tags are ONLY:
+
+<batchTag>_ios
+<batchTag>_android
+
+Examples:
+lb_de_batch1_ios
+lb_de_batch1_android
+
+Traffic source is NOT part of the tag.
+
+Traffic source must be read from the Voluum campaign’s own traffic source field.
+
+Do not use campaign name parsing as the primary workflow logic.
+Do not auto-map random campaigns by name.
+
+==================================================
+TASKS FOR CURRENT TRAFFIC SOURCE
+==================================================
+
+For every active batch + current traffic source, the system must ensure exactly two open tasks exist until completed:
+
+1. Create iOS campaign on <TrafficSource> for <BatchTag>
+Example:
+Create iOS campaign on Clickadu for lb_de_batch1
+
+Expected Voluum tag:
+lb_de_batch1_ios
+
+2. Create Android campaign on <TrafficSource> for <BatchTag>
+Example:
+Create Android campaign on Clickadu for lb_de_batch1
+
+Expected Voluum tag:
+lb_de_batch1_android
+
+These tasks must be created by reconciliation, not only by one-time BatchCreated events.
+
+Repeated syncs must never create duplicate tasks.
+
+==================================================
+CAMPAIGN VALIDATION
+==================================================
+
+A Voluum campaign completes a task only if:
+
+1. campaign tag exactly matches expected tag
+2. campaign traffic source equals the batch currentTrafficSourceId
+3. campaign workspaceId matches the batch workspaceId
+4. device is inferred only from tag suffix:
+   _ios or _android
+
+When lb_de_batch1_ios is found on the current traffic source:
+- create tracker_campaign row
+- complete CREATE_IOS_TRACKER_CAMPAIGN task
+
+When lb_de_batch1_android is found on the current traffic source:
+- create tracker_campaign row
+- complete CREATE_ANDROID_TRACKER_CAMPAIGN task
+
+When both are completed:
+- batch status becomes OFFER_READY_FOR_LIVE_TESTING
+- create Go Live task
+
+==================================================
+GO LIVE TASK
+==================================================
+
+After both iOS and Android tracker campaigns exist for the current traffic source, create exactly one task:
+
+Go live with the campaign on <TrafficSource>
+
+Example:
+Go live with the campaign on Clickadu
+
+This task type is currently missing from the schema. Add it.
+
+Do not use FIND_WINNERS or PAUSE_TRAFFIC_SOURCE_CAMPAIGNS as substitutes for this stage.
+
+==================================================
+LIVE DETECTION
+==================================================
+
+Batch moves to LIVE_TESTS automatically only when Voluum traffic is detected.
+
+Workers do not manually mark batch as live.
+
+When traffic > 0 is detected for the current traffic source campaigns:
+- status = LIVE_TESTS
+- liveAt = first detected traffic timestamp
+
+==================================================
+TEST COMPLETION
+==================================================
+
+A test is complete only when:
+
+1. liveAt is at least 24 hours ago
+AND
+2. every offer in the batch has more than 20,000 visits
+
+Only then:
+status = TESTED
+
+==================================================
+WINNERS
+==================================================
+
+Winner rule:
+
+offer revenue > 0.1
+
+After test completion, create one task:
+
+Move winners to a scaled campaign
+
+This task must include all winner offer IDs.
+
+Failed offers are ignored.
+
+This task type is currently missing from the schema. Add it.
+
+==================================================
+NEXT TRAFFIC SOURCE
+==================================================
+
+After the test for current traffic source is complete, automatically advance the batch to the next enabled traffic source in admin order.
+
+Then create again:
+- Create iOS campaign on <NextTrafficSource> for <BatchTag>
+- Create Android campaign on <NextTrafficSource> for <BatchTag>
+
+The batch must continue until all traffic sources are tested.
+
+When all traffic sources are done:
+status = COMPLETED
+
+==================================================
+SCALED CAMPAIGNS
+==================================================
+
+If a Voluum campaign tag contains the word:
+
+scaled
+
+then it is considered a scaled campaign.
+
+Offers in scaled campaigns are no longer part of the testing workflow.
+
+==================================================
+TAG CHANGES
+==================================================
+
+If worker changes tags later in Voluum:
+- ignore it
+- do not reopen completed tasks
+- do not mutate historical workflow
+
+==================================================
+RECONCILIATION REQUIRED
+==================================================
+
+Do not rely only on events.
+
+After every sync, run reconciliation that guarantees:
+
+1. valid offers are attached to correct batch
+2. batch exists for every valid offer tag
+3. each active batch has current traffic source assigned
+4. each active batch/current source has exactly two tracker campaign creation tasks
+5. matching Voluum campaigns complete matching tasks
+6. both completed tracker tasks create Go Live task
+7. traffic detection moves batch to LIVE_TESTS
+8. 24h + 20k visits per offer moves batch to TESTED
+9. winners task is created
+10. batch advances to next traffic source
+11. no duplicate tasks
+12. no duplicate tracker_campaign rows
+13. no random campaigns imported into workflow
+14. no workspace leakage
+
+==================================================
+CURRENT CODE MISMATCHES TO FIX
+==================================================
+
+1. Remove/disable legacy structured campaign name auto-mapping as workflow logic.
+It can import unrelated campaigns and create wrong mappings.
+
+2. Add missing task types:
+- GO_LIVE_TRAFFIC_SOURCE_CAMPAIGN
+- MOVE_WINNERS_TO_SCALED_CAMPAIGN
+
+3. Replace old FIND_WINNERS / PAUSE_TRAFFIC_SOURCE_CAMPAIGNS flow.
+That is not the requested workflow.
+
+4. Task creation must be repairable/idempotent.
+Currently tasks are too dependent on BatchCreated event cascade.
+
+5. Campaign-to-batch matching must use:
+batchTag + device tag + current traffic source
+not campaign name parsing.
+
+6. CompleteTask and batch status updates must be workspace-scoped.
+
+7. Add DB uniqueness to prevent duplicate open tasks per:
+workspaceId + batchId + trafficSourceId + taskType + device
+
+8. Add tests for the exact real-world scenario:
+- create offer in Voluum with tag lb_de_batch1
+- sync imports offer
+- batch lb_de_batch1 is created
+- two tasks are created
+- create Voluum campaign with tag lb_de_batch1_ios on current traffic source
+- sync imports campaign
+- campaign links to batch
+- iOS task completes
+- create lb_de_batch1_android
+- sync completes Android task
+- Go Live task is created
+
+Do not continue to UI polish or new features until this full flow works end-to-end.

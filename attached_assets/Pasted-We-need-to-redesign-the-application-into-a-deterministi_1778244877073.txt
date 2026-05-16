@@ -1,0 +1,325 @@
+We need to redesign the application into a deterministic workflow/task management system for media buyers.
+
+The primary goal of the system is:
+1. Give workers clear tasks and workflow stages
+2. Give admins visibility and control over all testing activity
+3. Automatically track progress through Voluum sync
+4. Later help identify winners and optimization opportunities
+
+The system MUST behave exactly according to the following rules.
+
+==================================================
+CORE CONCEPT
+==================================================
+
+OfferOps is the source of truth for workflow/state/tasks.
+
+Voluum is NOT the source of truth.
+Voluum is only used to validate that workers completed actions correctly.
+
+The system must NEVER depend only on one-time events.
+A reconciliation/repair process must run after every sync.
+
+==================================================
+WORKSPACE ISOLATION
+==================================================
+
+Everything must be fully isolated by workspace.
+
+Offers, campaigns, batches, tasks, statuses, syncs, and repair jobs must NEVER leak across workspaces.
+
+Every DB mutation and query involving:
+- offers
+- batches
+- tasks
+- tracker campaigns
+- traffic sources
+must always include workspaceId filters.
+
+==================================================
+VALID OFFER TAG FORMAT
+==================================================
+
+ONLY import offers from Voluum if their tag EXACTLY matches:
+
+<affiliate>_<geo>_batch<number>
+
+Example:
+lb_de_batch1
+
+Examples of invalid tags:
+lb_de
+batch1
+lb_batch1
+lb_de_batch
+random
+test123
+
+Invalid offers must be ignored completely:
+- do not save
+- do not display
+- do not create events/tasks/batches
+
+==================================================
+BATCH CREATION
+==================================================
+
+A batch is automatically created immediately when at least ONE valid tagged offer exists.
+
+Example:
+Offer tag:
+lb_de_batch1
+
+Creates batch:
+lb_de_batch1
+
+The batch groups ALL offers with the same tag.
+
+If new offers later appear with the same tag:
+- automatically attach them to the existing batch
+- create an in-app notification that new offers were added to the batch
+
+Batches are NEVER closed to new matching offers.
+
+==================================================
+TRAFFIC SOURCE ORDER
+==================================================
+
+Traffic sources are processed sequentially.
+
+The order is globally configurable by admin only.
+
+Create an admin Settings page where admin can:
+- manage traffic source order
+- reorder traffic sources
+- enable/disable traffic sources
+
+Example order:
+1. Clickadu
+2. RichAds
+3. PropellerAds
+
+A batch can only be active in ONE traffic source at a time.
+
+A batch MUST go through ALL configured traffic sources regardless of performance.
+
+==================================================
+CAMPAIGN TAG FORMAT
+==================================================
+
+Tracker campaign tags MUST be:
+
+<batchTag>_ios
+<batchTag>_android
+
+Examples:
+lb_de_batch1_ios
+lb_de_batch1_android
+
+Traffic source is NOT part of the tag.
+
+The traffic source must be detected from the Voluum campaign traffic source configuration itself.
+
+Campaign tags must be globally unique per workspace.
+
+==================================================
+TRACKER CAMPAIGN TASKS
+==================================================
+
+When a batch enters a traffic source stage, automatically create EXACTLY TWO tasks:
+
+1.
+Create iOS campaign on <TrafficSource> for <BatchTag>
+
+Example:
+Create iOS campaign on Clickadu for lb_de_batch1
+
+2.
+Create Android campaign on <TrafficSource> for <BatchTag>
+
+Example:
+Create Android campaign on Clickadu for lb_de_batch1
+
+Each task must contain:
+- expected campaign tag
+- traffic source
+- device
+- batch id
+
+Expected tags:
+lb_de_batch1_ios
+lb_de_batch1_android
+
+==================================================
+HOW CAMPAIGNS ARE CREATED
+==================================================
+
+Workers manually create campaigns inside Voluum.
+
+OfferOps DOES NOT create campaigns automatically.
+
+OfferOps only validates that the expected campaigns exist.
+
+==================================================
+CAMPAIGN VALIDATION
+==================================================
+
+A tracker campaign is considered valid if:
+1. campaign exists in Voluum
+2. campaign tag exactly matches expected tag
+3. campaign traffic source matches the current traffic source stage
+
+Nothing else matters for now.
+
+Do NOT validate:
+- landing pages
+- campaign status
+- offers inside
+- settings
+- flows
+
+==================================================
+WHEN TASKS COMPLETE
+==================================================
+
+When sync detects:
+lb_de_batch1_ios
+
+complete the iOS task.
+
+When sync detects:
+lb_de_batch1_android
+
+complete the Android task.
+
+==================================================
+GO LIVE TASK
+==================================================
+
+After BOTH tracker campaign tasks are completed:
+
+Automatically create ONE new task:
+
+Go live with the campaign on <TrafficSource>
+
+Example:
+Go live with the campaign on Clickadu
+
+==================================================
+LIVE DETECTION
+==================================================
+
+A batch enters LIVE_TESTING automatically when:
+1. tracker campaigns exist
+2. traffic is detected in Voluum
+
+Traffic detection is the ONLY requirement.
+
+Workers do NOT manually mark live state.
+
+==================================================
+TEST COMPLETION RULE
+==================================================
+
+A traffic source test is complete ONLY IF:
+1. campaign has been live for at least 24 hours
+AND
+2. every offer in the batch has more than 20,000 visits
+
+==================================================
+WINNER RULE
+==================================================
+
+An offer is considered a winner if:
+
+revenue > 0.1
+
+No other winner conditions for now.
+
+==================================================
+AFTER TEST COMPLETION
+==================================================
+
+After a traffic source test completes:
+
+1. Create ONE task:
+
+Move winners to a scaled campaign
+
+2. The task must include ALL winner offer IDs.
+
+3. Failed offers are ignored completely.
+
+4. Automatically move the batch to the NEXT traffic source in sequence.
+
+5. Automatically create again:
+- Create iOS campaign...
+- Create Android campaign...
+
+for the next traffic source.
+
+==================================================
+SCALED CAMPAIGNS
+==================================================
+
+If a campaign tag contains the word:
+
+scaled
+
+then it is considered a scaled campaign.
+
+Offers associated with a scaled campaign are no longer considered part of testing workflow.
+
+==================================================
+TAG CHANGES
+==================================================
+
+If workers later manually change tags in Voluum:
+- ignore it
+- do not reopen tasks
+- do not repair history
+- do not mutate completed workflow
+
+==================================================
+FORBIDDEN STATES
+==================================================
+
+The system must NEVER allow:
+- campaigns without valid tags
+- random Voluum campaigns imported
+- offers without valid tags imported
+- duplicate tasks
+- same batch active in multiple traffic sources
+- offers belonging to multiple batches
+- workspace leakage
+- orphan batches
+- orphan tasks
+
+==================================================
+RECONCILIATION / REPAIR ENGINE
+==================================================
+
+After EVERY sync, run reconciliation logic that guarantees:
+
+1. every valid offer belongs to the correct batch
+2. every batch has correct current traffic source stage
+3. every active stage has required tasks
+4. missing tasks are recreated
+5. completed tasks are synced correctly
+6. tracker campaigns found in Voluum complete matching tasks
+7. no duplicate tasks exist
+8. broken states are repaired automatically
+
+The system MUST be idempotent and repairable.
+
+Repeated syncs must NEVER create duplicate entities.
+
+==================================================
+ADMIN GOAL
+==================================================
+
+The system is primarily:
+1. a workflow/task manager for workers
+2. an admin visibility/control system
+
+Future optimization logic can be added later.

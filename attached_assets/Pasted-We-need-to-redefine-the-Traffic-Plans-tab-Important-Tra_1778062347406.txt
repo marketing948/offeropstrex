@@ -1,0 +1,258 @@
+We need to redefine the Traffic Plans tab.
+
+Important:
+Traffic Plans should NOT duplicate the Tasks tab.
+
+Tasks tab = tactical execution.
+It shows what each employee needs to do now.
+
+Traffic Plans tab = strategic testing command center.
+It shows the testing strategy, traffic source rotation, batch coverage, and automated next-test planning.
+
+====================================================
+1. CORE PURPOSE
+====================================================
+
+Traffic Plans should answer:
+- What is our testing strategy this week/month?
+- Which batches finished their current traffic source test?
+- Which batches reached their cap/click target?
+- Which traffic source should each batch be tested on next?
+- Are we testing enough across GEOs, affiliate networks, and traffic sources?
+- Where are we missing coverage?
+- What should the next automated tasks be?
+
+====================================================
+2. TRAFFIC PLAN VS TASKS
+====================================================
+
+Do not make this another task list.
+
+Tasks:
+- Create Voluum campaign
+- Mark campaign live
+- Optimize winners/losers
+- Move winners to scale
+
+Traffic Plans:
+- Define the traffic source rotation strategy
+- Decide the next test sequence
+- Track coverage per batch
+- Track which traffic sources were already tested
+- Automatically generate the next tasks after a batch completes a test
+
+====================================================
+3. COMMAND CENTER LAYOUT
+====================================================
+
+Create a Traffic Plans Command Center with these sections:
+
+A. Strategy Overview Cards
+- Active testing plans
+- Batches waiting for next traffic source
+- Batches that reached click cap
+- Batches ready for next test
+- Untested traffic source opportunities
+- Weekly planned tests
+- Completed tests this week
+
+B. Testing Pipeline Board
+Columns:
+- New Batch
+- Assigned to Traffic Source
+- Live Testing
+- Cap Reached
+- Ready for Optimization
+- Optimized
+- Waiting for Next Traffic Source
+- Completed Rotation
+
+This should show batches, not tasks.
+
+C. Traffic Source Rotation Matrix
+Show each batch against traffic sources.
+
+Example:
+
+Batch | Yossi | Shimon | Moshe | Avi | Next
+MaxBounty - DE - 05/05/26 [250 Offers] | Tested | Next | Pending | Pending | Shimon
+
+Statuses per traffic source:
+- Not Tested
+- Planned
+- Live
+- Cap Reached
+- Optimized
+- Tested
+- Skipped
+- Failed
+
+D. Suggested Next Tests
+Show batches that completed one traffic source and need the next test.
+
+For each row:
+- batchName
+- affiliateNetwork
+- GEO
+- previousTrafficSource
+- previousPerformance
+- nextSuggestedTrafficSource
+- reason
+- priority
+- assignedEmployee
+- button: Create Next Test Task
+
+====================================================
+4. AUTOMATION RULES
+====================================================
+
+Add automation logic:
+
+When a live campaign reaches its click cap / target clicks:
+1. Mark it as Cap Reached
+2. Create Optimization Task
+3. Move batch to Ready for Optimization
+
+When optimization is completed:
+1. Mark current traffic source as Tested
+2. Add traffic source to testedTrafficSources
+3. Check traffic source rotation list
+4. Find next untested traffic source
+5. Create suggested next test in Traffic Plans
+6. Optionally auto-create a Task:
+   “Create Voluum campaign for {batchName} on {nextTrafficSource}”
+
+Admin setting:
+- Auto-create next test task: ON/OFF
+- Require admin approval before creating next task: ON/OFF
+
+====================================================
+5. TRAFFIC SOURCE ROTATION STRATEGY
+====================================================
+
+Add a configurable traffic source rotation list.
+
+Admin can define:
+- traffic sources
+- default order
+- active/inactive
+- priority
+- GEO restrictions
+- budget defaults
+- target click defaults
+
+Example rotation:
+1. Yossi
+2. Shimon
+3. Moshe
+4. Avi
+
+For each traffic source:
+- trafficSourceName
+- defaultBudget
+- defaultTargetClicks
+- activeStatus
+- allowedGEOs
+- priorityOrder
+
+====================================================
+6. TEST PLAN TEMPLATES
+====================================================
+
+Allow admins to create Traffic Plan Templates.
+
+Example:
+“Germany Weekly Test Plan”
+
+Template fields:
+- GEO
+- affiliateNetwork
+- trafficSourceRotation
+- defaultTargetClicks
+- defaultDailyBudget
+- defaultRunTime
+- priority
+- assignedEmployees
+
+When applied to a new batch:
+- system knows the rotation order
+- system knows what the next traffic source should be
+- system knows default budget/click targets
+
+====================================================
+7. WEEKLY STRATEGY VIEW
+====================================================
+
+Add a Weekly Testing Strategy section.
+
+Show:
+- planned tests this week
+- completed tests this week
+- pending next tests
+- coverage by GEO
+- coverage by affiliate network
+- coverage by traffic source
+- planned budget vs actual spend
+- expected click volume vs actual clicks
+
+This should help management understand if the testing strategy is consistent.
+
+====================================================
+8. COVERAGE MAP
+====================================================
+
+Add a coverage map.
+
+Show:
+- GEO × Traffic Source coverage
+- Affiliate Network × GEO coverage
+- Batch × Traffic Source coverage
+
+Purpose:
+Help identify where we have not tested enough.
+
+Example:
+DE has tested:
+- Yossi
+- Shimon
+
+DE still missing:
+- Moshe
+- Avi
+
+====================================================
+9. RELATIONSHIP WITH BATCHES
+====================================================
+
+Each batch should have:
+- assigned traffic plan
+- rotation list
+- tested traffic sources
+- next traffic source
+- current test status
+- cap reached yes/no
+- optimization completed yes/no
+
+Traffic Plans should link directly to:
+- Batch Details
+- Live Campaign
+- Optimization Task
+- Next Test Task
+
+====================================================
+10. IMPORTANT PRODUCT PRINCIPLE
+====================================================
+
+Traffic Plans should feel like a command center for testing strategy.
+
+It should not only show work.
+It should guide the next strategic move.
+
+The system should help us maintain a consistent routine:
+Batch uploaded
+→ first traffic source test
+→ cap reached
+→ optimization
+→ next traffic source suggested
+→ new campaign task created
+→ repeat until rotation is complete.

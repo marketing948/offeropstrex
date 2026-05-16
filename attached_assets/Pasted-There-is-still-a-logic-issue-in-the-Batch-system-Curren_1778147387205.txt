@@ -1,0 +1,138 @@
+There is still a logic issue in the Batch system.
+
+Current test case:
+- I uploaded an offer with tag:
+blu_de_batch1
+
+- I also created a Voluum campaign with the SAME tag:
+blu_de_batch1
+
+- I added that tagged offer into that campaign.
+
+After sync:
+- The Voluum campaign was detected successfully.
+- BUT the offer did NOT get grouped into the Batch tab.
+
+This is incorrect.
+
+I want to clarify the exact expected behavior to avoid misunderstandings.
+
+--------------------------------------------------
+EXPECTED BATCH LOGIC
+--------------------------------------------------
+
+1. Automatic batch grouping by tag
+
+If I upload:
+- 1 offer
+- 10 offers
+- 200 offers
+
+with the SAME valid tag format:
+
+sl_gb_batch20
+
+Then the system MUST automatically:
+
+- detect the tag
+- create ONE unified Batch entity
+- group ALL offers with that exact tag into that Batch
+
+inside the Batches tab.
+
+The Batch title should match the tag:
+SL / GB / Batch 20
+
+This grouping should happen EVEN IF:
+- there is no campaign yet
+- there is only one offer
+- campaigns were not synced yet
+
+The Batch creation must be triggered directly from the offers sync.
+
+--------------------------------------------------
+2. Batch contents
+--------------------------------------------------
+
+Inside the Batch I expect:
+- all related offers
+- offer count
+- affiliate network
+- GEO
+- batch number
+- current status
+- related campaigns
+- created date
+- last sync date
+
+--------------------------------------------------
+3. Auto task generation
+--------------------------------------------------
+
+After a Batch is created,
+the system should automatically generate testing tasks.
+
+Example:
+
+If the Batch is:
+sl_gb_batch20
+
+Then automatically create tasks like:
+
+1.
+Create campaign for sl_gb_batch20 on [Traffic Source A] for iOS 3G
+
+2.
+Create campaign for sl_gb_batch20 on [Traffic Source A] for Android 3G
+
+The logic:
+For every relevant traffic source + device combination,
+create a testing task automatically.
+
+--------------------------------------------------
+4. Campaign detection
+--------------------------------------------------
+
+If later during sync,
+the system detects a Voluum campaign using the same Batch tag:
+
+sl_gb_batch20
+
+Then:
+- connect that campaign to the Batch
+- mark the relevant task as completed
+- update Batch status automatically
+
+Example status:
+LIVE_TESTING
+
+--------------------------------------------------
+5. Important logic correction
+--------------------------------------------------
+
+Currently it seems the system detects campaigns,
+but does NOT create batches directly from offers.
+
+This is wrong.
+
+Correct flow should be:
+
+OFFERS SYNC
+→ detect valid tag
+→ create/find Batch
+→ attach offers to Batch
+→ create testing tasks
+
+CAMPAIGN SYNC
+→ detect campaigns with same tag
+→ attach campaigns to existing Batch
+→ complete related tasks automatically
+
+--------------------------------------------------
+6. Workspace isolation
+--------------------------------------------------
+
+All logic must remain isolated per workspace.
+
+Same tag in another workspace
+must create a completely separate Batch.

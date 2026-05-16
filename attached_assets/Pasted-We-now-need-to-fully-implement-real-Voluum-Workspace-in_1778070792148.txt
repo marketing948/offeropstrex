@@ -1,0 +1,190 @@
+We now need to fully implement real Voluum Workspace integration.
+
+Currently the Workspace section only shows placeholder UI.
+We need actual workspace linking, synchronization, and metadata import from Voluum.
+
+====================================================
+1. REAL VOLUUM WORKSPACE CONNECTION
+====================================================
+
+Implement real Voluum workspace discovery and linking.
+
+After successful Voluum authentication:
+- fetch all available Voluum workspaces/accounts
+- allow selecting and linking them inside OfferOps
+
+The user currently has multiple Voluum workspaces (4 workspaces).
+
+OfferOps must support:
+- linking multiple Voluum workspaces
+- selecting active workspace
+- syncing workspace-specific data
+
+====================================================
+2. WORKSPACE CONNECTION FLOW
+====================================================
+
+New flow:
+
+1. User enters Voluum credentials
+2. System authenticates with Voluum
+3. System fetches available Voluum workspaces
+4. Display all discovered workspaces
+5. User can:
+   - connect workspace
+   - disconnect workspace
+   - rename internal display name if desired
+6. Workspace becomes active inside OfferOps
+
+====================================================
+3. FETCH VOLUUM WORKSPACES
+====================================================
+
+After auth:
+Call the appropriate Voluum API endpoints to retrieve:
+- workspace IDs
+- workspace names
+- account/workspace metadata
+
+Store:
+- workspaceId
+- voluumWorkspaceId
+- workspaceName
+- voluumWorkspaceName
+- activeStatus
+- syncStatus
+- lastSyncAt
+
+====================================================
+4. WORKSPACE SWITCHER
+====================================================
+
+Add a Workspace Switcher in the top navigation.
+
+Behavior:
+- switching workspace changes all app context
+- only data from that workspace is visible
+- batches, campaigns, tasks, reports, goals, traffic sources, affiliate networks, etc. become workspace-scoped
+
+====================================================
+5. TRAFFIC SOURCE SYNC
+====================================================
+
+Important requirement:
+
+Traffic Source names inside OfferOps MUST ALWAYS match the exact names from the linked Voluum workspace.
+
+Do NOT allow manual naming mismatches.
+
+Implement:
+- fetch traffic sources from Voluum workspace
+- sync automatically
+- update if changed in Voluum
+- mark inactive if removed from Voluum
+
+Fields:
+- trafficSourceId
+- voluumTrafficSourceId
+- trafficSourceName
+- workspaceId
+- activeStatus
+- syncedAt
+
+Add:
+Settings → Workspace → Sync Traffic Sources button
+
+====================================================
+6. AFFILIATE NETWORK SYNC
+====================================================
+
+Affiliate Network names inside OfferOps MUST ALSO match Voluum exactly.
+
+Implement:
+- fetch affiliate networks from Voluum workspace
+- sync automatically
+- update if changed in Voluum
+- mark inactive if removed from Voluum
+
+Fields:
+- affiliateNetworkId
+- voluumAffiliateNetworkId
+- affiliateNetworkName
+- workspaceId
+- activeStatus
+- syncedAt
+
+Add:
+Settings → Workspace → Sync Affiliate Networks button
+
+====================================================
+7. AUTO-SYNC ENGINE
+====================================================
+
+Add automatic synchronization jobs.
+
+Configurable sync intervals:
+- every 5 minutes
+- every 15 minutes
+- hourly
+- manual only
+
+Sync:
+- workspaces
+- traffic sources
+- affiliate networks
+- campaigns
+- metadata
+
+====================================================
+8. SETTINGS → WORKSPACE MANAGEMENT UI
+====================================================
+
+Redesign the Workspace settings page.
+
+Each connected workspace should show:
+- workspace name
+- Voluum workspace name
+- sync status
+- last sync time
+- campaigns synced
+- traffic sources synced
+- affiliate networks synced
+- active users
+- workspace status
+
+Actions:
+- Sync Now
+- Reconnect
+- Disconnect
+- Edit Settings
+- Set Active
+
+====================================================
+9. INITIAL IMPORT FLOW
+====================================================
+
+When a workspace is connected for the first time:
+
+Automatically import:
+- traffic sources
+- affiliate networks
+- campaigns
+- existing active campaign metadata
+
+This should create the OfferOps operational layer automatically.
+
+====================================================
+10. IMPORTANT PRODUCT PRINCIPLE
+====================================================
+
+OfferOps should behave like an operational layer on top of Voluum.
+
+The system should not maintain separate naming systems.
+
+Everything operational:
+- traffic sources
+- affiliate networks
+- campaigns
+- workspaces
+
+must stay aligned with the corresponding Voluum workspace in real time.

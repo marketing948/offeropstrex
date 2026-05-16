@@ -1,0 +1,21 @@
+{
+  "name": "@workspace/scripts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "hello": "tsx ./src/hello.ts",
+    "check:workspace-isolation": "tsx ./src/check-workspace-isolation.ts",
+    "audit:workspace-backfill": "tsx ./src/audit-workspace-backfill.ts",
+    "test:workspace-isolation": "tsx ./src/test-workspace-isolation.ts",
+    "test:phase2-schema": "tsx ./src/test-phase2-schema.ts",
+    "check:no-direct-domain-mutations": "tsx ./src/check-no-direct-domain-mutations.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/pg": "^8.18.0",
+    "pg": "^8.20.0",
+    "tsx": "catalog:"
+  }
+}

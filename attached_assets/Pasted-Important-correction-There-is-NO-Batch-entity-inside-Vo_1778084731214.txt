@@ -1,0 +1,110 @@
+Important correction:
+
+There is NO “Batch” entity inside Voluum.
+Batches are an OfferOps concept only.
+
+Voluum source-of-truth entities are:
+- Workspaces
+- Offers
+- Campaigns
+- Traffic Sources
+- Affiliate Networks
+- Metrics / Reports
+
+OfferOps should import those from Voluum through the API, then create its own Batches by grouping Offers by tag.
+
+Current issue:
+Campaign Mapping is not useful right now because campaigns are not being imported automatically into OfferOps.
+
+Required behavior:
+
+1. For each connected workspace, Sync Now must import:
+- offers
+- campaigns
+- traffic sources
+- affiliate networks
+- metrics / performance reports
+
+2. Campaigns must appear automatically in OfferOps after sync.
+No manual “Load Campaigns” should be required as the main flow.
+
+3. Offers must appear automatically after sync.
+
+4. OfferOps should create Batches from Voluum Offers using tag grouping.
+
+Batch grouping rule:
+workspaceId + affiliateNetwork + GEO + offerTag
+
+Example:
+Voluum offers:
+- affiliate network: Yieldkit
+- GEO: Germany / DE
+- tag: ykdebatch1
+- 250 offers
+
+OfferOps creates:
+Yieldkit - DE - {date} [250 Offers]
+
+5. Campaign Mapping should map:
+Voluum Campaign → OfferOps Batch
+
+But the campaign list must come from synced Voluum campaigns for the selected workspace only.
+
+6. If campaigns exist in Voluum but are not mapped:
+show them in:
+Unmapped Voluum Campaigns
+
+Actions:
+- Assign to existing OfferOps Batch
+- Create new Batch from related offers/tag
+- Ignore
+
+7. If offers exist in Voluum but are not grouped:
+show them in:
+Unmapped Voluum Offers
+
+Actions:
+- Create Batch by tag
+- Assign to existing Batch
+- Ignore
+
+8. All synced Voluum data must be workspace-scoped.
+
+For selected workspace only show:
+- campaigns from that Voluum workspace
+- offers from that Voluum workspace
+- traffic sources from that Voluum workspace
+- affiliate networks from that Voluum workspace
+- metrics from that Voluum workspace
+
+9. Metrics sync:
+Import Voluum report metrics by:
+- campaign
+- offer
+- traffic source
+- affiliate network
+- GEO
+- date range
+
+Metrics required:
+- clicks
+- visits if available
+- conversions
+- cost
+- revenue
+- profit
+- ROI
+- CPA
+- CVR
+
+10. Live workflow:
+After sync:
+- campaigns appear in Live Campaigns
+- offers are grouped into Batches
+- metrics update click progress
+- when campaign/batch reaches click threshold, create optimization task
+
+Product principle:
+Voluum is the source of truth for raw data.
+OfferOps creates operational structure:
+Offers from Voluum → grouped by tag into OfferOps Batches → campaigns mapped to batches → metrics drive tasks and optimization.

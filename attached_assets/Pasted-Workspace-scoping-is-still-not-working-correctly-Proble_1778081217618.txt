@@ -1,0 +1,164 @@
+Workspace scoping is still not working correctly.
+
+Problem:
+In the New Testing Batch modal and other relevant screens, the Affiliate Network and Traffic Source dropdowns still show all networks/sources across all workspaces.
+
+Required behavior:
+All dropdowns, tables, filters, reports, tasks, batches, campaigns, and dashboards must be filtered by the currently selected workspace AND by the workspaces assigned to the logged-in user.
+
+Example:
+If the user is currently inside workspace:
+TrexonDigital
+
+They should see:
+- PropellerAds Trexon
+
+They should NOT see:
+- PropellerAds Joffeca
+- traffic sources from other workspaces
+- affiliate networks from other workspaces
+
+====================================================
+1. USER → WORKSPACE ACCESS
+====================================================
+
+Add user-workspace assignment.
+
+A user can belong to one or more workspaces.
+
+User fields / relation:
+- userId
+- workspaceId
+- roleInWorkspace
+- activeStatus
+
+Roles:
+- super_admin: can access all workspaces
+- workspace_admin: can access assigned workspace(s)
+- employee: can access only assigned workspace(s)
+
+====================================================
+2. GLOBAL WORKSPACE CONTEXT
+====================================================
+
+The selected workspace must be stored globally in app state.
+
+Every API request should include or infer:
+- selectedWorkspaceId
+
+Frontend must never fetch unscoped lists.
+
+Backend must enforce workspace filtering.
+
+Important:
+Do not rely only on frontend filtering.
+Backend must reject or filter data outside the user’s assigned workspaces.
+
+====================================================
+3. FILTER ALL DROPDOWNS BY WORKSPACE
+====================================================
+
+Fix all dropdowns to only show records where:
+record.workspaceId === selectedWorkspaceId
+
+This applies to:
+- Affiliate Network dropdowns
+- Traffic Source dropdowns
+- Campaign dropdowns
+- Batch dropdowns
+- Employee assignment dropdowns
+- Traffic Plan dropdowns
+- Report filters
+
+Specifically fix:
+New Testing Batch modal:
+- Affiliate Network dropdown must only show affiliate networks synced from selected workspace
+- Traffic Source dropdown must only show traffic sources synced from selected workspace
+
+====================================================
+4. BACKEND API REQUIREMENTS
+====================================================
+
+All endpoints that return workspace-related data must require workspace scoping.
+
+Examples:
+GET /api/traffic-sources?workspaceId=...
+GET /api/affiliate-networks?workspaceId=...
+GET /api/campaigns?workspaceId=...
+GET /api/batches?workspaceId=...
+GET /api/tasks?workspaceId=...
+GET /api/reports?workspaceId=...
+
+Backend should:
+1. verify user has access to workspaceId
+2. filter query by workspaceId
+3. return only matching records
+
+If user has no access:
+return 403
+
+====================================================
+5. DATABASE SCOPING
+====================================================
+
+Ensure these tables have workspaceId:
+- traffic_sources
+- affiliate_networks
+- campaigns
+- batches
+- tasks
+- reports
+- goals
+- scores
+- traffic_plans
+- winners
+- imported_offers
+
+Ensure queries use workspaceId.
+
+====================================================
+6. WORKSPACE SWITCHER
+====================================================
+
+User should only see workspaces they are assigned to.
+
+When switching workspace:
+- refresh all page data
+- update all dropdowns
+- update all filters
+- clear selected entities from previous workspace
+- prevent stale cross-workspace selections
+
+====================================================
+7. IMPORTANT SECURITY RULE
+====================================================
+
+Workspace filtering is not just UX.
+It is a permission boundary.
+
+Employees must not be able to access data from workspaces they are not assigned to, even by direct API calls.
+
+====================================================
+8. ACCEPTANCE TEST
+====================================================
+
+Create test data:
+
+Workspace A: TrexonDigital
+Traffic source: PropellerAds Trexon
+Affiliate network: Yieldkit Trexon
+
+Workspace B: Joffeca
+Traffic source: PropellerAds Joffeca
+Affiliate network: Yieldkit Joffeca
+
+Expected:
+If user selected TrexonDigital:
+- New Batch modal shows only PropellerAds Trexon and Yieldkit Trexon
+
+If user selected Joffeca:
+- New Batch modal shows only PropellerAds Joffeca and Yieldkit Joffeca
+
+If user is not assigned to Joffeca:
+- Joffeca should not appear in the workspace switcher
+- user cannot access Joffeca data through API

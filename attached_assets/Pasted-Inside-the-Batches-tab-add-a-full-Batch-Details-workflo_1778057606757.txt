@@ -1,0 +1,173 @@
+Inside the Batches tab, add a full Batch Details workflow.
+
+When clicking a batch, open a Batch Details page/modal.
+
+1. Batch setup
+For each batch, allow setup/editing of:
+- targetClicks
+- dailyBudget
+- plannedRunTimeHours or plannedRunTimeDays
+- testStartDate
+- testEndDate
+- notes
+
+Everything else should be pulled automatically from Voluum when available:
+- Voluum campaign ID/name
+- traffic source
+- affiliate network
+- GEO
+- clicks
+- conversions
+- cost
+- revenue
+- profit
+- ROI
+- offer IDs / offer click IDs
+- campaign performance data
+
+2. Winner discovery inside the batch
+Add a “Find Winners” section inside Batch Details.
+
+The system should allow filtering offers by:
+- ROI > 0
+- profit > 0
+- conversions > 0
+- clicks minimum
+- cost minimum
+- traffic source
+- campaign
+- date range
+
+Default winner rule:
+ROI > 0
+
+Show a table of offers with:
+- offerId
+- offerClickId
+- offerName if available
+- affiliateNetwork
+- GEO
+- trafficSource
+- Voluum campaign
+- clicks
+- conversions
+- cost
+- revenue
+- profit
+- ROI
+- CPA
+- CVR
+- status: Winner / Loser / Neutral / Needs Review
+
+3. Mark winners
+Add actions:
+- Mark as Winner
+- Mark as Loser
+- Needs Review
+- Select all ROI-positive offers as winners
+
+When offers are marked as winners, save them to a batch_winners table.
+
+Winner record should include:
+- batchId
+- employeeId
+- voluumCampaignId
+- trafficSource
+- offerId
+- offerClickId
+- offerName
+- affiliateNetwork
+- GEO
+- clicks
+- conversions
+- cost
+- revenue
+- profit
+- ROI
+- CPA
+- CVR
+- detectedAt
+- markedBy
+- winnerStatus
+
+4. Create scale task from winners
+Add a button:
+“Create Scale Task from Winners”
+
+When clicked:
+- collect all selected/marked winner offers
+- create a task assigned to the relevant employee
+- task title:
+  “Move winners from {batchName} to Scale Campaign”
+- task type:
+  SCALE_WINNERS
+- attach the selected winner IDs to the task
+- task status:
+  TODO
+
+The task should appear in the employee’s Tasks tab.
+
+5. Winner export file
+For every scale task, generate a downloadable file containing all selected winners with all available Voluum data.
+
+Add button:
+“Download Winners CSV”
+
+CSV columns:
+- batchName
+- affiliateNetwork
+- GEO
+- trafficSource
+- voluumCampaignName
+- voluumCampaignId
+- offerId
+- offerClickId
+- offerName
+- clicks
+- conversions
+- cost
+- revenue
+- profit
+- ROI
+- CPA
+- CVR
+- dateRange
+- detectedAt
+- markedBy
+- notes
+
+The employee should be able to download this file from:
+- Batch Details
+- The Scale Task page
+- Tasks tab
+
+6. Batch winner summary
+Inside Batch Details show cards:
+- Total offers in batch
+- Total clicks
+- Total spend
+- Total revenue
+- Profit
+- ROI
+- Winners found
+- Losers found
+- Winners moved to scale
+- Pending scale tasks
+
+7. Important UX behavior
+The page should be action-driven:
+- If batch has no setup yet, show “Complete Batch Setup”
+- If batch is running, show progress toward clicks / budget / time target
+- If batch reached target clicks, show “Ready for Optimization”
+- If winners exist but no scale task was created, show “Create Scale Task”
+- If scale task exists, show status and download CSV button
+
+8. Permissions
+Employees can:
+- view their own batches
+- setup their own batch targets
+- mark winners/losers
+- create scale tasks for their own batches
+- download their own winner CSV
+
+Admins can view and manage everything.

@@ -1,0 +1,1 @@
+export default function WeeklyReports() { return <div>Weekly Reports Placeholder</div>; }

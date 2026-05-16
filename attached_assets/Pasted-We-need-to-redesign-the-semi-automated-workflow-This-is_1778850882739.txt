@@ -1,0 +1,243 @@
+We need to redesign the semi-automated workflow.
+
+This is the correct CampaignOps manual-first process.
+
+Important:
+Voluum is still NOT integrated by API.
+The worker does actions manually in Voluum and Traffic Sources, then records IDs in CampaignOps.
+
+Core rules:
+1. Each worker has assigned Affiliate Networks.
+2. All workers can access all Traffic Sources.
+3. Batches are created manually after the worker uploads offers to Voluum.
+4. CampaignOps manages tasks, status flow, campaign records, live campaigns, and next traffic source testing cycle.
+
+Data model updates:
+
+User / Worker:
+- Add relation to assigned Affiliate Networks.
+- Admin can define which Affiliate Networks each worker is allowed to work with.
+
+Traffic Sources:
+- All workers can use all Traffic Sources.
+- Do not restrict traffic sources by worker.
+
+Batch creation form:
+Fields:
+- Batch Name
+  - This is the Voluum offer tag name.
+- Affiliate Network
+  - Worker can only choose from assigned Affiliate Networks.
+  - Admin can choose all.
+- GEO
+- Number of Offers
+- Creation Date
+- Assigned Worker
+- Notes optional
+
+Remove from Batch creation:
+- Traffic Source
+- Target Clicks
+- Test Duration if currently shown as required
+- Batch Number if not needed
+
+After Batch is created:
+Create exactly 2 tasks:
+
+1. create_voluum_campaign_ios
+Title:
+Create Voluum campaign for [Batch Name] iOS
+
+2. create_voluum_campaign_android
+Title:
+Create Voluum campaign for [Batch Name] Android
+
+To complete each “Create Voluum campaign” task, worker must enter:
+- selected Traffic Source
+- Voluum Campaign ID
+- optional Voluum Campaign Name
+- optional notes
+
+When each task is completed:
+- create a Campaign record
+- connect Campaign to Batch
+- save:
+  - platform: ios/android
+  - trafficSourceId
+  - voluumCampaignId
+  - status: voluum_created
+- mark task as done
+
+After each Voluum campaign creation task is completed:
+Create the next task for that same campaign:
+
+For iOS:
+Take Voluum campaign [Batch Name] iOS [Voluum Campaign ID] live on [Traffic Source]
+
+For Android:
+Take Voluum campaign [Batch Name] Android [Voluum Campaign ID] live on [Traffic Source]
+
+Task type:
+take_campaign_live
+
+To complete each “Take campaign live” task, worker must enter:
+- Traffic Source Campaign ID
+- optional Traffic Source Campaign URL
+- optional notes
+
+When completed:
+- save Traffic Source Campaign ID on the related Campaign
+- save campaign URL if provided
+- update Campaign status to live
+- set liveStartedAt = now()
+- mark task as done
+
+Live Campaigns tab/page:
+Add a Live Campaigns page or tab.
+
+Show only Campaign records with status = live.
+
+Columns/cards should show:
+- Batch Name
+- Platform
+- Affiliate Network
+- GEO
+- Worker
+- Traffic Source
+- Voluum Campaign ID
+- Traffic Source Campaign ID
+- Live Started At
+- Days Live
+- Status
+- Quick link to Batch/Campaign detail
+
+Add filters:
+- Worker
+- Affiliate Network
+- GEO
+- Traffic Source
+- Platform
+- Date range
+- Days live
+- Status
+
+Seven-day follow-up automation:
+For each Campaign that becomes live:
+On the morning of the 7th working day after liveStartedAt, create a task:
+
+Title:
+Find winners on [Batch Name] [Platform] [Voluum Campaign ID] live on [Traffic Source] [Traffic Source Campaign ID]
+
+Task type:
+find_winners
+
+Assigned to:
+same worker as the Campaign/Batch
+
+Important:
+This is per campaign, so iOS and Android each get their own Find Winners task.
+
+For now:
+If working-day calculation is complex, implement a simple daily scheduler/helper that creates the task when:
+liveStartedAt is at least 7 days ago
+and no find_winners task already exists for that campaign.
+But leave a TODO/comment that this should become business-days later.
+
+To complete “Find Winners” task, worker must enter:
+- winnersCount
+- revenue optional
+- cost optional
+- clicks optional
+- conversions optional
+- ROI should be calculated if cost and revenue exist
+- notes optional
+
+When completed:
+- save performance result on Campaign
+- update Campaign status to tested
+- mark task done
+
+Next Traffic Source cycle:
+After a Find Winners task is completed:
+Create a new “Create Voluum campaign” task for the NEXT untested Traffic Source for the same Batch and same Platform.
+
+Example:
+If iOS was tested on Propeller and the traffic source list is:
+1. Propeller
+2. Clickadu
+3. Facebook
+
+Then after Find Winners is done for iOS on Propeller:
+Create task:
+Create Voluum campaign for [Batch Name] iOS on Clickadu
+
+Then the same flow repeats:
+Create Voluum campaign → Take campaign live → Find winners → next traffic source.
+
+This repeats until there are no untested Traffic Sources left for that Batch + Platform.
+
+When no Traffic Sources remain:
+- Create task or update status:
+  “All traffic sources tested for [Batch Name] [Platform]”
+- Mark that platform flow as completed.
+
+Important anti-duplication rules:
+- Do not create duplicate campaigns for same Batch + Platform + Traffic Source.
+- Do not create duplicate take-live tasks for same Campaign.
+- Do not create duplicate find-winners tasks for same Campaign.
+- Do not create next traffic source task if that Batch + Platform + Traffic Source already has a Campaign or task.
+- iOS and Android flows are independent.
+
+Statuses:
+Campaign statuses should include:
+- voluum_created
+- live
+- tested
+- closed
+
+Task types should include:
+- create_voluum_campaign_ios
+- create_voluum_campaign_android
+- take_campaign_live
+- find_winners
+- all_traffic_sources_tested
+
+Batch status should be derived from child campaigns/tasks where possible:
+- new
+- in_progress
+- live
+- testing
+- completed
+- closed
+
+Admin settings:
+Admin must define ordered Traffic Sources list.
+This order controls the next traffic source cycle.
+
+Admin can edit:
+- Traffic Source order
+- Worker assigned Affiliate Networks
+- Affiliate Networks
+- GEOs
+- Workers
+
+Acceptance criteria:
+1. Worker can only choose Affiliate Networks assigned to them.
+2. All workers can choose all Traffic Sources.
+3. Batch creation does not require Traffic Source.
+4. Creating Batch creates exactly two tasks:
+   - Create Voluum campaign for [Batch Name] iOS
+   - Create Voluum campaign for [Batch Name] Android
+5. Completing create_voluum_campaign task requires selected Traffic Source + Voluum Campaign ID.
+6. Completing it creates a Campaign record connected to the Batch.
+7. Completing it creates the relevant Take Campaign Live task.
+8. Completing Take Campaign Live requires Traffic Source Campaign ID.
+9. Completing it marks Campaign as live and adds it to Live Campaigns tab.
+10. Live Campaigns tab has filters.
+11. After 7 days from liveStartedAt, Find Winners task is created per live campaign.
+12. Completing Find Winners stores results and marks campaign tested.
+13. Completing Find Winners creates the next Create Voluum campaign task for the next untested Traffic Source.
+14. The cycle repeats until all Traffic Sources are tested.
+15. No duplicate tasks or campaigns are created.
+16. No Voluum API integration is added.
+17. Everything remains manual-first.

@@ -1,0 +1,117 @@
+Now I want to build the practical Batch automation flow.
+
+Tag structure:
+[affiliateNetworkInitials]_[geoInitials]_batch[number]
+
+Example:
+sl_de_batch1
+
+Important:
+Tags in Voluum are lowercase only, so the system must normalize and validate tags in lowercase.
+
+Requirements:
+
+1. Batch creation from tagged offers
+When offers are synced from Voluum, if they have a valid tag in this structure:
+network_geo_batchNumber
+
+Example:
+sl_de_batch1
+
+Then all offers with this exact tag should automatically be grouped into one Batch.
+
+The Batch title should be created from the tag:
+SL / DE / Batch 1
+
+2. Batch tab
+In the Batch tab, I want to see one unified Batch card/row for this tag, not separate offers.
+
+Inside the Batch I should be able to see:
+- Affiliate Network
+- GEO
+- Batch number
+- Number of offers inside the batch
+- Offer list
+- Current status
+- Related Voluum campaign, if exists
+- Created date
+- Last sync date
+
+3. Auto-create task
+Once a new Batch is created, the system should automatically create a task:
+
+Task title:
+Add batch to live campaign for first test
+
+Task should be connected to that specific Batch.
+
+Task status should start as:
+TODO
+
+4. Detect when batch enters a Voluum campaign
+During every Voluum sync, the system should check if offers from this Batch tag are already assigned to / used inside a Voluum campaign.
+
+If the system detects that the Batch offers are now inside a Voluum campaign, then:
+
+- Mark the task as completed automatically
+- Save the related Voluum campaign ID/name on the Batch
+- Change the Batch status to something like:
+IN_FIRST_TEST
+or
+LIVE_TESTING
+
+5. Visual indicators
+Once detected inside a Voluum campaign, the UI should show:
+
+On the Batch:
+- status badge: LIVE TESTING / IN FIRST TEST
+- related campaign name
+- synced from Voluum indicator
+
+On the Task:
+- completed status
+- completed automatically by Voluum sync
+- completed date
+
+On the Tag:
+- tag status should change from:
+READY_FOR_TEST
+to:
+IN_CAMPAIGN
+or
+LIVE_TESTING
+
+6. Prevent duplicate tasks
+If the same Batch already exists, do not create another Batch.
+If the task already exists for that Batch, do not create a duplicate task.
+
+Use idempotent logic:
+same workspace + same tag = same Batch.
+
+7. Workspace isolation
+This must only happen inside the current workspace.
+Never mix batches, offers, campaigns, or tasks between workspaces.
+
+8. Suggested lifecycle statuses
+
+Batch statuses:
+- NEW
+- READY_FOR_TEST
+- LIVE_TESTING
+- TESTED
+- ARCHIVED
+
+Task statuses:
+- TODO
+- IN_PROGRESS
+- COMPLETED
+- AUTO_COMPLETED
+
+Tag statuses:
+- READY_FOR_TEST
+- IN_CAMPAIGN
+- TESTED
+- ARCHIVED
+
+Goal:
+When I upload/sync offers with a valid tag, OfferOps should automatically create a clean Batch, create the first testing task, and later detect from Voluum when the Batch entered a campaign and update everything automatically.

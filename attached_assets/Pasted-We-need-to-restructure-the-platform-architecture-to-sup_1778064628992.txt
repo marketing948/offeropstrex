@@ -1,0 +1,239 @@
+We need to restructure the platform architecture to support multi-workspace synchronization with Voluum and move the Goals system into the correct locations.
+
+====================================================
+1. MOVE GOAL ENGINE TO SETTINGS
+====================================================
+
+The current “Goals” admin configuration system should be moved into Settings.
+
+Create:
+Settings → Goal Engine
+
+This section should contain all admin-only configuration for:
+- point system
+- combo bonuses
+- ranks
+- KPI goals
+- penalties
+- rewards
+- achievement rules
+- visibility settings
+- scoring configuration
+- bonus payout configuration
+
+Important:
+This is the backend configuration engine.
+Only admins can access it.
+
+Rename internally:
+Goal Engine
+
+====================================================
+2. USER GOALS SHOULD MOVE INTO USER PROFILE
+====================================================
+
+The employee-facing Goals page should no longer be a main navigation tab.
+
+Instead:
+Move it under the User Profile section.
+
+Structure:
+User Profile → My Goals
+
+Employee view should include:
+- current score
+- current rank
+- progress to next rank
+- KPI progress bars
+- combo bonuses earned
+- achievements
+- leaderboard position
+- monthly history
+- recent activity
+
+Employees should ONLY see:
+- their own progress
+- their own achievements
+- their own stats
+
+No payout amounts visible.
+
+====================================================
+3. ADD WORKSPACE SUPPORT
+====================================================
+
+We need full Workspace support aligned with Voluum workspaces.
+
+Core concept:
+OfferOps workspaces should map directly to Voluum workspaces.
+
+Each workspace should have:
+- separate employees
+- separate traffic sources
+- separate affiliate networks
+- separate batches
+- separate campaigns
+- separate reports
+- separate goals/scoring
+- separate automation settings
+- separate Voluum API credentials if needed
+
+====================================================
+4. WORKSPACE MODEL
+====================================================
+
+Create Workspace entity.
+
+Fields:
+- workspaceId
+- workspaceName
+- description
+- activeStatus
+- voluumWorkspaceId
+- voluumWorkspaceName
+- voluumApiBaseUrl
+- createdAt
+- updatedAt
+
+Users belong to one or multiple workspaces.
+
+Roles:
+- super_admin
+- workspace_admin
+- employee
+
+====================================================
+5. WORKSPACE SWITCHER
+====================================================
+
+Add Workspace Switcher in the top navigation.
+
+Behavior:
+- user selects workspace
+- all app data changes context
+- only data from selected workspace is visible
+
+Everything should become workspace-scoped.
+
+====================================================
+6. VOLUUM WORKSPACE SYNC
+====================================================
+
+Important requirement:
+
+Traffic Sources and Affiliate Networks inside OfferOps must always match the names used inside the corresponding Voluum workspace.
+
+Do NOT allow separate naming systems.
+
+The system should sync:
+- traffic sources
+- affiliate networks
+- campaigns
+- workspace metadata
+
+directly from Voluum.
+
+====================================================
+7. TRAFFIC SOURCE SYNC RULES
+====================================================
+
+Traffic Sources should:
+- sync automatically from Voluum workspace
+- keep identical naming
+- keep identical IDs if available
+- update automatically if changed in Voluum
+
+Fields:
+- trafficSourceId
+- voluumTrafficSourceId
+- trafficSourceName
+- workspaceId
+- activeStatus
+- syncedAt
+
+No manual naming mismatch allowed.
+
+====================================================
+8. AFFILIATE NETWORK SYNC RULES
+====================================================
+
+Affiliate Networks should:
+- sync automatically from Voluum workspace
+- use exact same naming
+- update automatically if changed in Voluum
+
+Fields:
+- affiliateNetworkId
+- voluumAffiliateNetworkId
+- affiliateNetworkName
+- workspaceId
+- activeStatus
+- syncedAt
+
+====================================================
+9. WORKSPACE-SCOPED DATA
+====================================================
+
+All major entities must become workspace-scoped:
+- batches
+- campaigns
+- live campaigns
+- tasks
+- reports
+- traffic plans
+- goals
+- scores
+- combo bonuses
+- settings
+- employees
+- traffic sources
+- affiliate networks
+
+Every entity should include:
+- workspaceId
+
+====================================================
+10. SETTINGS → WORKSPACE MANAGEMENT
+====================================================
+
+Add:
+Settings → Workspace Management
+
+Admins can:
+- create workspace
+- connect Voluum workspace
+- configure API credentials
+- sync metadata
+- manage workspace users
+- configure workspace settings
+
+====================================================
+11. AUTO-SYNC JOBS
+====================================================
+
+Add automatic synchronization jobs:
+- sync traffic sources
+- sync affiliate networks
+- sync campaigns
+- sync workspace metadata
+
+Admin configurable:
+- sync frequency
+- manual sync button
+- sync logs
+
+====================================================
+12. IMPORTANT PRODUCT PRINCIPLE
+====================================================
+
+OfferOps should behave as a layer on top of Voluum workspaces.
+
+The system should not create separate naming structures.
+
+Everything operational:
+- traffic sources
+- affiliate networks
+- campaigns
+- workspace organization
+
+must stay aligned with the corresponding Voluum workspace.

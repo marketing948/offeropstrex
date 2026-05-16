@@ -1,0 +1,1 @@
+export default function DailyReports() { return <div>Daily Reports Placeholder</div>; }

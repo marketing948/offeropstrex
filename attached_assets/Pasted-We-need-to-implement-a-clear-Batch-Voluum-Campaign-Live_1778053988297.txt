@@ -1,0 +1,175 @@
+We need to implement a clear Batch → Voluum Campaign → Live Campaign → Optimization → Next Traffic Source workflow.
+
+Core idea:
+When an employee uploads a new batch of offers, the system should immediately create a Batch record with an automatic readable name.
+
+Batch naming template:
+{affiliateNetwork} - {GEO} - {date} [{offerCount} Offers]
+
+Example:
+MaxBounty - DE - 05/05/26 [250 Offers]
+
+Batch fields:
+- batchId
+- batchName
+- affiliateNetwork
+- GEO / country
+- uploadDate
+- offerCount
+- uploadedByEmployee
+- currentStatus
+- testedTrafficSources[]
+- pendingTrafficSources[]
+- assignedVoluumCampaigns[]
+- totalClicks
+- targetClicks
+- createdAt
+
+Default status:
+NEW_BATCH
+
+The batch should appear immediately in the “Batches” tab.
+
+Batches tab requirements:
+Show every batch with:
+- Batch name
+- Affiliate network
+- GEO
+- Offer count
+- Uploaded by
+- Upload date
+- Current status
+- Tested traffic sources
+- Current / assigned traffic source
+- Click progress toward target
+- Whether it completed the required test click threshold
+
+Add clear status badges:
+- New Batch
+- Assigned to Campaign
+- Live
+- Testing
+- Ready for Optimization
+- Optimized
+- Retest Pending
+- Completed
+
+Workflow:
+
+1. Employee uploads a batch of offers.
+The system creates:
+MaxBounty - DE - 05/05/26 [250 Offers]
+and displays it in Batches.
+
+2. Employee creates a Voluum campaign for this batch.
+The campaign should include/select:
+- Batch
+- Voluum campaign ID/name
+- Traffic source for this test
+- Target clicks
+
+The batch becomes assigned to that Voluum campaign.
+
+3. Once assigned, it should appear in a new tab:
+“Live Campaigns”
+
+Live Campaigns tab requirements:
+Show:
+- Batch name
+- Voluum campaign name
+- Traffic source
+- Employee
+- Status
+- Start date/time
+- Current clicks
+- Target clicks
+- Progress %
+- Conversions
+- Cost
+- Revenue
+- Profit
+- ROI
+- Action required
+
+Important:
+The employee must manually mark the campaign as LIVE in the app.
+When she clicks “Mark as Live”:
+- liveStartedAt is set
+- status becomes LIVE / TESTING
+- click tracking starts from Voluum sync data
+
+4. Test completion condition:
+When the Voluum campaign reaches the required click threshold, usually 25k–30k clicks, the system should automatically:
+- update campaign status to READY_FOR_OPTIMIZATION
+- create a task for the assigned employee:
+  “Optimize campaign: find winners and losers”
+- move the campaign to Optimization Queue
+- show an in-app notification
+
+Important:
+Click threshold should be configurable per batch or per campaign.
+Default target clicks: 25,000
+Optional upper range: 30,000
+
+5. Optimization flow:
+Employee opens the optimization task and marks:
+- winners
+- losers
+- paused / killed offers
+- offers moved to main campaign
+- notes
+
+When optimization is submitted:
+- traffic source is added to batch.testedTrafficSources[]
+- current campaign status becomes OPTIMIZED
+- batch stores optimization summary:
+  winnersCount
+  losersCount
+  movedToMainCount
+  optimizationCompletedAt
+
+6. Automatic next traffic source task:
+After optimization is complete, the system should automatically create the next task:
+“Create new Voluum campaign for {batchName} on next traffic source: {nextTrafficSource}”
+
+The next traffic source should be selected from a predefined traffic source rotation list.
+
+Example:
+Traffic source rotation:
+1. Yossi
+2. Shimon
+3. Moshe
+4. Avi
+
+If the batch already tested on Yossi, next task should be:
+Create campaign on Shimon.
+
+7. When the employee creates/assigns the next Voluum campaign:
+- the same batch is assigned to the new Voluum campaign
+- the new campaign appears in Live Campaigns
+- employee manually marks it LIVE
+- test runs again
+- once target clicks are reached, it goes to optimization again
+
+This creates a continuous routine:
+New Batch
+→ Assign to Voluum Campaign + Traffic Source
+→ Mark Live
+→ Reach click threshold
+→ Optimization task
+→ Mark winners/losers
+→ Auto-create next traffic source task
+→ New Live Campaign
+→ Repeat
+
+Important product principle:
+The app should be action-driven.
+Employees should always see:
+- what batch needs action
+- what campaign is live
+- what campaign is ready for optimization
+- what traffic source is next
+- what is overdue
+
+Do not make this only a reporting dashboard.
+It should operate like a workflow system for media buying operations.

@@ -1,0 +1,236 @@
+Build a web app called OfferOps.
+
+This is an internal management system for an affiliate media buying team.
+
+The app should help an admin track employees, daily reports, weekly reports, testing batches, campaign statuses, goals, and automated next-step tasks.
+
+Tech stack:
+- Use React for frontend
+- Use Node.js / Express for backend
+- Use PostgreSQL or Replit database
+- Use simple clean professional UI
+- Make it responsive
+- Build authentication with roles: admin and employee
+
+Core roles:
+
+1. Admin
+The admin can:
+- See all employees
+- Create and edit employees
+- Set weekly and monthly goals per employee
+- View daily reports
+- View weekly reports
+- View all testing batches
+- View dashboards and KPIs
+- See auto-generated tasks
+- Update campaign and batch statuses
+- Prepare future Voluum API integration
+
+2. Employee
+The employee can:
+- Log in
+- See only their own dashboard
+- Submit daily reports
+- Create testing batches
+- Add offers to a batch
+- Update task status
+- See their weekly and monthly goals
+- See progress toward goals
+- See their assigned To-Do tasks
+
+Main entities:
+
+Employee:
+- id
+- name
+- email
+- role
+- status
+- created_at
+
+Goal:
+- id
+- employee_id
+- period_type: weekly or monthly
+- period_start
+- period_end
+- target_offers_uploaded
+- target_batches_created
+- target_batches_tested
+- target_campaigns_moved_to_main
+- target_geos_tested
+- target_traffic_sources_tested
+- target_profit_optional
+- notes
+
+DailyReport:
+- id
+- employee_id
+- report_date
+- offers_uploaded
+- batches_created
+- batches_tested
+- campaigns_moved_to_main
+- campaigns_closed
+- notes
+- created_at
+
+TestingBatch:
+- id
+- employee_id
+- batch_name
+- affiliate_network
+- geo
+- traffic_source
+- vertical
+- number_of_offers
+- tracker_campaign_id
+- status: draft, ready, testing, tested, moved_to_next_source, main_campaign, closed
+- test_start_date
+- test_end_date
+- test_budget
+- notes
+- created_at
+
+Offer:
+- id
+- batch_id
+- offer_id
+- offer_name
+- affiliate_network
+- geo
+- vertical
+- status: uploaded, testing, rejected, winner, moved_to_main, closed
+- notes
+
+Performance:
+- id
+- batch_id
+- date
+- spend
+- clicks
+- conversions
+- revenue
+- profit
+- roi
+- cpa
+- epc
+- cvr
+
+TodoTask:
+- id
+- employee_id
+- related_batch_id
+- title
+- description
+- task_type: create_next_test_batch, review_test_result, move_to_main, close_campaign, admin_review
+- priority: low, medium, high
+- status: open, in_progress, completed, cancelled
+- due_date
+- created_at
+
+TrafficSourcePlan:
+- id
+- affiliate_network
+- geo
+- traffic_source
+- test_order
+- is_active
+
+Important automation logic:
+
+When a TestingBatch status changes to "tested":
+1. Check the TrafficSourcePlan table for the same affiliate_network and geo.
+2. Find the next traffic source by test_order that has not yet been tested.
+3. If a next traffic source exists, automatically create a TodoTask for the same employee:
+   Title: "Create next test batch"
+   Description: "Create a new test batch for [affiliate_network] - [geo] using traffic source [next_traffic_source]. This is based on tested batch [batch_name]."
+   task_type: create_next_test_batch
+   status: open
+   priority: high
+4. If no next traffic source exists, create an admin review task:
+   Title: "Testing cycle completed"
+   Description: "All planned traffic sources were tested for [affiliate_network] - [geo]. Admin should review results."
+   task_type: admin_review
+   status: open
+   priority: medium
+
+Dashboard requirements:
+
+Admin Dashboard:
+- Total offers uploaded today
+- Total offers uploaded this week
+- Total batches created this week
+- Total batches tested this week
+- Campaigns moved to main
+- Campaigns closed
+- Employee leaderboard
+- Goal progress per employee
+- Open tasks by employee
+- Testing batches by status
+- Performance summary: spend, revenue, profit, ROI
+- Filters by employee, date, geo, affiliate network, traffic source
+
+Employee Dashboard:
+- My weekly goals
+- My monthly goals
+- My progress bars
+- My open tasks
+- My recent batches
+- My daily report form
+- My performance summary
+
+Daily Report page:
+Employees should be able to submit a daily report with:
+- date
+- offers uploaded
+- batches created
+- batches tested
+- campaigns moved to main
+- campaigns closed
+- notes
+
+Weekly Report page:
+The app should automatically aggregate daily reports into weekly reports.
+
+Goals page:
+Admin can create weekly and monthly goals for each employee.
+Employees can see their progress but cannot edit goals.
+
+Testing Batch page:
+Employees can create batches.
+Admin can view and edit all batches.
+When status is changed to tested, trigger the automatic next traffic source To-Do logic.
+
+Future Voluum Integration:
+Create a settings page for Voluum API credentials:
+- access_id
+- access_key
+- api_base_url
+Do not implement real API calls yet.
+Create placeholder service functions:
+- syncVoluumCampaignData()
+- getVoluumCampaignPerformance(campaignId)
+- updateBatchPerformanceFromVoluum(batchId)
+
+UI style:
+- Clean SaaS dashboard
+- Professional CEO-level look
+- Cards, tables, filters, progress bars
+- Use modern styling
+- Use clear statuses with badges
+- Avoid clutter
+
+Seed data:
+Create demo data with:
+- 3 employees
+- 5 traffic sources
+- 3 GEOs
+- 3 affiliate networks
+- weekly goals
+- monthly goals
+- several testing batches
+- several open todo tasks
+
+Build the app step by step and make sure it runs.

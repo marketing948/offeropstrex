@@ -1,0 +1,44 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "Nrky-tW_InkW6xiFQMeW9"
+uri = "file://offerops-source.tar.gz"
+type = "unspecified"
+title = "OfferOps Source Code"
+
+[[outputs]]
+id = "B-C4vBEu5WG4jwCnnc_zz"
+uri = "file://dist/offerops.tar.gz"
+type = "unspecified"
+title = "OfferOps source (tar.gz)"
+
+[[outputs]]
+id = "4fdIlSaBquYOEXB2SrA8l"
+uri = "file://exports/offerops.tar.gz"
+type = "unspecified"
+title = "OfferOps source (tar.gz)"
+
+[[outputs]]
+id = "jTfvLHT3md1XEelxeWb5r"
+uri = "file://exports/automation-bible-gap-report.md"
+type = "text"
+title = "OfferOps — Automation Bible Gap Report & Migration Plan"
+
+[[outputs]]
+id = "eBcmWMscL0r20lSGomiJE"
+uri = "file://exports/offerops-source.tar.gz"
+type = "unspecified"
+title = "OfferOps source (tar.gz, 18 MB)"
+
+[[outputs]]
+id = "PYfByaBEOvXtQJTothg1W"
+uri = "file://dist/offerops-source.tar.gz"
+type = "unspecified"
+title = "OfferOps source code (845 KB tar.gz)"
+
+[[outputs]]
+id = "fe5c-80eNNzfIVI-M8l-K"
+uri = "file://dist/offerops-full.tar.gz"
+type = "unspecified"
+title = "OfferOps full project (279 MB tar.gz — everything except node_modules and .git)"

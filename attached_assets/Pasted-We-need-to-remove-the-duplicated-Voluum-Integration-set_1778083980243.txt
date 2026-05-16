@@ -1,0 +1,117 @@
+We need to remove the duplicated Voluum Integration settings screen.
+
+Current problem:
+There are two places dealing with Voluum:
+1. Settings → Voluum Integration
+2. Settings → Workspace
+
+This creates confusion and duplicate logic.
+
+New required structure:
+Remove the separate “Voluum Integration” tab completely.
+
+Keep only:
+Settings → Workspace
+
+====================================================
+WORKSPACE-BASED VOLUUM INTEGRATION
+====================================================
+
+Each workspace should have its own Voluum connection and sync configuration.
+
+Inside each workspace card/settings, allow:
+- configure Voluum Access ID
+- configure Voluum Access Key
+- set API Base URL if needed
+- connect/test connection
+- select or enter Voluum Workspace ID
+- sync workspace data
+- view sync logs
+
+====================================================
+SYNC PER WORKSPACE ONLY
+====================================================
+
+For each connected workspace, sync only the data relevant to that Voluum workspace:
+
+- traffic sources
+- affiliate networks
+- offers
+- campaigns
+- performance data
+
+No global Voluum sync.
+
+No shared traffic sources or affiliate networks across workspaces.
+
+====================================================
+DATA RULE
+====================================================
+
+Every synced record must belong to exactly one workspace.
+
+Required fields:
+- workspaceId
+- voluumWorkspaceId
+
+Applies to:
+- traffic_sources
+- affiliate_networks
+- offers
+- campaigns
+- batches
+- live_campaigns
+- tasks
+- reports
+- winners
+- goals
+- traffic_plans
+
+====================================================
+UI CHANGES
+====================================================
+
+Settings should have only:
+- Workspace
+- Goal Engine
+
+Remove:
+- Voluum Integration tab
+
+In Settings → Workspace, each workspace card should show:
+- workspace name
+- Voluum connection status
+- Voluum workspace ID/name
+- last sync time
+- traffic sources count
+- affiliate networks count
+- offers count
+- campaigns count
+- sync status
+
+Actions per workspace:
+- Configure Voluum
+- Test Connection
+- Sync Now
+- View Sync Logs
+- Disconnect
+
+====================================================
+IMPORTANT PRODUCT PRINCIPLE
+====================================================
+
+Voluum integration is not global.
+
+Voluum integration belongs to each workspace.
+
+Each workspace should import and display only:
+- its own traffic sources
+- its own affiliate networks
+- its own offers
+- its own campaigns
+- its own performance data
+
+This prevents data mixing between workspaces like:
+TrexonDigital
+Joffeca
+or any other Voluum workspace.

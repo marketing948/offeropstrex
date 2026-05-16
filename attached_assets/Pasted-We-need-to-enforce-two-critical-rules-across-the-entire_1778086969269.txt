@@ -1,0 +1,153 @@
+We need to enforce two critical rules across the entire Voluum sync and workspace architecture.
+
+====================================================
+1. DO NOT IMPORT OFFERS/CAMPAIGNS WITHOUT TAGS
+====================================================
+
+Important rule:
+Any Voluum offer or campaign that does NOT have a recognized tag should NOT be imported into OfferOps.
+
+Reason:
+OfferOps uses tags to group Voluum data into operational batches.
+
+Required behavior:
+- If Voluum offer has no tag → skip import
+- If Voluum campaign has no recognized tag → skip import or place in ignored sync log only
+- Do not create batches from untagged data
+- Do not show untagged Voluum data in normal operational tabs
+
+Add sync log:
+- skippedUntaggedOffers count
+- skippedUntaggedCampaigns count
+- importedTaggedOffers count
+- importedTaggedCampaigns count
+
+Only tagged Voluum data should enter OfferOps workflow.
+
+====================================================
+2. STRICT WORKSPACE-SCOPED SYNC
+====================================================
+
+Critical:
+Voluum sync must ONLY pull data from the specific Voluum Workspace ID configured for that OfferOps workspace.
+
+Example:
+OfferOps Workspace: TrexonDigital
+Configured Voluum Workspace ID: TREXON_WORKSPACE_ID
+
+Then sync must only import:
+- TrexonDigital offers
+- TrexonDigital campaigns
+- TrexonDigital traffic sources
+- TrexonDigital affiliate networks
+- TrexonDigital metrics
+
+It must NOT import:
+- Joffeca data
+- any other Voluum workspace data
+- global account data outside the selected workspace
+
+If later I add:
+OfferOps Workspace: Joffeca
+Configured Voluum Workspace ID: JOFFECA_WORKSPACE_ID
+
+Then Joffeca data must sync only into Joffeca workspace.
+
+No cross-workspace mixing is allowed.
+
+====================================================
+3. WORKSPACE SYNC ISOLATION
+====================================================
+
+Each OfferOps workspace has its own:
+- voluumWorkspaceId
+- sync configuration
+- traffic sources
+- affiliate networks
+- offers
+- campaigns
+- metrics
+- batches
+- tasks
+- reports
+
+Every synced record must include:
+- offerOpsWorkspaceId
+- voluumWorkspaceId
+
+Every API query must filter by:
+- selected offerOpsWorkspaceId
+- configured voluumWorkspaceId
+
+====================================================
+4. ADMIN AND USER WORKSPACE ACCESS
+====================================================
+
+Admins:
+- can access all OfferOps workspaces
+- can switch between workspaces
+- can view/manage all workspace data
+- can configure Voluum Workspace IDs per workspace
+
+Employees:
+- can only access workspaces assigned to them
+- if assigned to multiple workspaces, they can switch between those workspaces
+- they must only see data belonging to the selected workspace
+
+====================================================
+5. WORKSPACE SWITCHER
+====================================================
+
+Add a persistent workspace switcher.
+
+Behavior:
+- Super admin sees all workspaces
+- Workspace admin sees assigned workspaces
+- Employee sees only assigned workspaces
+
+When workspace changes:
+- clear previous workspace filters/selections
+- reload all data for selected workspace only
+- dropdowns show only selected workspace data
+- reports show only selected workspace data
+- tasks show only selected workspace data
+- batches show only selected workspace data
+- live campaigns show only selected workspace data
+
+====================================================
+6. BACKEND SECURITY RULE
+====================================================
+
+Workspace filtering must be enforced on the backend, not only frontend.
+
+Every endpoint must verify:
+1. user has access to selected workspace
+2. requested data belongs to selected workspace
+3. requested Voluum data belongs to configured voluumWorkspaceId
+
+If not:
+return 403
+
+====================================================
+7. ACCEPTANCE TEST
+====================================================
+
+Create two OfferOps workspaces:
+
+A. TrexonDigital
+Voluum Workspace ID: Trexon ID
+
+B. Joffeca
+Voluum Workspace ID: Joffeca ID
+
+Expected:
+- Sync TrexonDigital → imports only Trexon data
+- Sync Joffeca → imports only Joffeca data
+- Trexon traffic sources never appear in Joffeca
+- Joffeca affiliate networks never appear in Trexon
+- Trexon batches never appear in Joffeca
+- Employee assigned only to Trexon cannot access Joffeca
+- Admin can switch between both
+- Offers/campaigns without tags are skipped and counted in sync logs
+
+This is a core architecture requirement, not a UI preference.

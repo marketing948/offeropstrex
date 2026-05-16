@@ -1,0 +1,69 @@
+We are changing the product direction.
+
+Temporarily remove/disable all Voluum API integration, sync logic, tag-based import, automatic batch detection from Voluum, and campaign mapping from Voluum.
+
+Do not delete the code permanently unless necessary. Prefer isolating it behind feature flags or removing it from the active UI/API flow.
+
+We now want a semi-automated Campaign Operations system.
+
+Core requirement:
+Admins and workers will manually create and manage Batches, Campaigns, Offers count, GEOs, affiliate networks, traffic sources, platforms, and statuses.
+
+The system should automate workflow tasks based on manual data entry.
+
+Required flow:
+1. Admin or worker creates a Batch manually.
+2. Batch fields:
+   - Affiliate Network
+   - GEO
+   - Batch Number / Batch Name
+   - Number of Offers
+   - Traffic Source
+   - Test Round
+   - Assigned Worker
+   - Start Date
+   - Status
+
+3. For each Batch, the system automatically creates two campaign setup tasks:
+   - Create iOS campaign
+   - Create Android campaign
+
+4. Worker manually enters campaign details:
+   - Campaign Name
+   - Platform: iOS / Android
+   - Traffic Source
+   - Campaign URL or ID
+   - Status
+
+5. Once both campaigns are marked Ready, system creates a Go Live task.
+
+6. Once campaigns are marked Live, system creates a Follow-up / Optimization task after the configured test duration.
+
+7. Worker manually enters results:
+   - Clicks
+   - Cost
+   - Revenue
+   - Conversions
+   - ROI
+   - Winners count
+   - Notes
+
+8. If winners count > 0 or ROI > 0, system creates a task:
+   - Move winners to Main Campaign
+
+9. Admin dashboard should show:
+   - Total batches created
+   - Batches by status
+   - Campaigns live/testing/tested/closed
+   - Winners found
+   - Campaigns moved to main
+   - Worker performance
+   - Traffic source performance
+   - GEO performance
+   - Affiliate network performance
+
+Important:
+The system must be functional without Voluum.
+Voluum integration should be treated as a future automation layer, not part of the current MVP.
+
+Focus on stability, simple workflow, clean UI, and reliable manual operations.

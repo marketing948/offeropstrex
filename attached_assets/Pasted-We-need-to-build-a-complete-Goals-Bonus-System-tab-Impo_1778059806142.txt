@@ -1,0 +1,287 @@
+We need to build a complete Goals & Bonus System tab.
+
+Important:
+This system should motivate:
+- high testing volume
+- finding winners
+- good optimization
+- scaling successful offers
+- operational discipline
+
+The system should be score-based with ranks, progress bars, combo bonuses, and admin-controlled configurations.
+
+====================================================
+1. GOALS TAB STRUCTURE
+====================================================
+
+Create a dedicated Goals tab with:
+- Employee score cards
+- Monthly progress tracking
+- Rank system
+- KPI progress bars
+- Combo bonuses
+- Leaderboards
+- Bonus projections (ADMIN ONLY)
+- Admin controls
+
+====================================================
+2. MONTHLY SCORE SYSTEM
+====================================================
+
+Every employee accumulates points during the month.
+
+Score categories:
+- Activity Score
+- Winner Discovery Score
+- Optimization Score
+- Discipline Score
+- Combo Bonuses
+
+Total Monthly Score =
+40% Activity
+35% Winner Discovery
+15% Optimization
+10% Discipline
+
+====================================================
+3. ACTIVITY SCORE
+====================================================
+
+Add configurable point values.
+
+Default points:
+
+- Batch Created = 2
+- Campaign Assigned = 2
+- Campaign Marked Live = 3
+- Optimization Completed = 5
+- Retest Completed = 4
+- Scale Task Completed = 6
+- Task Completed On Time = 1
+
+Track:
+- monthly totals
+- weekly totals
+- historical trends
+
+====================================================
+4. WINNER DISCOVERY SCORE
+====================================================
+
+Default points:
+
+- Winner Found (ROI > 0) = 10
+- Winner Moved to Scale = 20
+- Winner Stayed Profitable X Days = 15
+- High ROI Winner (> configurable threshold) = 25
+
+Allow admin to configure:
+- ROI threshold
+- profitability duration
+- point values
+
+====================================================
+5. OPTIMIZATION SCORE
+====================================================
+
+Default logic:
+Reward employees for improving campaign performance.
+
+Examples:
+- ROI improved from negative to positive
+- CPA reduced
+- Profit increased after optimization
+- Successful scaling optimization
+
+Default points:
+- Successful Optimization = 10
+- ROI Improvement Bonus = 5
+- Scaling Optimization Bonus = 15
+
+====================================================
+6. DISCIPLINE SCORE
+====================================================
+
+Reward operational consistency.
+
+Default points:
+- No overdue tasks this week = 10
+- All tasks completed on time = 15
+- No inactive batches = 10
+
+Penalties:
+- Overdue optimization = -5
+- Batch stuck too long = -10
+
+====================================================
+7. RANK SYSTEM
+====================================================
+
+Create monthly rank tiers.
+
+Ranks:
+
+0–299:
+Junior Buyer
+
+300–499:
+Active Buyer
+
+500–799:
+Strong Buyer
+
+800–1199:
+Killer Buyer
+
+1200+:
+Elite Buyer
+
+====================================================
+8. BONUS SYSTEM (ADMIN ONLY)
+====================================================
+
+Important:
+Employees should NOT see money amounts.
+Only admins can view financial bonus values.
+
+Bonus mapping:
+
+Active Buyer = $50
+Strong Buyer = $125
+Killer Buyer = $200
+Elite Buyer = $300
+
+Employee view:
+- current rank
+- progress to next rank
+- score progress
+- achievements
+- combo bonuses
+- KPI progress
+
+Admin view:
+- projected bonus payout
+- employee score breakdown
+- payout overview
+- bonus management
+
+====================================================
+9. EMPLOYEE GOALS UI
+====================================================
+
+Employee Goals page should show:
+
+A. Monthly Progress Card
+- current score
+- current rank
+- next rank
+- points needed for next rank
+- monthly progress %
+
+B. KPI Progress Bars
+- batches created
+- live campaigns
+- optimizations completed
+- winners found
+- winners moved to scale
+- scale tasks completed
+
+C. Achievements Section
+- combo bonuses earned
+- recent achievements
+- badges
+
+D. Leaderboards
+- top score
+- most winners
+- best optimizer
+- fastest worker
+
+====================================================
+10. COMBO BONUS SYSTEM
+====================================================
+
+Add a fully dynamic Combo Bonus system.
+
+Default examples:
+
+- 3 Winners in One Week = +50 points
+- 5 Optimizations Completed = +40 points
+- Winner → Scale → Profit = +100 points
+- No Overdue Tasks All Week = +25 points
+- 10 Live Campaigns This Week = +30 points
+
+Admin must be able to:
+- create combo bonuses
+- edit combo bonuses
+- delete combo bonuses
+- enable/disable combos
+- configure thresholds
+- configure rewards
+
+Combo bonus structure:
+- comboName
+- description
+- triggerType
+- threshold
+- rewardPoints
+- activeStatus
+
+====================================================
+11. ADMIN CONFIGURATION PANEL
+====================================================
+
+Create an Admin Goals Settings section.
+
+Admin can edit:
+- point values
+- rank thresholds
+- combo bonuses
+- KPI targets
+- discipline penalties
+- ROI thresholds
+- scaling rewards
+
+Changes should apply dynamically without code changes.
+
+====================================================
+12. KPI TARGETS
+====================================================
+
+Add configurable monthly goals.
+
+Default example targets:
+- 20 batches
+- 40 live campaigns
+- 30 optimizations
+- 10 winners
+- 5 scaled winners
+
+Show employee progress toward goals visually.
+
+====================================================
+13. HISTORY & ANALYTICS
+====================================================
+
+Store monthly history.
+
+Allow admins to view:
+- previous months
+- employee growth
+- score history
+- rank history
+- combo bonus history
+
+====================================================
+14. IMPORTANT PRODUCT PRINCIPLE
+====================================================
+
+This system should motivate employees to:
+- launch more tests
+- find more winners
+- optimize efficiently
+- scale profitable offers
+- maintain operational discipline
+
+The system should feel motivating and game-like,
+without exposing financial payout logic to employees.

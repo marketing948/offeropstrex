@@ -1,0 +1,218 @@
+We need to make the entire Goals / Bonus / Scoring system fully configurable by Admin users.
+
+Important:
+Admins must be able to edit ALL scoring logic directly from the UI without touching code.
+
+====================================================
+1. FULL ADMIN CONTROL PANEL
+====================================================
+
+Create a dedicated:
+“Goals & Bonus Settings” admin page.
+
+Only admin users can access it.
+
+This page should allow full management of:
+- point values
+- combo bonuses
+- rank thresholds
+- KPI goals
+- penalties
+- rewards
+- achievement rules
+- visibility settings
+
+====================================================
+2. EDITABLE POINT SYSTEM
+====================================================
+
+Admins must be able to edit point values for every action.
+
+Examples:
+- Batch Created
+- Campaign Assigned
+- Campaign Marked Live
+- Optimization Completed
+- Winner Found
+- Winner Moved to Scale
+- Scale Task Completed
+- Retest Completed
+- Task Completed On Time
+- No Overdue Tasks
+- ROI Improvement
+- CPA Reduction
+- Profit Improvement
+- Scaling Success
+
+For each action:
+- actionName
+- description
+- points
+- enabled/disabled
+
+Changes should apply immediately system-wide.
+
+====================================================
+3. FULL COMBO BONUS MANAGEMENT
+====================================================
+
+Admins must be able to:
+- create combo bonuses
+- edit combo bonuses
+- delete combo bonuses
+- enable/disable combo bonuses
+
+Each combo bonus should support:
+- comboName
+- description
+- triggerType
+- threshold
+- rewardPoints
+- activeStatus
+- cooldown period
+- repeatable yes/no
+- monthly limit
+
+Example combos:
+- 3 Winners in One Week
+- 5 Optimizations Completed
+- Winner → Scale → Profit
+- No Overdue Tasks
+- 10 Live Campaigns This Week
+
+====================================================
+4. EDITABLE RANK SYSTEM
+====================================================
+
+Admins must be able to:
+- create ranks
+- edit ranks
+- reorder ranks
+- change thresholds
+- change titles
+- change colors/icons
+
+Default ranks:
+- Junior Buyer
+- Active Buyer
+- Strong Buyer
+- Killer Buyer
+- Elite Buyer
+
+Fields:
+- rankName
+- minimumScore
+- maximumScore
+- bonusAmount
+- visibilityToEmployees
+- icon
+- color
+
+====================================================
+5. BONUS MANAGEMENT
+====================================================
+
+Admins must be able to:
+- edit bonus dollar amounts
+- enable/disable payouts
+- create temporary bonus events
+- apply multipliers
+
+Example:
+“Double Winner Week”
+Winner points x2
+
+Important:
+Bonus payout amounts remain ADMIN ONLY.
+Employees must never see money values.
+
+====================================================
+6. KPI GOAL MANAGEMENT
+====================================================
+
+Admins can edit:
+- monthly goals
+- weekly goals
+- per-employee goals
+- global company goals
+
+Examples:
+- target batches
+- target optimizations
+- target winners
+- target scale campaigns
+- target ROI
+- target profit
+
+====================================================
+7. PENALTIES SYSTEM
+====================================================
+
+Admins can configure penalties.
+
+Examples:
+- overdue tasks
+- inactive campaigns
+- missing optimization
+- delayed scaling
+- incorrect workflow usage
+
+Penalty fields:
+- penaltyName
+- pointsDeducted
+- triggerCondition
+- enabled/disabled
+
+====================================================
+8. ACHIEVEMENTS & BADGES
+====================================================
+
+Admins can create:
+- achievements
+- badges
+- milestone rewards
+
+Fields:
+- achievementName
+- description
+- icon
+- triggerCondition
+- rewardPoints
+
+====================================================
+9. REAL-TIME PREVIEW
+====================================================
+
+Add a preview panel for admins.
+
+When changing:
+- points
+- combos
+- thresholds
+- ranks
+
+The admin should immediately see:
+- projected employee score changes
+- rank impact
+- estimated payouts
+
+====================================================
+10. AUDIT LOG
+====================================================
+
+Track all admin changes.
+
+Store:
+- admin user
+- what changed
+- previous value
+- new value
+- timestamp
+
+====================================================
+11. IMPORTANT PRODUCT PRINCIPLE
+====================================================
+
+The scoring and bonus system should behave like a configurable game engine.
+
+Admins should be able to rebalance the entire motivation system without developer involvement.

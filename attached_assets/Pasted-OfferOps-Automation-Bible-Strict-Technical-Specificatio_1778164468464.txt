@@ -1,0 +1,593 @@
+OfferOps — Automation Bible (Strict Technical Specification)
+PURPOSE
+This document is the SINGLE SOURCE OF TRUTH for OfferOps automation behavior.
+The system MUST NOT guess logic.
+Every automation, sync, task, state transition, and workflow action MUST follow this specification exactly.
+
+SYSTEM SOURCE OF TRUTH
+Voluum is source of truth for:
+	•	Offers
+	•	Tracker Campaigns
+	•	Visits
+	•	ROI
+	•	Tracker campaign existence
+	•	Tracker campaign stats
+
+OfferOps App is source of truth for:
+	•	Tasks
+	•	Workflow states
+	•	Notifications
+	•	Batch progression
+	•	Traffic source order
+	•	User permissions
+	•	Manual workflow actions
+	•	Admin settings
+
+CORE SYSTEM ENTITIES
+1. WORKSPACES
+Each workspace is FULLY isolated.
+A workspace sync MUST ONLY pull data from its own Voluum workspace.
+NEVER globally.
+
+Required fields:
+Field
+Type
+id
+uuid
+name
+string
+voluum_workspace_id
+string
+created_at
+datetime
+
+2. OFFERS
+Imported from Voluum.
+Offers are NEVER manually created inside the app.
+
+Required fields
+Field
+Type
+id
+uuid
+voluum_offer_id
+string UNIQUE
+workspace_id
+fk
+batch_id
+fk nullable
+tag
+string
+affiliate_network
+string
+geo
+string
+batch_number
+integer
+visits
+integer
+roi
+decimal
+imported_at
+datetime
+created_at
+datetime
+
+Deduplication Rule
+Offers MUST be deduplicated ONLY by:
+voluum_offer_id
+NEVER by tag.
+
+3. BATCHES
+A batch is a logical package of offers.
+Example:
+sl_gb_batch1
+
+Batch Rules
+A batch:
+	•	belongs to ONE workspace
+	•	belongs to ONE affiliate network
+	•	belongs to ONE geo
+	•	can be tested on ONLY ONE traffic source at a time
+	•	can progress through traffic sources sequentially only
+
+Required fields
+Field
+Type
+id
+uuid
+workspace_id
+fk
+batch_tag
+string UNIQUE
+affiliate_network
+string
+geo
+string
+batch_number
+integer
+current_traffic_source_id
+fk nullable
+traffic_source_step
+integer default 0
+status
+enum
+created_at
+datetime
+updated_at
+datetime
+
+4. TRACKER CAMPAIGNS
+Tracker Campaign = Voluum Campaign.
+The system MUST NEVER call these simply “campaigns”.
+
+Required fields
+Field
+Type
+id
+uuid
+voluum_campaign_id
+string UNIQUE
+workspace_id
+fk
+batch_id
+fk
+traffic_source_id
+fk
+device_type
+enum
+tag
+string
+created_at
+datetime
+
+Device Types
+Allowed values ONLY:
+	•	ios
+	•	android
+
+Deduplication Rule
+Tracker campaigns MUST be deduplicated ONLY by:
+voluum_campaign_id
+NEVER by tag.
+
+5. LIVE CAMPAIGNS
+These are REAL traffic source campaigns.
+These campaigns DO NOT sync from Voluum.
+The system only tracks workflow state.
+
+6. TRAFFIC SOURCES
+Traffic sources are STATIC.
+Admin manages:
+	•	enabled traffic sources
+	•	testing order
+
+Required fields
+Field
+Type
+id
+uuid
+workspace_id
+fk
+name
+string UNIQUE
+priority_order
+integer
+enabled
+boolean
+
+7. TASKS
+Tasks are system-generated workflow actions.
+
+Required fields
+Field
+Type
+id
+uuid
+workspace_id
+fk
+batch_id
+fk
+type
+enum
+status
+enum
+assigned_user_id
+fk nullable
+flashing
+boolean
+created_at
+datetime
+completed_at
+datetime nullable
+
+Allowed Task Types
+ONLY:
+	•	CREATE_IOS_TRACKER_CAMPAIGN
+	•	CREATE_ANDROID_TRACKER_CAMPAIGN
+	•	FIND_WINNERS
+	•	PAUSE_TRAFFIC_SOURCE_CAMPAIGNS
+
+Allowed Task Statuses
+ONLY:
+	•	TODO
+	•	IN_PROGRESS
+	•	BLOCKED
+	•	DONE
+
+STRICT TAG RULES
+Offer Tag Format
+Required regex:
+^[a-z]+_[a-z]{2}_batch[0-9]+$
+
+Example Valid Tags
+	•	sl_gb_batch1
+	•	rw_de_batch7
+	•	blu_fr_batch12
+
+Offer Tag Parsing Rules
+Example:
+sl_gb_batch1
+Parsed as:
+Value
+Result
+sl
+affiliate network
+gb
+geo
+batch1
+batch number
+
+Tracker Campaign Tag Format
+Required regex:
+^[a-z]+_[a-z]{2}_batch[0-9]+_(ios|android)_[a-z0-9]+$
+
+Example Valid Tags
+	•	sl_gb_batch1_ios_clickadu
+	•	sl_gb_batch1_android_clickadu
+	•	rw_us_batch5_ios_richads
+
+Tracker Campaign Parsing Rules
+Example:
+sl_gb_batch1_ios_clickadu
+Parsed as:
+Value
+Result
+sl
+affiliate network
+gb
+geo
+batch1
+batch number
+ios
+device type
+clickadu
+traffic source
+
+SYNC ENGINE RULES
+Sync Scope
+Sync MUST ONLY:
+	•	import NEW offers
+	•	import NEW tracker campaigns
+	•	update offer stats
+	•	update tracker campaign stats
+Sync MUST NOT:
+	•	recreate traffic sources
+	•	recreate affiliate networks
+	•	recreate existing entities
+
+Sync Buttons
+Sync buttons are allowed in:
+	•	Batch page
+	•	Admin dashboard
+	•	Workspace dashboard
+
+OFFER IMPORT EVENT
+EVENT
+OfferImported
+
+CONDITIONS
+When sync imports a NEW offer.
+
+ACTIONS
+	•	Validate tag regex
+	•	Parse tag
+	•	Find existing batch
+	•	IF batch missing:
+	•	create batch
+	•	attach offer
+	•	generate tasks
+	•	create notification
+	•	ELSE:
+	•	attach offer to existing batch
+
+IMPORTANT EDGE CASE
+If:
+	•	batch already exists
+	•	NEW offers arrive later
+	•	imported_at date differs significantly
+THEN:
+Create HIGH PRIORITY notification:
+“Unexpected offers detected for existing batch. Manual review required.”
+This scenario is considered abnormal.
+
+INITIAL TASK CREATION LOGIC
+EVENT
+BatchCreated
+
+ACTIONS
+System reads admin traffic source order.
+Example:
+	•	Clickadu
+	•	RichAds
+	•	Adcash
+System selects FIRST enabled traffic source.
+Set:
+traffic_source_step = 1
+current_traffic_source = Clickadu
+
+CREATE TASKS
+Generate:
+Task 1
+Type:
+CREATE_IOS_TRACKER_CAMPAIGN
+Expected tag:
+sl_gb_batch1_ios_clickadu
+
+Task 2
+Type:
+CREATE_ANDROID_TRACKER_CAMPAIGN
+Expected tag:
+sl_gb_batch1_android_clickadu
+
+Task Defaults
+Field
+Value
+status
+TODO
+flashing
+true
+
+TRACKER CAMPAIGN IMPORT LOGIC
+EVENT
+TrackerCampaignImported
+
+ACTIONS
+	•	Validate tracker campaign regex
+	•	Parse tag
+	•	Find batch
+	•	Attach tracker campaign to batch
+	•	Detect:
+	•	device type
+	•	traffic source
+	•	Mark matching task DONE
+
+BATCH STATUS MACHINE
+Allowed Batch Statuses ONLY
+	•	NEW_BATCH
+	•	WAITING_FOR_TRACKER_CAMPAIGNS
+	•	OFFER_READY_FOR_LIVE_TESTING
+	•	LIVE_TESTS
+	•	TESTED
+	•	COMPLETED
+
+STATE TRANSITIONS
+STATE 1
+NEW_BATCH
+Meaning:
+	•	batch created
+	•	no tracker campaigns imported
+
+TRANSITION RULE
+IF exactly ONE tracker campaign exists
+THEN:
+status = WAITING_FOR_TRACKER_CAMPAIGNS
+
+STATE 2
+WAITING_FOR_TRACKER_CAMPAIGNS
+Meaning:
+	•	only ios OR android exists
+	•	second tracker campaign missing
+
+REQUIRED UI BEHAVIOR
+Missing task MUST:
+	•	remain TODO
+	•	remain flashing
+	•	remain in notifications
+
+TRANSITION RULE
+IF:
+	•	ios tracker campaign exists AND
+	•	android tracker campaign exists
+THEN:
+status = OFFER_READY_FOR_LIVE_TESTING
+
+STATE 3
+OFFER_READY_FOR_LIVE_TESTING
+Meaning:
+	•	both tracker campaigns exist
+	•	worker can start live testing
+
+TRANSITION RULE
+Worker manually changes status.
+IF worker sets:
+LIVE_TESTS
+THEN:
+status = LIVE_TESTS
+
+STATE 4
+LIVE_TESTS
+Meaning:
+	•	live traffic testing is active
+
+REQUIRED UI BEHAVIOR
+Batch card MUST:
+	•	flash visually
+	•	appear high priority
+
+TRANSITION RULE
+IF EVERY offer in batch has:
+visits >= 20000
+THEN:
+status = TESTED
+
+STATE 5
+TESTED
+Meaning:
+	•	testing completed
+	•	winner selection required
+
+WINNER LOGIC
+STRICT RULE
+An offer is considered winner ONLY IF:
+ROI > -100
+
+TESTED EVENT ACTIONS
+EVENT
+BatchTested
+
+ACTIONS
+Generate:
+Task 1
+FIND_WINNERS
+
+Task 2
+PAUSE_TRAFFIC_SOURCE_CAMPAIGNS
+
+NEXT TRAFFIC SOURCE FLOW
+EVENT
+PAUSE_TRAFFIC_SOURCE_CAMPAIGNS task marked DONE
+
+ACTIONS
+	•	Find next traffic source by admin order
+	•	Increment traffic_source_step
+	•	Set current_traffic_source
+	•	Generate new iOS task
+	•	Generate new Android task
+	•	Set batch status:
+NEW_BATCH
+
+Example
+Current:
+Clickadu
+Next:
+RichAds
+Generate:
+	•	sl_gb_batch1_ios_richads
+	•	sl_gb_batch1_android_richads
+
+HARD BUSINESS RULES
+RULE 1
+A batch can NEVER be tested on multiple traffic sources simultaneously.
+
+RULE 2
+A batch can NEVER contain multiple affiliate networks.
+
+RULE 3
+Workers create tracker campaigns ONLY inside Voluum.
+OfferOps NEVER creates Voluum campaigns automatically.
+
+RULE 4
+The app tracks workflow. The app does NOT manage traffic source campaigns directly.
+
+ERROR HANDLING
+Invalid Offer Tag
+IF offer tag fails regex validation:
+	•	reject automation
+	•	create admin notification
+	•	do NOT create batch
+
+Invalid Tracker Campaign Tag
+IF tracker campaign tag fails regex validation:
+	•	reject automation
+	•	create admin notification
+	•	do NOT attach campaign
+
+Duplicate Tracker Campaign
+IF same device type already exists for:
+	•	same batch
+	•	same traffic source
+THEN:
+Create HIGH PRIORITY warning.
+
+Missing Campaign Forever
+IF task remains TODO for over admin-defined limit:
+THEN:
+	•	escalate notification
+	•	keep flashing
+
+API Failure
+IF sync partially fails:
+	•	rollback partial writes
+	•	log error
+	•	create sync warning
+
+ADMIN SETTINGS
+Traffic Source Order
+Admin can:
+	•	add traffic sources
+	•	disable traffic sources
+	•	reorder traffic sources
+
+IMPORTANT RULE
+Traffic source order changes MUST NOT affect batches already in progress.
+Only NEW batches use updated order.
+
+USER PERMISSIONS
+ADMIN
+Can:
+	•	view all workspaces
+	•	edit traffic source order
+	•	manage workers
+	•	trigger sync
+	•	view notifications
+	•	review suspicious batches
+
+WORKER
+Can:
+	•	view assigned tasks
+	•	update task statuses
+	•	update batch workflow states
+	•	view active batches
+Workers CANNOT:
+	•	edit traffic source order
+	•	edit admin settings
+	•	change sync configuration
+
+NOTIFICATION TYPES
+Allowed notification types:
+	•	NEW_BATCH_CREATED
+	•	TRACKER_CAMPAIGN_MISSING
+	•	INVALID_TAG
+	•	DUPLICATE_TRACKER_CAMPAIGN
+	•	SUSPICIOUS_BATCH_UPDATE
+	•	API_SYNC_FAILURE
+	•	TASK_OVERDUE
+
+EVENT ENGINE
+Allowed Events
+	•	OfferImported
+	•	BatchCreated
+	•	TrackerCampaignImported
+	•	BatchStatusChanged
+	•	BatchTested
+	•	TaskCompleted
+	•	TrafficSourceAdvanced
+
+RULE ENGINE EXAMPLES
+IF BatchCreated THEN CreateInitialTasks
+
+IF ios_tracker_exists AND android_tracker_exists THEN set_status_offer_ready
+
+IF all_offers_visits >= 20000 THEN set_status_tested
+
+IF pause_campaigns_task_done THEN move_to_next_traffic_source
+
+FINAL ARCHITECTURE REQUIREMENT
+The system MUST be event-driven.
+The system MUST NOT contain hardcoded spaghetti automation logic.
+Every automation MUST be triggered ONLY by:
+	•	events
+	•	rules
+	•	validated states
+This document overrides all previous automation behavior specifications.

@@ -1,0 +1,251 @@
+We need to build a dedicated Reports section.
+
+Important:
+The Reports tab is NOT the live dashboard.
+Dashboard = real-time operational overview.
+Reports = historical analysis, employee performance tracking, and business insights.
+
+The Reports section should include multiple report types with filters, exports, and summaries.
+
+====================================================
+1. DAILY OPERATIONS REPORT
+====================================================
+
+Purpose:
+Show everything that happened operationally during a selected day.
+
+Metrics:
+- batchesCreated
+- campaignsLaunched
+- campaignsMarkedLive
+- campaignsReachedTargetClicks
+- optimizationsCompleted
+- winnersFound
+- losersFound
+- scaleTasksCreated
+- scaleTasksCompleted
+- overdueTasks
+- activeEmployees
+
+Tables:
+A. Daily Employee Activity
+Columns:
+- employee
+- batchesCreated
+- campaignsLaunched
+- optimizationsCompleted
+- winnersFound
+- scaleTasksCompleted
+- totalActions
+- avgResponseTime
+
+B. Daily Batch Activity
+Columns:
+- batchName
+- affiliateNetwork
+- GEO
+- trafficSource
+- status
+- clicks
+- revenue
+- profit
+- ROI
+- actionRequired
+
+====================================================
+2. WEEKLY EMPLOYEE PERFORMANCE REPORT
+====================================================
+
+Purpose:
+Track employee efficiency and prepare future bonus/scoring logic.
+
+Metrics per employee:
+- batchesCreated
+- campaignsLaunched
+- campaignsMarkedLive
+- optimizationsCompleted
+- winnersFound
+- winnersMovedToScale
+- scaleTasksCompleted
+- totalProfitGenerated
+- avgROI
+- avgOptimizationTime
+- avgTimeLiveToOptimization
+- overdueTasks
+- completionRate
+
+Add rankings:
+- Top performer
+- Fastest optimizer
+- Most winners found
+- Highest profit generated
+
+Visuals:
+- weekly trend charts
+- employee comparison charts
+- leaderboard cards
+
+====================================================
+3. BATCH PERFORMANCE REPORT
+====================================================
+
+Purpose:
+Analyze performance of every testing batch.
+
+Columns:
+- batchName
+- affiliateNetwork
+- GEO
+- uploadDate
+- employee
+- offerCount
+- testedTrafficSources
+- currentTrafficSource
+- totalClicks
+- totalConversions
+- totalCost
+- totalRevenue
+- totalProfit
+- ROI
+- winnersCount
+- losersCount
+- scaleCampaignsCreated
+- currentStatus
+- nextTrafficSource
+- daysRunning
+
+Add:
+- expandable row / details modal
+- direct link to Batch Details page
+
+====================================================
+4. TRAFFIC SOURCE PERFORMANCE REPORT
+====================================================
+
+Purpose:
+Understand which traffic sources perform best.
+
+Metrics:
+- trafficSource
+- batchesTested
+- campaignsLaunched
+- clicks
+- conversions
+- spend
+- revenue
+- profit
+- ROI
+- winnersFound
+- winnerRate
+- avgCPA
+- avgCVR
+- bestGEO
+- worstGEO
+- activeCampaigns
+- completedCampaigns
+
+Add charts:
+- ROI by traffic source
+- profit by traffic source
+- winner rate comparison
+
+====================================================
+5. AFFILIATE NETWORK + GEO REPORT
+====================================================
+
+Purpose:
+Identify strongest affiliate network and GEO combinations.
+
+Metrics:
+- affiliateNetwork
+- GEO
+- offersTested
+- batchesCreated
+- winnersFound
+- winnerRate
+- spend
+- revenue
+- profit
+- ROI
+- bestTrafficSource
+- worstTrafficSource
+- avgCPA
+- avgCVR
+
+Add heatmap visualization:
+Affiliate Network × GEO performance matrix.
+
+====================================================
+6. REPORT FILTERS
+====================================================
+
+Add global filters at the top of Reports:
+- dateRange
+- employee
+- affiliateNetwork
+- GEO
+- trafficSource
+- batchStatus
+- campaignStatus
+- onlyWinners
+- onlyLosers
+- activeOnly
+- completedOnly
+
+Filters should apply dynamically to all reports.
+
+====================================================
+7. EXPORTS
+====================================================
+
+Add export actions:
+- Export CSV
+- Export Excel
+- Export PDF
+
+Allow exporting:
+- current filtered report
+- full report
+- employee-specific report
+- date range report
+
+====================================================
+8. REPORT SCHEDULING
+====================================================
+
+Add future-ready support for:
+- scheduled weekly reports
+- scheduled daily summaries
+- email summaries for admins
+
+No email sending required yet, but structure the system for it.
+
+====================================================
+9. REPORTS UX
+====================================================
+
+Reports should feel professional and executive-level.
+
+Requirements:
+- clean SaaS-style UI
+- cards
+- charts
+- trend indicators
+- sortable tables
+- expandable rows
+- downloadable reports
+- fast filtering
+
+Do NOT make Reports look like plain spreadsheets.
+
+====================================================
+10. IMPORTANT PRODUCT PRINCIPLE
+====================================================
+
+The Reports section should answer:
+- Which employees perform best?
+- Which traffic sources generate winners?
+- Which affiliate networks and GEOs are profitable?
+- Which batches succeed or fail?
+- Where are operational bottlenecks?
+- What should management optimize next?
