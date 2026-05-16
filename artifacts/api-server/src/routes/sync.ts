@@ -17,6 +17,7 @@ import { logger } from "../lib/logger";
 import { getEmployeeFromToken } from "./auth";
 import { checkWorkspaceAccess as sharedCheckWorkspaceAccess, requireWorkspaceFromQuery, requireWorkspaceAccess, requireAdmin } from "../lib/workspace-access";
 import { requireWorkspaceFromBody } from "../lib/require-workspace";
+import { serializeWorkspaceForEmployee, setActiveWorkspaceForEmployee } from "../lib/active-workspace";
 import { upsertSetting } from "../lib/settings-store";
 import { normalizeRawTags, pickValidVoluumTag, validateTrackerCampaignTag, type VoluumTagSkipReason, type TrackerCampaignTagSkipReason } from "../lib/voluum-tag";
 // SPEC Phase 1: parseVoluumCampaignName is being phased out as a workflow
@@ -1888,10 +1889,11 @@ async function ensureDefaultWorkspace(): Promise<void> {
 // GET /sync/voluum/workspaces — admin only (lists all workspaces system-wide;
 // employees should use /api/auth/my-workspaces which is access-scoped).
 router.get("/sync/voluum/workspaces", async (req, res): Promise<void> => {
-  if ((await requireAdmin(req, res)) === null) return;
+  const employee = await requireAdmin(req, res);
+  if (employee === null) return;
   await ensureDefaultWorkspace();
   const workspaces = await db.select().from(workspacesTable).orderBy(workspacesTable.id);
-  res.json(workspaces);
+  res.json(workspaces.map((workspace) => serializeWorkspaceForEmployee(workspace, employee, workspaces)));
 });
 
 // POST /sync/voluum/workspaces — admin only
@@ -2620,19 +2622,18 @@ router.patch("/sync/voluum/workspaces/:id/set-active", async (req, res): Promise
     return;
   }
   if ((await requireWorkspaceAccess(req, res, id)) === null) return;
-  const [ws] = await db.select().from(workspacesTable).where(eq(workspacesTable.id, id));
-  if (!ws) {
+  const employee = await getEmployeeFromToken(req);
+  if (!employee) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const updated = await setActiveWorkspaceForEmployee(employee.id, id);
+  if (!updated) {
     res.status(404).json({ error: "Workspace not found" });
     return;
   }
-  // Deactivate all, then activate the requested one
-  await db.update(workspacesTable).set({ isActive: false, updatedAt: new Date() });
-  const [updated] = await db.update(workspacesTable)
-    .set({ isActive: true, updatedAt: new Date() })
-    .where(eq(workspacesTable.id, id))
-    .returning();
-  req.log.info({ workspaceId: id }, "Workspace set active");
-  res.json(updated);
+  req.log.info({ workspaceId: id, employeeId: employee.id }, "Workspace set active");
+  res.json(serializeWorkspaceForEmployee(updated, { ...employee, activeWorkspaceId: id }));
 });
 
 // GET /sync/voluum/campaigns-synced[?include_archived=true (admin only)]

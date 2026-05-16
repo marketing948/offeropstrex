@@ -1,6 +1,7 @@
-import { pgTable, text, serial, timestamp, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, pgEnum, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { workspacesTable } from "./workspaces";
 
 export const roleEnum = pgEnum("role", ["admin", "employee"]);
 export const employeeStatusEnum = pgEnum("employee_status", ["active", "inactive"]);
@@ -12,6 +13,7 @@ export const employeesTable = pgTable("employees", {
   passwordHash: text("password_hash").notNull(),
   role: roleEnum("role").notNull().default("employee"),
   status: employeeStatusEnum("status").notNull().default("active"),
+  activeWorkspaceId: integer("active_workspace_id").references(() => workspacesTable.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

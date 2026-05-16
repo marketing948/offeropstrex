@@ -3,6 +3,7 @@ import { eq, and } from "drizzle-orm";
 import { db, employeeWorkspaceAssignmentsTable, employeesTable, workspacesTable } from "@workspace/db";
 import { getEmployeeFromToken } from "./auth";
 import { requireWorkspaceFromQuery, requireAdmin } from "../lib/workspace-access";
+import { serializeWorkspaceForEmployee, serializeWorkspacesForEmployee, setActiveWorkspaceForEmployee } from "../lib/active-workspace";
 
 const router: IRouter = Router();
 
@@ -55,19 +56,13 @@ router.patch("/workspaces/:id/activate", async (req, res): Promise<void> => {
       return;
     }
   }
-  const [ws] = await db.select().from(workspacesTable).where(eq(workspacesTable.id, id));
-  if (!ws) {
+  const updated = await setActiveWorkspaceForEmployee(employee.id, id);
+  if (!updated) {
     res.status(404).json({ error: "Workspace not found" });
     return;
   }
-  await db.update(workspacesTable).set({ isActive: false, updatedAt: new Date() });
-  const [updated] = await db
-    .update(workspacesTable)
-    .set({ isActive: true, updatedAt: new Date() })
-    .where(eq(workspacesTable.id, id))
-    .returning();
   req.log.info({ workspaceId: id, employeeId: employee.id }, "Workspace activated");
-  res.json(updated);
+  res.json(serializeWorkspaceForEmployee(updated, { ...employee, activeWorkspaceId: id }));
 });
 
 // GET /workspace-members?workspace_id=N
@@ -192,12 +187,7 @@ router.get("/auth/my-workspaces", async (req, res): Promise<void> => {
 
   // Admins see all workspaces
   if (employee.role === "admin") {
-    res.json(allWorkspaces.map(ws => ({
-      ...ws,
-      lastSyncAt: ws.lastSyncAt?.toISOString() ?? null,
-      createdAt: ws.createdAt.toISOString(),
-      updatedAt: ws.updatedAt.toISOString(),
-    })));
+    res.json(serializeWorkspacesForEmployee(allWorkspaces, employee));
     return;
   }
 
@@ -212,12 +202,7 @@ router.get("/auth/my-workspaces", async (req, res): Promise<void> => {
   const assignedIds = new Set(assignments.map(a => a.workspaceId));
   const myWorkspaces = allWorkspaces.filter(ws => assignedIds.has(ws.id));
 
-  res.json(myWorkspaces.map(ws => ({
-    ...ws,
-    lastSyncAt: ws.lastSyncAt?.toISOString() ?? null,
-    createdAt: ws.createdAt.toISOString(),
-    updatedAt: ws.updatedAt.toISOString(),
-  })));
+  res.json(serializeWorkspacesForEmployee(myWorkspaces, employee));
 });
 
 export default router;

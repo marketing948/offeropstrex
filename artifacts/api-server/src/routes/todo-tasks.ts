@@ -12,9 +12,17 @@ import {
 } from "@workspace/api-zod";
 import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access";
 import { requireWorkspaceFromBody } from "../lib/require-workspace";
-import { emit } from "../engine/event-bus";
+import { emit, emitWithinTx } from "../engine/event-bus.ts";
 
 const router: IRouter = Router();
+
+const CAMPAIGN_OPS_TASK_TYPES = new Set<string>([
+  "create_voluum_campaign_ios",
+  "create_voluum_campaign_android",
+  "take_campaign_live",
+  "find_winners",
+  "all_traffic_sources_tested",
+]);
 
 function serializeTask(
   task: typeof todoTasksTable.$inferSelect,
@@ -124,15 +132,48 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
     return;
   }
 
+  if (req.body && typeof req.body === "object" && "taskType" in req.body) {
+    res.status(400).json({ error: "taskType cannot be changed" });
+    return;
+  }
+
   const parsed = UpdateTodoTaskBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
 
-  const [existing] = await db.select({ workspaceId: todoTasksTable.workspaceId }).from(todoTasksTable).where(eq(todoTasksTable.id, params.data.id));
+  const [existing] = await db
+    .select({
+      workspaceId: todoTasksTable.workspaceId,
+      status: todoTasksTable.status,
+      taskType: todoTasksTable.taskType,
+    })
+    .from(todoTasksTable)
+    .where(eq(todoTasksTable.id, params.data.id));
   if (!existing) { res.status(404).json({ error: "Task not found" }); return; }
   if ((await requireWorkspaceAccess(req, res, existing.workspaceId)) === null) return;
+
+  if (
+    CAMPAIGN_OPS_TASK_TYPES.has(existing.taskType) &&
+    req.body && typeof req.body === "object" && "relatedBatchId" in req.body
+  ) {
+    res.status(400).json({
+      error: "CampaignOps task ownership fields cannot be changed via PATCH",
+    });
+    return;
+  }
+
+  if (
+    CAMPAIGN_OPS_TASK_TYPES.has(existing.taskType) &&
+    parsed.data.status === "DONE" &&
+    existing.status !== "DONE"
+  ) {
+    res.status(400).json({
+      error: "CampaignOps tasks must be completed via POST /todo-tasks/:id/complete",
+    });
+    return;
+  }
 
   // Spec-correction (post Phase 10): the engine TaskCompleted handler
   // (FIND_WINNERS → PAUSE; PAUSE → AdvanceTrafficSource) only runs if
@@ -140,11 +181,6 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
   // place workers mark tasks DONE, so emit from here when the status
   // transitions TO DONE (and was not DONE before). Idempotent via the
   // event log: dedupeKey `task_completed:<taskId>`.
-  const [prevTask] = await db
-    .select({ status: todoTasksTable.status })
-    .from(todoTasksTable)
-    .where(eq(todoTasksTable.id, params.data.id));
-
   const [task] = await db
     .update(todoTasksTable)
     .set(parsed.data as Partial<typeof todoTasksTable.$inferInsert>)
@@ -158,7 +194,7 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
 
   if (
     task.status === "DONE" &&
-    prevTask?.status !== "DONE" &&
+    existing.status !== "DONE" &&
     task.relatedBatchId !== null
   ) {
     try {
@@ -224,6 +260,15 @@ const findWinnersSchema = z.object({
   notes: z.string().nullable().optional(),
 });
 
+class CompletionHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
   const taskId = Number(req.params.id);
   if (!Number.isInteger(taskId) || taskId <= 0) {
@@ -251,7 +296,9 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       ? "android"
       : null;
 
-  let resolvedCampaignId: number | null = task.relatedCampaignId ?? null;
+  let parsedCreate: z.infer<typeof createVoluumCampaignSchema> | null = null;
+  let parsedTakeLive: z.infer<typeof takeCampaignLiveSchema> | null = null;
+  let parsedFindWinners: z.infer<typeof findWinnersSchema> | null = null;
 
   if (platformFromType !== null) {
     if (task.relatedBatchId == null) {
@@ -263,49 +310,7 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    const data = parsed.data;
-    // Workspace-scope guard: trafficSourceId must belong to task.workspaceId.
-    const [tsRow] = await db
-      .select({ id: workspaceTrafficSourcesTable.id })
-      .from(workspaceTrafficSourcesTable)
-      .where(
-        and(
-          eq(workspaceTrafficSourcesTable.id, data.trafficSourceId),
-          eq(workspaceTrafficSourcesTable.workspaceId, task.workspaceId),
-        ),
-      );
-    if (!tsRow) {
-      res.status(400).json({ error: "trafficSourceId does not belong to this workspace" });
-      return;
-    }
-    try {
-      const [c] = await db
-        .insert(campaignsTable)
-        .values({
-          workspaceId: task.workspaceId,
-          batchId: task.relatedBatchId,
-          platform: platformFromType,
-          campaignName: data.campaignName,
-          trafficSourceId: data.trafficSourceId,
-          campaignUrl: data.campaignUrl ?? null,
-          voluumCampaignId: data.voluumCampaignId,
-          voluumCampaignName: data.voluumCampaignName,
-          status: "voluum_created",
-        })
-        .returning();
-      resolvedCampaignId = c.id;
-    } catch (err) {
-      const code =
-        (err as { code?: string; cause?: { code?: string } })?.code
-          ?? (err as { cause?: { code?: string } })?.cause?.code;
-      if (code === "23505") {
-        res.status(409).json({
-          error: "A campaign for this batch + platform + traffic source already exists",
-        });
-        return;
-      }
-      throw err;
-    }
+    parsedCreate = parsed.data;
   } else if (task.taskType === "take_campaign_live") {
     if (task.relatedCampaignId == null) {
       res.status(400).json({ error: "Task missing relatedCampaignId" });
@@ -316,24 +321,7 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    const data = parsed.data;
-    await db
-      .update(campaignsTable)
-      .set({
-        status: "live",
-        liveStartedAt: new Date(),
-        trafficSourceCampaignId: data.trafficSourceCampaignId ?? null,
-        trafficSourceCampaignUrl: data.trafficSourceCampaignUrl ?? null,
-        notes: data.notes ?? null,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(campaignsTable.id, task.relatedCampaignId),
-          eq(campaignsTable.workspaceId, task.workspaceId),
-        ),
-      );
-    resolvedCampaignId = task.relatedCampaignId;
+    parsedTakeLive = parsed.data;
   } else if (task.taskType === "find_winners") {
     if (task.relatedCampaignId == null) {
       res.status(400).json({ error: "Task missing relatedCampaignId" });
@@ -344,28 +332,7 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    const data = parsed.data;
-    const roi = data.cost > 0 ? (data.revenue - data.cost) / data.cost : null;
-    await db
-      .update(campaignsTable)
-      .set({
-        status: "tested",
-        winnersCount: data.winnersCount,
-        revenue: String(data.revenue),
-        cost: String(data.cost),
-        clicks: data.clicks ?? null,
-        conversions: data.conversions ?? null,
-        roi: roi != null ? String(roi) : null,
-        notes: data.notes ?? null,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(campaignsTable.id, task.relatedCampaignId),
-          eq(campaignsTable.workspaceId, task.workspaceId),
-        ),
-      );
-    resolvedCampaignId = task.relatedCampaignId;
+    parsedFindWinners = parsed.data;
   } else if (task.taskType === "all_traffic_sources_tested") {
     // no payload, just an ack
   } else {
@@ -375,38 +342,134 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
     return;
   }
 
-  // Mark task DONE + persist relatedCampaignId so engine handler can read it.
-  const [updated] = await db
-    .update(todoTasksTable)
-    .set({
-      status: "DONE",
-      relatedCampaignId: resolvedCampaignId,
-    })
-    .where(eq(todoTasksTable.id, taskId))
-    .returning();
+  try {
+    const result = await db.transaction(async (tx) => {
+      let resolvedCampaignId: number | null = task.relatedCampaignId ?? null;
 
-  if (updated.relatedBatchId !== null) {
-    try {
-      await emit({
-        type: "TaskCompleted",
-        workspaceId: updated.workspaceId,
-        payload: {
-          taskId: updated.id,
-          taskType: updated.taskType,
-          relatedBatchId: updated.relatedBatchId,
+      if (platformFromType !== null && parsedCreate !== null) {
+        const [tsRow] = await tx
+          .select({ id: workspaceTrafficSourcesTable.id })
+          .from(workspaceTrafficSourcesTable)
+          .where(
+            and(
+              eq(workspaceTrafficSourcesTable.id, parsedCreate.trafficSourceId),
+              eq(workspaceTrafficSourcesTable.workspaceId, task.workspaceId),
+            ),
+          );
+        if (!tsRow) {
+          throw new CompletionHttpError(400, "trafficSourceId does not belong to this workspace");
+        }
+
+        const [c] = await tx
+          .insert(campaignsTable)
+          .values({
+            workspaceId: task.workspaceId,
+            batchId: task.relatedBatchId!,
+            platform: platformFromType,
+            campaignName: parsedCreate.campaignName,
+            trafficSourceId: parsedCreate.trafficSourceId,
+            campaignUrl: parsedCreate.campaignUrl ?? null,
+            voluumCampaignId: parsedCreate.voluumCampaignId,
+            voluumCampaignName: parsedCreate.voluumCampaignName,
+            status: "voluum_created",
+          })
+          .returning();
+        resolvedCampaignId = c.id;
+      } else if (task.taskType === "take_campaign_live" && parsedTakeLive !== null) {
+        const updatedCampaign = await tx
+          .update(campaignsTable)
+          .set({
+            status: "live",
+            liveStartedAt: new Date(),
+            trafficSourceCampaignId: parsedTakeLive.trafficSourceCampaignId ?? null,
+            trafficSourceCampaignUrl: parsedTakeLive.trafficSourceCampaignUrl ?? null,
+            notes: parsedTakeLive.notes ?? null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(campaignsTable.id, task.relatedCampaignId!),
+              eq(campaignsTable.workspaceId, task.workspaceId),
+            ),
+          )
+          .returning({ id: campaignsTable.id });
+        if (updatedCampaign.length === 0) {
+          throw new CompletionHttpError(404, "Campaign not found");
+        }
+        resolvedCampaignId = task.relatedCampaignId;
+      } else if (task.taskType === "find_winners" && parsedFindWinners !== null) {
+        const roi = parsedFindWinners.cost > 0
+          ? (parsedFindWinners.revenue - parsedFindWinners.cost) / parsedFindWinners.cost
+          : null;
+        const updatedCampaign = await tx
+          .update(campaignsTable)
+          .set({
+            status: "tested",
+            winnersCount: parsedFindWinners.winnersCount,
+            revenue: String(parsedFindWinners.revenue),
+            cost: String(parsedFindWinners.cost),
+            clicks: parsedFindWinners.clicks ?? null,
+            conversions: parsedFindWinners.conversions ?? null,
+            roi: roi != null ? String(roi) : null,
+            notes: parsedFindWinners.notes ?? null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(campaignsTable.id, task.relatedCampaignId!),
+              eq(campaignsTable.workspaceId, task.workspaceId),
+            ),
+          )
+          .returning({ id: campaignsTable.id });
+        if (updatedCampaign.length === 0) {
+          throw new CompletionHttpError(404, "Campaign not found");
+        }
+        resolvedCampaignId = task.relatedCampaignId;
+      }
+
+      const [updated] = await tx
+        .update(todoTasksTable)
+        .set({
+          status: "DONE",
           relatedCampaignId: resolvedCampaignId,
-        },
-        dedupeKey: `task_completed:${updated.id}`,
-      });
-    } catch (err) {
-      req.log.warn(
-        { err, taskId: updated.id },
-        "[todo-tasks] TaskCompleted emit failed (complete endpoint)",
-      );
-    }
-  }
+        })
+        .where(eq(todoTasksTable.id, taskId))
+        .returning();
 
-  res.json({ ...serializeTask(updated), campaignId: resolvedCampaignId });
+      if (updated.relatedBatchId !== null) {
+        await emitWithinTx(tx, {
+          type: "TaskCompleted",
+          workspaceId: updated.workspaceId,
+          payload: {
+            taskId: updated.id,
+            taskType: updated.taskType,
+            relatedBatchId: updated.relatedBatchId,
+            relatedCampaignId: resolvedCampaignId,
+          },
+          dedupeKey: `task_completed:${updated.id}`,
+        });
+      }
+
+      return { updated, resolvedCampaignId };
+    });
+
+    res.json({ ...serializeTask(result.updated), campaignId: result.resolvedCampaignId });
+  } catch (err) {
+    if (err instanceof CompletionHttpError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    const code =
+      (err as { code?: string; cause?: { code?: string } })?.code
+        ?? (err as { cause?: { code?: string } })?.cause?.code;
+    if (code === "23505") {
+      res.status(409).json({
+        error: "A campaign for this batch + platform + traffic source already exists",
+      });
+      return;
+    }
+    throw err;
+  }
 });
 
 router.delete("/todo-tasks/:id", async (req, res): Promise<void> => {
