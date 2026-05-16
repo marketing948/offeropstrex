@@ -346,11 +346,26 @@ describe("route scoped invariants", { concurrency: false }, () => {
     const { response } = await request("PATCH", `/todo-tasks/${task.id}`, seed.employeeId, { status: "DONE" });
     assert.equal(response.status, 400);
 
+    const fakeCompletion = await request("PATCH", `/todo-tasks/${task.id}`, seed.employeeId, {
+      completionPayload: {
+        winnersCount: 1,
+        revenue: 100,
+        cost: 20,
+      },
+    });
+    assert.equal(fakeCompletion.response.status, 400);
+
     const [taskAfter] = await db
-      .select({ status: todoTasksTable.status })
+      .select({
+        status: todoTasksTable.status,
+        completedAt: todoTasksTable.completedAt,
+        completionPayload: todoTasksTable.completionPayload,
+      })
       .from(todoTasksTable)
       .where(eq(todoTasksTable.id, task.id));
     assert.equal(taskAfter.status, "TODO");
+    assert.equal(taskAfter.completedAt, null);
+    assert.equal(taskAfter.completionPayload, null);
   });
 
   test("generic PATCH rejects taskType mutation bypass", async () => {
@@ -435,6 +450,19 @@ describe("route scoped invariants", { concurrency: false }, () => {
     const patch = await request("PATCH", `/todo-tasks/${task.id}`, seed.employeeId, { status: "IN_PROGRESS" });
     assert.equal(patch.response.status, 200);
     assert.equal(patch.json.status, "IN_PROGRESS");
+
+    const invalidReason = await request("PATCH", `/todo-tasks/${task.id}`, seed.employeeId, {
+      blockedReason: "waiting on source approval",
+    });
+    assert.equal(invalidReason.response.status, 400);
+
+    const blocked = await request("PATCH", `/todo-tasks/${task.id}`, seed.employeeId, {
+      status: "BLOCKED",
+      blockedReason: "waiting on source approval",
+    });
+    assert.equal(blocked.response.status, 200);
+    assert.equal(blocked.json.status, "BLOCKED");
+    assert.equal(blocked.json.blockedReason, "waiting on source approval");
   });
 
   test("take_campaign_live and find_winners typed behavior", async () => {
@@ -478,6 +506,29 @@ describe("route scoped invariants", { concurrency: false }, () => {
       notes: "live notes",
     });
     assert.equal(live.response.status, 200);
+    assert.equal(live.json.completedByEmployeeId, seed.employeeId);
+    assert.ok(live.json.completedAt);
+    assert.deepEqual(live.json.completionPayload, {
+      trafficSourceCampaignId: "ts-campaign-1",
+      trafficSourceCampaignUrl: "https://example.test/campaign",
+      notes: "live notes",
+    });
+
+    const [completedTakeLiveTask] = await db
+      .select({
+        completedAt: todoTasksTable.completedAt,
+        completedByEmployeeId: todoTasksTable.completedByEmployeeId,
+        completionPayload: todoTasksTable.completionPayload,
+      })
+      .from(todoTasksTable)
+      .where(eq(todoTasksTable.id, takeLive.id));
+    assert.ok(completedTakeLiveTask.completedAt);
+    assert.equal(completedTakeLiveTask.completedByEmployeeId, seed.employeeId);
+    assert.deepEqual(completedTakeLiveTask.completionPayload, {
+      trafficSourceCampaignId: "ts-campaign-1",
+      trafficSourceCampaignUrl: "https://example.test/campaign",
+      notes: "live notes",
+    });
 
     const [liveCampaign] = await db
       .select()

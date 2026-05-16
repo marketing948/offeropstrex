@@ -1666,6 +1666,7 @@ export const UpdateTodoTaskBody = zod.object({
   status: zod.enum(["TODO", "IN_PROGRESS", "BLOCKED", "DONE"]).optional(),
   dueDate: zod.string().nullish(),
   relatedBatchId: zod.number().nullish(),
+  blockedReason: zod.string().nullish(),
 });
 
 export const UpdateTodoTaskResponse = zod.object({

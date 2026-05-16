@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer, boolean, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, boolean, pgEnum, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -64,6 +64,10 @@ export const todoTasksTable = pgTable("todo_tasks", {
   workspaceId: integer("workspace_id").notNull().references(() => workspacesTable.id, { onDelete: "cascade" }),
   flashing: boolean("flashing").notNull().default(false),
   escalatedAt: timestamp("escalated_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  completedByEmployeeId: integer("completed_by_employee_id").references(() => employeesTable.id, { onDelete: "set null" }),
+  completionPayload: jsonb("completion_payload"),
+  blockedReason: text("blocked_reason"),
   trackerCampaignDevice: trackerCampaignDeviceEnum("tracker_campaign_device"),
   trafficSourceId: integer("traffic_source_id").references(() => workspaceTrafficSourcesTable.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

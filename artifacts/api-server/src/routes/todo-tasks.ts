@@ -33,6 +33,7 @@ function serializeTask(
   return {
     ...task,
     createdAt: task.createdAt.toISOString(),
+    completedAt: task.completedAt ? task.completedAt.toISOString() : null,
     employeeName: employeeName ?? null,
     batchName: batchName ?? null,
     dueDate: task.dueDate ?? null,
@@ -164,6 +165,16 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
     res.status(400).json({ error: "taskType cannot be changed" });
     return;
   }
+  if (
+    req.body &&
+    typeof req.body === "object" &&
+    ("completedAt" in req.body ||
+      "completedByEmployeeId" in req.body ||
+      "completionPayload" in req.body)
+  ) {
+    res.status(400).json({ error: "Task completion memory can only be set via POST /todo-tasks/:id/complete" });
+    return;
+  }
 
   const parsed = UpdateTodoTaskBody.safeParse(req.body);
   if (!parsed.success) {
@@ -184,6 +195,16 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
   if (!existing) { res.status(404).json({ error: "Task not found" }); return; }
   if ((await requireWorkspaceAccess(req, res, existing.workspaceId)) === null) return;
   if (!(await requireTaskOwnerOrAdmin(req, res, existing))) return;
+
+  if (
+    req.body &&
+    typeof req.body === "object" &&
+    "blockedReason" in req.body &&
+    parsed.data.status !== "BLOCKED"
+  ) {
+    res.status(400).json({ error: "blockedReason can only be set when status is BLOCKED" });
+    return;
+  }
 
   if (
     CAMPAIGN_OPS_TASK_TYPES.has(existing.taskType) &&
@@ -339,6 +360,7 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
   let parsedCreate: z.infer<typeof createVoluumCampaignSchema> | null = null;
   let parsedTakeLive: z.infer<typeof takeCampaignLiveSchema> | null = null;
   let parsedFindWinners: z.infer<typeof findWinnersSchema> | null = null;
+  let completionPayload: Record<string, unknown> = {};
 
   if (platformFromType !== null) {
     if (task.relatedBatchId == null) {
@@ -351,6 +373,7 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       return;
     }
     parsedCreate = parsed.data;
+    completionPayload = parsed.data;
   } else if (task.taskType === "take_campaign_live") {
     if (task.relatedCampaignId == null) {
       res.status(400).json({ error: "Task missing relatedCampaignId" });
@@ -362,6 +385,7 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       return;
     }
     parsedTakeLive = parsed.data;
+    completionPayload = parsed.data;
   } else if (task.taskType === "find_winners") {
     if (task.relatedCampaignId == null) {
       res.status(400).json({ error: "Task missing relatedCampaignId" });
@@ -373,6 +397,7 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       return;
     }
     parsedFindWinners = parsed.data;
+    completionPayload = parsed.data;
   } else if (task.taskType === "all_traffic_sources_tested") {
     // no payload, just an ack
   } else {
@@ -383,6 +408,11 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
   }
 
   try {
+    const actor = await getEmployeeFromToken(req);
+    if (!actor) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
     const result = await db.transaction(async (tx) => {
       let resolvedCampaignId: number | null = task.relatedCampaignId ?? null;
 
@@ -472,6 +502,9 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
         .set({
           status: "DONE",
           relatedCampaignId: resolvedCampaignId,
+          completedAt: new Date(),
+          completedByEmployeeId: actor.id,
+          completionPayload,
         })
         .where(eq(todoTasksTable.id, taskId))
         .returning();
