@@ -86,6 +86,10 @@ router.get("/auth/me", async (req, res): Promise<void> => {
     res.status(401).json({ error: "Employee not found" });
     return;
   }
+  if (employee.status === "inactive") {
+    res.status(401).json({ error: "Account is inactive" });
+    return;
+  }
 
   const { passwordHash: _, ...employeeData } = employee;
 
@@ -106,6 +110,7 @@ export async function getEmployeeFromToken(req: import("express").Request) {
     const employeeId = parseInt(decoded.split(":")[0], 10);
     if (isNaN(employeeId)) return null;
     const [employee] = await db.select().from(employeesTable).where(eq(employeesTable.id, employeeId));
+    if (employee?.status === "inactive") return null;
     return employee ?? null;
   } catch {
     return null;

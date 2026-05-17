@@ -371,6 +371,384 @@ describe("route scoped invariants", { concurrency: false }, () => {
     assert.equal(allowed.response.status, 200);
   });
 
+  test("team management scopes admin access to assigned workspaces", async () => {
+    const assignedWs = await createWorkspace("team-scope-assigned");
+    const blockedWs = await createWorkspace("team-scope-blocked");
+    const adminId = await createEmployee("admin");
+    const visibleEmployeeId = await createEmployee();
+    const hiddenEmployeeId = await createEmployee();
+    await assign(adminId, assignedWs);
+    await assign(visibleEmployeeId, assignedWs);
+    await assign(hiddenEmployeeId, blockedWs);
+
+    const globalList = await request("GET", "/employees?status=all", adminId);
+    assert.equal(globalList.response.status, 200);
+    const globalIds = globalList.json.map((employee: { id: number }) => employee.id);
+    assert.ok(globalIds.includes(adminId));
+    assert.ok(globalIds.includes(visibleEmployeeId));
+    assert.ok(!globalIds.includes(hiddenEmployeeId));
+    assert.ok(globalList.json.every((employee: Record<string, unknown>) => !("passwordHash" in employee)));
+
+    const deniedWorkspaceList = await request("GET", `/employees?workspace_id=${blockedWs}`, adminId);
+    assert.equal(deniedWorkspaceList.response.status, 403);
+
+    const deniedDetail = await request("GET", `/employees/${hiddenEmployeeId}`, adminId);
+    assert.equal(deniedDetail.response.status, 403);
+
+    const deniedPatch = await request("PATCH", `/employees/${hiddenEmployeeId}`, adminId, {
+      name: "Out Of Scope Edit",
+    });
+    assert.equal(deniedPatch.response.status, 403);
+
+    const deniedDelete = await request("DELETE", `/employees/${hiddenEmployeeId}`, adminId);
+    assert.equal(deniedDelete.response.status, 403);
+    const [hiddenAfterDelete] = await db
+      .select({ status: employeesTable.status })
+      .from(employeesTable)
+      .where(eq(employeesTable.id, hiddenEmployeeId));
+    assert.equal(hiddenAfterDelete.status, "active");
+
+    const multiWorkspaceEmployeeId = await createEmployee();
+    await assign(multiWorkspaceEmployeeId, assignedWs);
+    await assign(multiWorkspaceEmployeeId, blockedWs);
+    const globalListAfterSharedAssignment = await request("GET", "/employees?status=all", adminId);
+    assert.equal(globalListAfterSharedAssignment.response.status, 200);
+    assert.ok(!globalListAfterSharedAssignment.json.some((employee: { id: number }) => employee.id === multiWorkspaceEmployeeId));
+
+    const workspaceListAfterSharedAssignment = await request("GET", `/employees?workspace_id=${assignedWs}&status=all`, adminId);
+    assert.equal(workspaceListAfterSharedAssignment.response.status, 200);
+    assert.ok(!workspaceListAfterSharedAssignment.json.some((employee: { id: number }) => employee.id === multiWorkspaceEmployeeId));
+
+    const deniedSharedDetail = await request("GET", `/employees/${multiWorkspaceEmployeeId}`, adminId);
+    assert.equal(deniedSharedDetail.response.status, 403);
+  });
+
+  test("admin can create, deactivate, filter, and reactivate team users", async () => {
+    const workspaceId = await createWorkspace("team-management");
+    const adminId = await createEmployee("admin");
+    await assign(adminId, workspaceId);
+    const [network] = await db
+      .insert(affiliateNetworksTable)
+      .values({ workspaceId, name: `Team Network ${Date.now()}`, isActive: true })
+      .returning({ id: affiliateNetworksTable.id });
+    const workerPassword = "TeamMgmtPass123!";
+
+    const created = await request("POST", "/employees", adminId, {
+      name: "QA Worker",
+      email: `qa-worker-${Date.now()}@example.com`,
+      password: workerPassword,
+      role: "employee",
+      workspaceIds: [workspaceId],
+      affiliateNetworkIds: [network.id],
+    });
+    assert.equal(created.response.status, 201);
+    assert.equal(created.json.status, "active");
+    assert.equal(created.json.role, "employee");
+    assert.deepEqual(created.json.workspaceIds, [workspaceId]);
+    assert.deepEqual(created.json.affiliateNetworkIds, [network.id]);
+    assert.equal("passwordHash" in created.json, false);
+    assert.equal("initialPassword" in created.json, false);
+    createdEmployeeIds.push(created.json.id);
+
+    const detail = await request("GET", `/employees/${created.json.id}`, adminId);
+    assert.equal(detail.response.status, 200);
+    assert.deepEqual(detail.json.workspaceIds, [workspaceId]);
+    assert.deepEqual(detail.json.affiliateNetworkIds, [network.id]);
+    assert.equal("passwordHash" in detail.json, false);
+
+    const edited = await request("PATCH", `/employees/${created.json.id}`, adminId, {
+      name: "QA Worker Edited",
+      email: `qa-worker-edited-${Date.now()}@example.com`,
+    });
+    assert.equal(edited.response.status, 200);
+    assert.equal(edited.json.name, "QA Worker Edited");
+    assert.deepEqual(edited.json.workspaceIds, [workspaceId]);
+    assert.deepEqual(edited.json.affiliateNetworkIds, [network.id]);
+    assert.equal("passwordHash" in edited.json, false);
+
+    const activeList = await request("GET", "/employees", adminId);
+    assert.equal(activeList.response.status, 200);
+    assert.ok(activeList.json.some((employee: { id: number }) => employee.id === created.json.id));
+    assert.ok(activeList.json.every((employee: Record<string, unknown>) => !("passwordHash" in employee)));
+
+    const loginBeforeDeactivate = await fetch(`${baseUrl}/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: edited.json.email, password: workerPassword }),
+    });
+    assert.equal(loginBeforeDeactivate.status, 200);
+    const loginBeforeDeactivateJson = (await loginBeforeDeactivate.json()) as { token: string };
+
+    const activatedWorkspace = await request("PATCH", `/workspaces/${workspaceId}/activate`, created.json.id);
+    assert.equal(activatedWorkspace.response.status, 200);
+
+    const [historicalBatch] = await db
+      .insert(testingBatchesTable)
+      .values({
+        workspaceId,
+        employeeId: created.json.id,
+        batchName: `Historical Batch ${Date.now()}`,
+        affiliateNetwork: "Team Network",
+        geo: "US",
+        trafficSource: "Manual",
+        batchTag: `historical_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
+      })
+      .returning({ id: testingBatchesTable.id });
+    const [historicalTask] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId,
+        employeeId: created.json.id,
+        relatedBatchId: historicalBatch.id,
+        taskType: "find_winners",
+        title: "Historical worker task",
+      })
+      .returning({ id: todoTasksTable.id });
+
+    const deactivated = await request("DELETE", `/employees/${created.json.id}`, adminId);
+    assert.equal(deactivated.response.status, 200);
+    assert.equal(deactivated.json.status, "inactive");
+    assert.equal(deactivated.json.activeWorkspaceId, null);
+    assert.equal("passwordHash" in deactivated.json, false);
+
+    const [historicalBatchAfterDeactivate] = await db
+      .select({
+        employeeId: testingBatchesTable.employeeId,
+        employeeName: employeesTable.name,
+        employeeStatus: employeesTable.status,
+      })
+      .from(testingBatchesTable)
+      .leftJoin(employeesTable, eq(testingBatchesTable.employeeId, employeesTable.id))
+      .where(eq(testingBatchesTable.id, historicalBatch.id));
+    assert.equal(historicalBatchAfterDeactivate.employeeId, created.json.id);
+    assert.equal(historicalBatchAfterDeactivate.employeeName, "QA Worker Edited");
+    assert.equal(historicalBatchAfterDeactivate.employeeStatus, "inactive");
+
+    const [historicalTaskAfterDeactivate] = await db
+      .select({
+        employeeId: todoTasksTable.employeeId,
+        employeeName: employeesTable.name,
+        employeeStatus: employeesTable.status,
+      })
+      .from(todoTasksTable)
+      .leftJoin(employeesTable, eq(todoTasksTable.employeeId, employeesTable.id))
+      .where(eq(todoTasksTable.id, historicalTask.id));
+    assert.equal(historicalTaskAfterDeactivate.employeeId, created.json.id);
+    assert.equal(historicalTaskAfterDeactivate.employeeName, "QA Worker Edited");
+    assert.equal(historicalTaskAfterDeactivate.employeeStatus, "inactive");
+
+    const defaultListAfterDeactivate = await request("GET", "/employees", adminId);
+    assert.equal(defaultListAfterDeactivate.response.status, 200);
+    assert.ok(!defaultListAfterDeactivate.json.some((employee: { id: number }) => employee.id === created.json.id));
+
+    const workspaceDefaultListAfterDeactivate = await request("GET", `/employees?workspace_id=${workspaceId}`, adminId);
+    assert.equal(workspaceDefaultListAfterDeactivate.response.status, 200);
+    assert.ok(!workspaceDefaultListAfterDeactivate.json.some((employee: { id: number }) => employee.id === created.json.id));
+
+    const activeAfterDeactivate = await request("GET", "/employees?status=active", adminId);
+    assert.equal(activeAfterDeactivate.response.status, 200);
+    assert.ok(!activeAfterDeactivate.json.some((employee: { id: number }) => employee.id === created.json.id));
+
+    const inactiveList = await request("GET", "/employees?status=inactive", adminId);
+    assert.equal(inactiveList.response.status, 200);
+    assert.ok(inactiveList.json.some((employee: { id: number }) => employee.id === created.json.id));
+
+    const allList = await request("GET", "/employees?status=all", adminId);
+    assert.equal(allList.response.status, 200);
+    assert.ok(allList.json.some((employee: { id: number }) => employee.id === created.json.id));
+
+    const login = await fetch(`${baseUrl}/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: edited.json.email, password: workerPassword }),
+    });
+    assert.equal(login.status, 401);
+
+    const meAfterDeactivate = await fetch(`${baseUrl}/auth/me`, {
+      headers: { authorization: `Bearer ${loginBeforeDeactivateJson.token}` },
+    });
+    assert.equal(meAfterDeactivate.status, 401);
+
+    const reactivated = await request("PATCH", `/employees/${created.json.id}`, adminId, {
+      status: "active",
+      workspaceIds: [workspaceId],
+      affiliateNetworkIds: [network.id],
+    });
+    assert.equal(reactivated.response.status, 200);
+    assert.equal(reactivated.json.status, "active");
+    assert.equal("passwordHash" in reactivated.json, false);
+  });
+
+  test("team management preserves assignment integrity across role changes", async () => {
+    const workspaceId = await createWorkspace("team-management-roles");
+    const adminId = await createEmployee("admin");
+    await assign(adminId, workspaceId);
+    const [network] = await db
+      .insert(affiliateNetworksTable)
+      .values({ workspaceId, name: `Role Network ${Date.now()}`, isActive: true })
+      .returning({ id: affiliateNetworksTable.id });
+
+    const createdAdmin = await request("POST", "/employees", adminId, {
+      name: "Role Switcher",
+      email: `role-switcher-${Date.now()}@example.com`,
+      role: "admin",
+      workspaceIds: [workspaceId, workspaceId],
+      affiliateNetworkIds: [network.id, network.id],
+    });
+    assert.equal(createdAdmin.response.status, 201);
+    assert.equal(createdAdmin.json.role, "admin");
+    assert.deepEqual(createdAdmin.json.workspaceIds, [workspaceId]);
+    assert.deepEqual(createdAdmin.json.affiliateNetworkIds, []);
+    createdEmployeeIds.push(createdAdmin.json.id);
+
+    const invalidWorker = await request("PATCH", `/employees/${createdAdmin.json.id}`, adminId, {
+      role: "employee",
+    });
+    assert.equal(invalidWorker.response.status, 400);
+
+    const worker = await request("PATCH", `/employees/${createdAdmin.json.id}`, adminId, {
+      role: "employee",
+      workspaceIds: [workspaceId, workspaceId],
+      affiliateNetworkIds: [network.id, network.id],
+    });
+    assert.equal(worker.response.status, 200);
+    assert.equal(worker.json.role, "employee");
+    assert.deepEqual(worker.json.workspaceIds, [workspaceId]);
+    assert.deepEqual(worker.json.affiliateNetworkIds, [network.id]);
+
+    const workspaceAssignments = await db
+      .select()
+      .from(employeeWorkspaceAssignmentsTable)
+      .where(eq(employeeWorkspaceAssignmentsTable.employeeId, createdAdmin.json.id));
+    assert.equal(workspaceAssignments.length, 1);
+
+    const workerAssignments = await db
+      .select()
+      .from(workerAffiliateNetworksTable)
+      .where(eq(workerAffiliateNetworksTable.employeeId, createdAdmin.json.id));
+    assert.equal(workerAssignments.length, 1);
+    assert.equal(workerAssignments[0].workspaceId, workspaceId);
+    assert.equal(workerAssignments[0].affiliateNetworkId, network.id);
+
+    const inactiveWithoutNetworks = await request("PATCH", `/employees/${createdAdmin.json.id}`, adminId, {
+      status: "inactive",
+      affiliateNetworkIds: [],
+    });
+    assert.equal(inactiveWithoutNetworks.response.status, 200);
+    assert.equal(inactiveWithoutNetworks.json.status, "inactive");
+    assert.deepEqual(inactiveWithoutNetworks.json.affiliateNetworkIds, []);
+
+    const invalidReactivation = await request("PATCH", `/employees/${createdAdmin.json.id}`, adminId, {
+      status: "active",
+    });
+    assert.equal(invalidReactivation.response.status, 400);
+
+    const reactivated = await request("PATCH", `/employees/${createdAdmin.json.id}`, adminId, {
+      status: "active",
+      affiliateNetworkIds: [network.id],
+    });
+    assert.equal(reactivated.response.status, 200);
+    assert.equal(reactivated.json.status, "active");
+    assert.deepEqual(reactivated.json.affiliateNetworkIds, [network.id]);
+
+    const roleBackToAdmin = await request("PATCH", `/employees/${createdAdmin.json.id}`, adminId, {
+      role: "admin",
+    });
+    assert.equal(roleBackToAdmin.response.status, 200);
+    assert.equal(roleBackToAdmin.json.role, "admin");
+    assert.deepEqual(roleBackToAdmin.json.affiliateNetworkIds, []);
+
+    const workerAssignmentsAfterAdmin = await db
+      .select()
+      .from(workerAffiliateNetworksTable)
+      .where(eq(workerAffiliateNetworksTable.employeeId, createdAdmin.json.id));
+    assert.equal(workerAssignmentsAfterAdmin.length, 0);
+  });
+
+  test("team management rejects worker creation without affiliate networks and non-admin changes", async () => {
+    const workspaceId = await createWorkspace("team-management-reject");
+    const adminId = await createEmployee("admin");
+    const workerId = await createEmployee();
+    await assign(adminId, workspaceId);
+    await assign(workerId, workspaceId);
+
+    const missingNetwork = await request("POST", "/employees", adminId, {
+      name: "No Network Worker",
+      email: `no-network-${Date.now()}@example.com`,
+      role: "employee",
+      workspaceIds: [workspaceId],
+      affiliateNetworkIds: [],
+    });
+    assert.equal(missingNetwork.response.status, 400);
+
+    const otherWorkspaceId = await createWorkspace("team-management-other");
+    const [otherNetwork] = await db
+      .insert(affiliateNetworksTable)
+      .values({ workspaceId: otherWorkspaceId, name: `Other Network ${Date.now()}`, isActive: true })
+      .returning({ id: affiliateNetworksTable.id });
+
+    const wrongWorkspaceNetwork = await request("POST", "/employees", adminId, {
+      name: "Wrong Network Worker",
+      email: `wrong-network-${Date.now()}@example.com`,
+      role: "employee",
+      workspaceIds: [workspaceId],
+      affiliateNetworkIds: [otherNetwork.id],
+    });
+    assert.equal(wrongWorkspaceNetwork.response.status, 400);
+
+    const staleWorkerId = await createEmployee();
+    await assign(staleWorkerId, workspaceId);
+    await db.insert(workerAffiliateNetworksTable).values({
+      workspaceId: otherWorkspaceId,
+      employeeId: staleWorkerId,
+      affiliateNetworkId: otherNetwork.id,
+    });
+    await db
+      .update(employeesTable)
+      .set({ status: "inactive" })
+      .where(eq(employeesTable.id, staleWorkerId));
+
+    const invalidReactivation = await request("PATCH", `/employees/${staleWorkerId}`, adminId, {
+      status: "active",
+    });
+    assert.equal(invalidReactivation.response.status, 400);
+
+    const inaccessibleWorkspace = await request("POST", "/employees", adminId, {
+      name: "Inaccessible Workspace Worker",
+      email: `inaccessible-workspace-${Date.now()}@example.com`,
+      role: "employee",
+      workspaceIds: [otherWorkspaceId],
+      affiliateNetworkIds: [otherNetwork.id],
+    });
+    assert.equal(inaccessibleWorkspace.response.status, 403);
+
+    const forbidden = await request("POST", "/employees", workerId, {
+      name: "Forbidden Worker",
+      email: `forbidden-${Date.now()}@example.com`,
+      role: "employee",
+      workspaceIds: [workspaceId],
+      affiliateNetworkIds: [],
+    });
+    assert.equal(forbidden.response.status, 403);
+
+    const forbiddenGlobalList = await request("GET", "/employees", workerId);
+    assert.equal(forbiddenGlobalList.response.status, 403);
+
+    const forbiddenWorkspaceList = await request("GET", `/employees?workspace_id=${workspaceId}`, workerId);
+    assert.equal(forbiddenWorkspaceList.response.status, 403);
+
+    const forbiddenDetail = await request("GET", `/employees/${adminId}`, workerId);
+    assert.equal(forbiddenDetail.response.status, 403);
+
+    const forbiddenPatch = await request("PATCH", `/employees/${workerId}`, workerId, {
+      name: "Worker Self Edit",
+    });
+    assert.equal(forbiddenPatch.response.status, 403);
+
+    const forbiddenDelete = await request("DELETE", `/employees/${adminId}`, workerId);
+    assert.equal(forbiddenDelete.response.status, 403);
+  });
+
   test("goals are scoped to workspace membership", async () => {
     const wsOne = await createWorkspace("goals-one");
     const wsTwo = await createWorkspace("goals-two");
