@@ -217,21 +217,22 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  if (
-    CAMPAIGN_OPS_TASK_TYPES.has(existing.taskType) &&
-    parsed.data.status === "DONE" &&
-    existing.status !== "DONE"
-  ) {
-    res.status(400).json({
-      error: "CampaignOps tasks must be completed via POST /todo-tasks/:id/complete",
-    });
-    return;
-  }
-
   if (parsed.data.status === "DONE" && existing.status !== "DONE") {
     const actor = await getEmployeeFromToken(req);
     if (!actor) {
       res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (actor.role !== "admin") {
+      res.status(403).json({
+        error: "Tasks can only be marked DONE by completing the task form",
+      });
+      return;
+    }
+    if (CAMPAIGN_OPS_TASK_TYPES.has(existing.taskType)) {
+      res.status(400).json({
+        error: "CampaignOps tasks must be completed via POST /todo-tasks/:id/complete",
+      });
       return;
     }
     await emit({
@@ -278,11 +279,11 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
 // POST /todo-tasks/:id/complete
 // Body shape varies by task.taskType:
 //  - create_voluum_campaign_ios | create_voluum_campaign_android:
-//      { trafficSourceId, voluumCampaignId, voluumCampaignName, campaignName, campaignUrl? }
+//      { campaignUrl }
 //      → inserts a Campaign(status=voluum_created), stores ids back on the
 //        task (relatedCampaignId), marks task DONE, emits TaskCompleted.
 //  - take_campaign_live:
-//      { trafficSourceCampaignId?, trafficSourceCampaignUrl?, notes? }
+//      { trafficSourceCampaignId }
 //      → updates Campaign(status=live, liveStartedAt=now()), marks DONE, emits.
 //  - find_winners:
 //      success: { winnersCount, revenue, cost, clicks?, conversions?, notes? }
@@ -292,24 +293,10 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
 //      no body — terminal acknowledgement; just mark DONE.
 
 const createVoluumCampaignSchema = z.object({
-  trafficSourceId: z.number().int().positive(),
-  voluumCampaignId: z.string().trim().min(1),
-  voluumCampaignName: z.string().trim().min(1),
-  campaignName: z.string().trim().min(1),
-  campaignUrl: z.string().trim().nullable().optional(),
+  campaignUrl: z.string().trim().min(1),
 });
 const takeCampaignLiveSchema = z.object({
-  trafficSourceCampaignId: z.string().trim().nullable().optional(),
-  trafficSourceCampaignUrl: z.string().trim().nullable().optional(),
-  notes: z.string().nullable().optional(),
-}).superRefine((data, ctx) => {
-  if (!data.trafficSourceCampaignId && !data.trafficSourceCampaignUrl) {
-    ctx.addIssue({
-      code: "custom",
-      message: "trafficSourceCampaignId or trafficSourceCampaignUrl is required",
-      path: ["trafficSourceCampaignId"],
-    });
-  }
+  trafficSourceCampaignId: z.string().trim().min(1),
 });
 const findWinnersSuccessSchema = z.object({
   outcome: z.literal("success").optional(),
@@ -326,6 +313,31 @@ const findWinnersFailureSchema = z.object({
   notes: z.string().nullable().optional(),
 });
 const findWinnersSchema = z.union([findWinnersSuccessSchema, findWinnersFailureSchema]);
+
+async function resolveTaskTrafficSourceId(
+  task: Pick<
+    typeof todoTasksTable.$inferSelect,
+    "workspaceId" | "relatedBatchId" | "trafficSourceId"
+  >,
+): Promise<number | null> {
+  if (task.trafficSourceId != null) return task.trafficSourceId;
+  if (task.relatedBatchId == null) return null;
+
+  const [batch] = await db
+    .select({
+      currentWorkspaceTrafficSourceId: testingBatchesTable.currentWorkspaceTrafficSourceId,
+    })
+    .from(testingBatchesTable)
+    .where(
+      and(
+        eq(testingBatchesTable.id, task.relatedBatchId),
+        eq(testingBatchesTable.workspaceId, task.workspaceId),
+      ),
+    )
+    .limit(1);
+
+  return batch?.currentWorkspaceTrafficSourceId ?? null;
+}
 
 router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
   const taskId = Number(req.params.id);
@@ -367,7 +379,19 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    completion = { kind: "create_voluum_campaign", platform: platformFromType, ...parsed.data };
+    const trafficSourceId = await resolveTaskTrafficSourceId(task);
+    if (trafficSourceId == null) {
+      res.status(400).json({ error: "Task is missing trafficSourceId" });
+      return;
+    }
+    completion = {
+      kind: "create_voluum_campaign",
+      platform: platformFromType,
+      ...parsed.data,
+      trafficSourceId,
+      campaignName: task.title,
+      voluumCampaignName: task.title,
+    };
   } else if (task.taskType === "take_campaign_live") {
     if (task.relatedCampaignId == null) {
       res.status(400).json({ error: "Task missing relatedCampaignId" });

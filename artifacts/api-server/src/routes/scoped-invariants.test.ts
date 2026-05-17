@@ -837,10 +837,7 @@ describe("route scoped invariants", { concurrency: false }, () => {
       .returning({ id: todoTasksTable.id });
 
     const { response, json } = await request("POST", `/todo-tasks/${task.id}/complete`, seed.employeeId, {
-      trafficSourceId: seed.sourceOneId,
-      voluumCampaignId: `voluum-${Date.now()}`,
-      voluumCampaignName: "Voluum Campaign",
-      campaignName: "Manual Campaign",
+      campaignUrl: "https://example.test/ios",
     });
     assert.equal(response.status, 200);
     assert.equal(json.status, "DONE");
@@ -850,6 +847,9 @@ describe("route scoped invariants", { concurrency: false }, () => {
       .from(campaignsTable)
       .where(eq(campaignsTable.id, json.campaignId));
     assert.equal(campaign.status, "voluum_created");
+    assert.equal(campaign.trafficSourceId, seed.sourceOneId);
+    assert.equal(campaign.campaignUrl, "https://example.test/ios");
+    assert.equal(campaign.voluumCampaignId, null);
 
     const [runAfterIos] = await db
       .select()
@@ -882,10 +882,7 @@ describe("route scoped invariants", { concurrency: false }, () => {
       })
       .returning({ id: todoTasksTable.id });
     const android = await request("POST", `/todo-tasks/${androidTask.id}/complete`, seed.employeeId, {
-      trafficSourceId: seed.sourceOneId,
-      voluumCampaignId: `voluum-android-${Date.now()}`,
-      voluumCampaignName: "Android Voluum Campaign",
-      campaignName: "Android Manual Campaign",
+      campaignUrl: "https://example.test/android",
     });
     assert.equal(android.response.status, 200);
 
@@ -895,6 +892,12 @@ describe("route scoped invariants", { concurrency: false }, () => {
       .where(and(eq(batchTrafficSourceRunsTable.batchId, seed.batchId), eq(batchTrafficSourceRunsTable.trafficSourceId, seed.sourceOneId)));
     assert.equal(runAfterAndroid.iosCampaignId, campaign.id);
     assert.equal(runAfterAndroid.androidCampaignId, android.json.campaignId);
+
+    const [androidCampaign] = await db
+      .select({ campaignUrl: campaignsTable.campaignUrl })
+      .from(campaignsTable)
+      .where(eq(campaignsTable.id, android.json.campaignId));
+    assert.equal(androidCampaign.campaignUrl, "https://example.test/android");
   });
 
   test("typed CampaignOps completion rolls back on follow-up failure", async () => {
@@ -919,10 +922,7 @@ describe("route scoped invariants", { concurrency: false }, () => {
       .returning({ id: todoTasksTable.id });
 
     const { response } = await request("POST", `/todo-tasks/${task.id}/complete`, seed.employeeId, {
-      trafficSourceId: seed.sourceOneId,
-      voluumCampaignId: `rollback-${Date.now()}`,
-      voluumCampaignName: "Rollback Campaign",
-      campaignName: "Rollback Campaign",
+      campaignUrl: "https://example.test/rollback",
     });
     assert.equal(response.status, 500);
 
@@ -967,10 +967,7 @@ describe("route scoped invariants", { concurrency: false }, () => {
       .returning({ id: todoTasksTable.id });
 
     const payload = {
-      trafficSourceId: seed.sourceOneId,
-      voluumCampaignId: `duplicate-${Date.now()}`,
-      voluumCampaignName: "Duplicate Campaign",
-      campaignName: "Duplicate Campaign",
+      campaignUrl: "https://example.test/duplicate",
     };
 
     const first = await request("POST", `/todo-tasks/${task.id}/complete`, seed.employeeId, payload);
@@ -1000,21 +997,59 @@ describe("route scoped invariants", { concurrency: false }, () => {
 
   test("generic PATCH cannot complete CampaignOps tasks", async () => {
     const seed = await seedCampaignOpsBase();
-    const [task] = await db
-      .insert(todoTasksTable)
+    const adminId = await createEmployee("admin");
+    await assign(adminId, seed.workspaceId);
+    const [campaign] = await db
+      .insert(campaignsTable)
       .values({
         workspaceId: seed.workspaceId,
-        employeeId: seed.employeeId,
-        relatedBatchId: seed.batchId,
-        taskType: "find_winners",
-        title: "Find winners",
+        batchId: seed.batchId,
+        platform: "ios",
+        campaignName: "iOS Source One",
+        trafficSourceId: seed.sourceOneId,
+        status: "voluum_created",
       })
+      .returning({ id: campaignsTable.id });
+
+    const tasks = await db
+      .insert(todoTasksTable)
+      .values([
+        {
+          workspaceId: seed.workspaceId,
+          employeeId: seed.employeeId,
+          relatedBatchId: seed.batchId,
+          taskType: "create_voluum_campaign_ios",
+          title: "Create iOS campaign",
+          trafficSourceId: seed.sourceOneId,
+        },
+        {
+          workspaceId: seed.workspaceId,
+          employeeId: seed.employeeId,
+          relatedBatchId: seed.batchId,
+          taskType: "create_voluum_campaign_android",
+          title: "Create Android campaign",
+          trafficSourceId: seed.sourceOneId,
+        },
+        {
+          workspaceId: seed.workspaceId,
+          employeeId: seed.employeeId,
+          relatedBatchId: seed.batchId,
+          relatedCampaignId: campaign.id,
+          taskType: "take_campaign_live",
+          title: "Take campaign live",
+        },
+      ])
       .returning({ id: todoTasksTable.id });
 
-    const { response } = await request("PATCH", `/todo-tasks/${task.id}`, seed.employeeId, { status: "DONE" });
-    assert.equal(response.status, 400);
+    for (const task of tasks) {
+      const { response } = await request("PATCH", `/todo-tasks/${task.id}`, seed.employeeId, { status: "DONE" });
+      assert.equal(response.status, 403);
 
-    const fakeCompletion = await request("PATCH", `/todo-tasks/${task.id}`, seed.employeeId, {
+      const adminOverride = await request("PATCH", `/todo-tasks/${task.id}`, adminId, { status: "DONE" });
+      assert.equal(adminOverride.response.status, 400);
+    }
+
+    const fakeCompletion = await request("PATCH", `/todo-tasks/${tasks[0]!.id}`, seed.employeeId, {
       completionPayload: {
         winnersCount: 1,
         revenue: 100,
@@ -1030,10 +1065,40 @@ describe("route scoped invariants", { concurrency: false }, () => {
         completionPayload: todoTasksTable.completionPayload,
       })
       .from(todoTasksTable)
-      .where(eq(todoTasksTable.id, task.id));
+      .where(eq(todoTasksTable.id, tasks[0]!.id));
     assert.equal(taskAfter.status, "TODO");
     assert.equal(taskAfter.completedAt, null);
     assert.equal(taskAfter.completionPayload, null);
+
+    const completedTasks = await db
+      .select({ id: todoTasksTable.id })
+      .from(todoTasksTable)
+      .where(and(eq(todoTasksTable.relatedBatchId, seed.batchId), eq(todoTasksTable.status, "DONE")));
+    assert.equal(completedTasks.length, 0);
+  });
+
+  test("workers cannot complete tasks through generic PATCH", async () => {
+    const seed = await seedCampaignOpsBase();
+    const [task] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        employeeId: seed.employeeId,
+        relatedBatchId: seed.batchId,
+        taskType: "PAUSE_TRAFFIC_SOURCE_CAMPAIGNS",
+        title: "Pause traffic source campaigns",
+      })
+      .returning({ id: todoTasksTable.id });
+
+    const { response, json } = await request("PATCH", `/todo-tasks/${task.id}`, seed.employeeId, { status: "DONE" });
+    assert.equal(response.status, 403);
+    assert.match(json.error, /task form/i);
+
+    const [taskAfter] = await db
+      .select({ status: todoTasksTable.status })
+      .from(todoTasksTable)
+      .where(eq(todoTasksTable.id, task.id));
+    assert.equal(taskAfter.status, "TODO");
   });
 
   test("generic PATCH rejects taskType mutation bypass", async () => {
@@ -1085,10 +1150,7 @@ describe("route scoped invariants", { concurrency: false }, () => {
     assert.equal(patch.response.status, 403);
 
     const complete = await request("POST", `/todo-tasks/${task.id}/complete`, otherEmployeeId, {
-      trafficSourceId: seed.sourceOneId,
-      voluumCampaignId: "voluum-campaign-1",
-      voluumCampaignName: "Voluum Campaign 1",
-      campaignName: "Internal Campaign 1",
+      campaignUrl: "https://example.test/forbidden",
     });
     assert.equal(complete.response.status, 403);
 
@@ -1098,6 +1160,181 @@ describe("route scoped invariants", { concurrency: false }, () => {
       .where(eq(todoTasksTable.id, task.id));
     assert.equal(taskAfter.status, "TODO");
     assert.equal(taskAfter.relatedCampaignId, null);
+  });
+
+  test("CampaignOps completion requires only worker-entered launch fields", async () => {
+    const seed = await seedCampaignOpsBase();
+    const createTasks = await db
+      .insert(todoTasksTable)
+      .values([
+        {
+          workspaceId: seed.workspaceId,
+          employeeId: seed.employeeId,
+          relatedBatchId: seed.batchId,
+          taskType: "create_voluum_campaign_ios",
+          title: "Create Voluum campaign for manual_alpha_ios iOS",
+          trafficSourceId: seed.sourceOneId,
+        },
+        {
+          workspaceId: seed.workspaceId,
+          employeeId: seed.employeeId,
+          relatedBatchId: seed.batchId,
+          taskType: "create_voluum_campaign_android",
+          title: "Create Voluum campaign for manual_alpha_android Android",
+          trafficSourceId: seed.sourceOneId,
+        },
+      ])
+      .returning({ id: todoTasksTable.id });
+
+    for (const task of createTasks) {
+      const missingUrl = await request("POST", `/todo-tasks/${task.id}/complete`, seed.employeeId, {});
+      assert.equal(missingUrl.response.status, 400);
+
+      const blankUrl = await request("POST", `/todo-tasks/${task.id}/complete`, seed.employeeId, {
+        campaignUrl: "   ",
+      });
+      assert.equal(blankUrl.response.status, 400);
+    }
+
+    const [campaign] = await db
+      .insert(campaignsTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        batchId: seed.batchId,
+        platform: "ios",
+        campaignName: "iOS Source One",
+        trafficSourceId: seed.sourceOneId,
+        status: "voluum_created",
+      })
+      .returning({ id: campaignsTable.id });
+    const [takeLiveTask] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        employeeId: seed.employeeId,
+        relatedBatchId: seed.batchId,
+        relatedCampaignId: campaign.id,
+        taskType: "take_campaign_live",
+        title: "Take campaign live",
+      })
+      .returning({ id: todoTasksTable.id });
+
+    const missingCampaignId = await request("POST", `/todo-tasks/${takeLiveTask.id}/complete`, seed.employeeId, {});
+    assert.equal(missingCampaignId.response.status, 400);
+
+    const blankCampaignId = await request("POST", `/todo-tasks/${takeLiveTask.id}/complete`, seed.employeeId, {
+      trafficSourceCampaignId: "   ",
+    });
+    assert.equal(blankCampaignId.response.status, 400);
+
+    const changedTasks = await db
+      .select({ status: todoTasksTable.status, relatedCampaignId: todoTasksTable.relatedCampaignId })
+      .from(todoTasksTable)
+      .where(
+        and(
+          eq(todoTasksTable.relatedBatchId, seed.batchId),
+          eq(todoTasksTable.status, "DONE"),
+        ),
+      );
+    assert.equal(changedTasks.length, 0);
+  });
+
+  test("CampaignOps completion derives traffic source from task or batch context", async () => {
+    const seed = await seedCampaignOpsBase();
+
+    const [missingSourceTask] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        employeeId: seed.employeeId,
+        relatedBatchId: seed.batchId,
+        taskType: "create_voluum_campaign_ios",
+        title: "Create campaign without source",
+      })
+      .returning({ id: todoTasksTable.id });
+
+    const missingSource = await request("POST", `/todo-tasks/${missingSourceTask.id}/complete`, seed.employeeId, {
+      campaignUrl: "https://example.test/missing-source",
+    });
+    assert.equal(missingSource.response.status, 400);
+
+    const [missingSourceTaskAfter] = await db
+      .select({ status: todoTasksTable.status, relatedCampaignId: todoTasksTable.relatedCampaignId })
+      .from(todoTasksTable)
+      .where(eq(todoTasksTable.id, missingSourceTask.id));
+    assert.equal(missingSourceTaskAfter.status, "TODO");
+    assert.equal(missingSourceTaskAfter.relatedCampaignId, null);
+
+    await db
+      .update(todoTasksTable)
+      .set({ status: "BLOCKED", blockedReason: "Missing traffic source" })
+      .where(eq(todoTasksTable.id, missingSourceTask.id));
+
+    await db
+      .update(testingBatchesTable)
+      .set({ currentWorkspaceTrafficSourceId: seed.sourceTwoId })
+      .where(eq(testingBatchesTable.id, seed.batchId));
+    await db.insert(batchTrafficSourceRunsTable).values({
+      workspaceId: seed.workspaceId,
+      batchId: seed.batchId,
+      trafficSourceId: seed.sourceTwoId,
+      position: 2,
+      status: "active",
+      iosStatus: "active",
+      androidStatus: "active",
+      startedAt: new Date(),
+    });
+
+    const [batchSourceTask] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        employeeId: seed.employeeId,
+        relatedBatchId: seed.batchId,
+        taskType: "create_voluum_campaign_android",
+        title: "Create campaign from batch source",
+      })
+      .returning({ id: todoTasksTable.id });
+    const batchSource = await request("POST", `/todo-tasks/${batchSourceTask.id}/complete`, seed.employeeId, {
+      campaignUrl: "https://example.test/batch-source",
+    });
+    assert.equal(batchSource.response.status, 200);
+
+    const [batchSourceCampaign] = await db
+      .select()
+      .from(campaignsTable)
+      .where(eq(campaignsTable.id, batchSource.json.campaignId));
+    assert.equal(batchSourceCampaign.trafficSourceId, seed.sourceTwoId);
+    assert.equal(batchSourceCampaign.campaignUrl, "https://example.test/batch-source");
+
+    const otherWorkspaceId = await createWorkspace("foreign-source");
+    const [foreignSource] = await db
+      .insert(workspaceTrafficSourcesTable)
+      .values({ workspaceId: otherWorkspaceId, name: `Foreign Source ${Date.now()}`, position: 1, isActive: true })
+      .returning({ id: workspaceTrafficSourcesTable.id });
+    const [foreignSourceTask] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        employeeId: seed.employeeId,
+        relatedBatchId: seed.batchId,
+        taskType: "create_voluum_campaign_ios",
+        title: "Create campaign with foreign source",
+        trafficSourceId: foreignSource.id,
+      })
+      .returning({ id: todoTasksTable.id });
+
+    const foreignSourceCompletion = await request("POST", `/todo-tasks/${foreignSourceTask.id}/complete`, seed.employeeId, {
+      campaignUrl: "https://example.test/foreign-source",
+    });
+    assert.equal(foreignSourceCompletion.response.status, 400);
+
+    const [foreignSourceTaskAfter] = await db
+      .select({ status: todoTasksTable.status, relatedCampaignId: todoTasksTable.relatedCampaignId })
+      .from(todoTasksTable)
+      .where(eq(todoTasksTable.id, foreignSourceTask.id));
+    assert.equal(foreignSourceTaskAfter.status, "TODO");
+    assert.equal(foreignSourceTaskAfter.relatedCampaignId, null);
   });
 
   test("batch owner can update a related task assigned to another worker", async () => {
@@ -1191,16 +1428,12 @@ describe("route scoped invariants", { concurrency: false }, () => {
 
     const live = await request("POST", `/todo-tasks/${takeLive.id}/complete`, seed.employeeId, {
       trafficSourceCampaignId: "ts-campaign-1",
-      trafficSourceCampaignUrl: "https://example.test/campaign",
-      notes: "live notes",
     });
     assert.equal(live.response.status, 200);
     assert.equal(live.json.completedByEmployeeId, seed.employeeId);
     assert.ok(live.json.completedAt);
     assert.deepEqual(live.json.completionPayload, {
       trafficSourceCampaignId: "ts-campaign-1",
-      trafficSourceCampaignUrl: "https://example.test/campaign",
-      notes: "live notes",
     });
 
     const [completedTakeLiveTask] = await db
@@ -1215,8 +1448,6 @@ describe("route scoped invariants", { concurrency: false }, () => {
     assert.equal(completedTakeLiveTask.completedByEmployeeId, seed.employeeId);
     assert.deepEqual(completedTakeLiveTask.completionPayload, {
       trafficSourceCampaignId: "ts-campaign-1",
-      trafficSourceCampaignUrl: "https://example.test/campaign",
-      notes: "live notes",
     });
 
     const [liveCampaign] = await db

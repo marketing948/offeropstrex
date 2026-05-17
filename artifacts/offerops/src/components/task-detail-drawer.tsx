@@ -42,7 +42,7 @@ import {
   getGetTestingBatchQueryKey,
   getListWorkspaceTrafficSourcesQueryKey,
 } from "@workspace/api-client-react";
-import { useQueryClient, useQuery } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useToast } from "@/hooks/use-toast";
@@ -545,32 +545,16 @@ function useCompleteTask() {
   };
 }
 
-type WsTrafficSource = { id: number; name: string };
-
 function CreateVoluumCampaignForm({ task, platform, onCompleted }: { task: TodoTask; platform: Platform; onCompleted: () => void }) {
-  const { activeWorkspaceId } = useWorkspace();
   const complete = useCompleteTask();
-  const { data: trafficSources = [] } = useQuery<WsTrafficSource[]>({
-    queryKey: ["wts", activeWorkspaceId],
-    enabled: !!activeWorkspaceId,
-    queryFn: () => authedJson(`/api/admin/workspace-traffic-sources?workspace_id=${activeWorkspaceId}`),
-  });
-  const [tsId, setTsId] = useState("");
-  const [voluumId, setVoluumId] = useState("");
-  const [voluumName, setVoluumName] = useState("");
-  const [campaignName, setCampaignName] = useState(task.batchName ? `${task.batchName} ${platform.toUpperCase()}` : "");
   const [campaignUrl, setCampaignUrl] = useState("");
   const [pending, setPending] = useState(false);
 
   async function submit() {
-    if (!tsId || !voluumId.trim() || !voluumName.trim() || !campaignName.trim()) return;
+    if (!campaignUrl.trim()) return;
     setPending(true);
     const ok = await complete(task.id, {
-      trafficSourceId: Number(tsId),
-      voluumCampaignId: voluumId.trim(),
-      voluumCampaignName: voluumName.trim(),
-      campaignName: campaignName.trim(),
-      campaignUrl: campaignUrl.trim() || null,
+      campaignUrl: campaignUrl.trim(),
     });
     setPending(false);
     if (ok) onCompleted();
@@ -581,31 +565,12 @@ function CreateVoluumCampaignForm({ task, platform, onCompleted }: { task: TodoT
       <p className="text-sm text-muted-foreground">
         Create the {platform === "ios" ? "iOS" : "Android"} Voluum campaign in your tracker, then enter its details below. Saving creates the Campaign and spawns a <strong>take_campaign_live</strong> task.
       </p>
-      <div>
-        <Label className="text-xs">Traffic source *</Label>
-        <Select value={tsId} onValueChange={setTsId}>
-          <SelectTrigger className="mt-1 h-9"><SelectValue placeholder="Select…" /></SelectTrigger>
-          <SelectContent>
-            {trafficSources.map((t) => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label className="text-xs">Voluum campaign ID *</Label>
-          <Input className="mt-1 h-9" value={voluumId} onChange={(e) => setVoluumId(e.target.value)} placeholder="e.g. 6f5e…" />
-        </div>
-        <div>
-          <Label className="text-xs">Voluum campaign name *</Label>
-          <Input className="mt-1 h-9" value={voluumName} onChange={(e) => setVoluumName(e.target.value)} />
-        </div>
+      <div className="rounded-md border bg-muted/30 p-3 text-sm">
+        <div className="text-xs text-muted-foreground">Campaign name to create</div>
+        <div className="font-medium">{task.title}</div>
       </div>
       <div>
-        <Label className="text-xs">Internal campaign name *</Label>
-        <Input className="mt-1 h-9" value={campaignName} onChange={(e) => setCampaignName(e.target.value)} />
-      </div>
-      <div>
-        <Label className="text-xs">Campaign URL</Label>
+        <Label className="text-xs">Voluum Campaign URL *</Label>
         <Input className="mt-1 h-9" value={campaignUrl} onChange={(e) => setCampaignUrl(e.target.value)} placeholder="https://…" />
       </div>
       <div className="flex justify-end gap-2 pt-2">
@@ -620,16 +585,13 @@ function CreateVoluumCampaignForm({ task, platform, onCompleted }: { task: TodoT
 function TakeCampaignLiveForm({ task, onCompleted }: { task: TodoTask; onCompleted: () => void }) {
   const complete = useCompleteTask();
   const [tsCampaignId, setTsCampaignId] = useState("");
-  const [tsCampaignUrl, setTsCampaignUrl] = useState("");
-  const [notes, setNotes] = useState("");
   const [pending, setPending] = useState(false);
 
   async function submit() {
+    if (!tsCampaignId.trim()) return;
     setPending(true);
     const ok = await complete(task.id, {
-      trafficSourceCampaignId: tsCampaignId.trim() || null,
-      trafficSourceCampaignUrl: tsCampaignUrl.trim() || null,
-      notes: notes.trim() || null,
+      trafficSourceCampaignId: tsCampaignId.trim(),
     });
     setPending(false);
     if (ok) onCompleted();
@@ -638,19 +600,11 @@ function TakeCampaignLiveForm({ task, onCompleted }: { task: TodoTask; onComplet
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Confirm the campaign is now live on the traffic source. Optionally enter the traffic-source-side campaign ID/URL for reference. The Campaign will be marked <strong>live</strong> and a 7-day Find Winners task will be scheduled.
+        Enter the traffic-source campaign ID after confirming the campaign is live.
       </p>
       <div>
-        <Label className="text-xs">Traffic source campaign ID</Label>
+        <Label className="text-xs">Campaign ID *</Label>
         <Input className="mt-1 h-9" value={tsCampaignId} onChange={(e) => setTsCampaignId(e.target.value)} />
-      </div>
-      <div>
-        <Label className="text-xs">Traffic source campaign URL</Label>
-        <Input className="mt-1 h-9" value={tsCampaignUrl} onChange={(e) => setTsCampaignUrl(e.target.value)} />
-      </div>
-      <div>
-        <Label className="text-xs">Notes</Label>
-        <Textarea className="mt-1 min-h-[60px] text-sm" value={notes} onChange={(e) => setNotes(e.target.value)} />
       </div>
       <div className="flex justify-end gap-2 pt-2">
         <Button size="sm" onClick={submit} disabled={pending}>{pending ? "Saving…" : "Mark campaign live"}</Button>

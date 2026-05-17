@@ -25,16 +25,14 @@ export type TaskCompletionDetails =
       kind: "create_voluum_campaign";
       platform: "ios" | "android";
       trafficSourceId: number;
-      voluumCampaignId: string;
+      voluumCampaignId?: string | null;
       voluumCampaignName: string;
       campaignName: string;
-      campaignUrl?: string | null;
+      campaignUrl: string;
     }
   | {
       kind: "take_campaign_live";
-      trafficSourceCampaignId?: string | null;
-      trafficSourceCampaignUrl?: string | null;
-      notes?: string | null;
+      trafficSourceCampaignId: string;
     }
   | {
       kind: "find_winners";

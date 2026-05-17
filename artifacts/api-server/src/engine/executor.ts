@@ -418,7 +418,7 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
               campaignName: action.completion.campaignName,
               trafficSourceId: action.completion.trafficSourceId,
               campaignUrl: action.completion.campaignUrl ?? null,
-              voluumCampaignId: action.completion.voluumCampaignId,
+              voluumCampaignId: action.completion.voluumCampaignId ?? null,
               voluumCampaignName: action.completion.voluumCampaignName,
               status: "voluum_created",
             })
@@ -443,7 +443,7 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
 
           completionPayload = {
             trafficSourceId: action.completion.trafficSourceId,
-            voluumCampaignId: action.completion.voluumCampaignId,
+            voluumCampaignId: action.completion.voluumCampaignId ?? null,
             voluumCampaignName: action.completion.voluumCampaignName,
             campaignName: action.completion.campaignName,
             campaignUrl: action.completion.campaignUrl ?? null,
@@ -460,9 +460,9 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
             .set({
               status: "live",
               liveStartedAt: new Date(),
-              trafficSourceCampaignId: action.completion.trafficSourceCampaignId ?? null,
-              trafficSourceCampaignUrl: action.completion.trafficSourceCampaignUrl ?? null,
-              notes: action.completion.notes ?? null,
+              trafficSourceCampaignId: action.completion.trafficSourceCampaignId,
+              trafficSourceCampaignUrl: null,
+              notes: null,
               updatedAt: new Date(),
             })
             .where(
@@ -477,9 +477,7 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
           }
           resolvedCampaignId = task.relatedCampaignId;
           completionPayload = {
-            trafficSourceCampaignId: action.completion.trafficSourceCampaignId ?? null,
-            trafficSourceCampaignUrl: action.completion.trafficSourceCampaignUrl ?? null,
-            notes: action.completion.notes ?? null,
+            trafficSourceCampaignId: action.completion.trafficSourceCampaignId,
           };
           break;
         }

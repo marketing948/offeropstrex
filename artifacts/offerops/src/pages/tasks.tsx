@@ -22,6 +22,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { getListTodoTasksQueryKey } from "@workspace/api-client-react";
 import { TaskDetailDrawer } from "@/components/task-detail-drawer";
 import { ACTIVE_TASK_TYPES, getTaskTypeVisual } from "@/lib/task-type-visuals";
+import { useAuth } from "@/lib/auth";
 
 const STATUS_LABEL: Record<TodoTaskStatus, string> = {
   TODO: "To do",
@@ -37,11 +38,20 @@ const STATUS_ORDER: Record<TodoTaskStatus, number> = {
   DONE: 3,
 };
 const PRIORITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
+const CAMPAIGN_OPS_TASK_TYPES = new Set([
+  "create_voluum_campaign_ios",
+  "create_voluum_campaign_android",
+  "take_campaign_live",
+  "find_winners",
+  "all_traffic_sources_tested",
+]);
 
 type TypeFilter = "all" | string;
 
 export default function Tasks() {
   const { activeWorkspaceId } = useWorkspace();
+  const { currentEmployee } = useAuth();
+  const isAdmin = currentEmployee?.role === "admin";
   const taskParams = { workspace_id: activeWorkspaceId ?? 0 };
   const { data: tasks, isLoading } = useListTodoTasks(
     taskParams,
@@ -53,6 +63,7 @@ export default function Tasks() {
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
 
   const handleStatusChange = async (id: number, status: TodoTaskStatus) => {
+    if (status === "DONE" && !isAdmin) return;
     await updateTask.mutateAsync({ id, data: { status } });
     if (activeWorkspaceId) {
       queryClient.invalidateQueries({ queryKey: getListTodoTasksQueryKey({ workspace_id: activeWorkspaceId }) });
@@ -146,6 +157,7 @@ export default function Tasks() {
             <TaskRow
               key={task.id}
               task={task}
+              isAdmin={isAdmin}
               onOpen={() => setSelectedTask(task)}
               onStatusChange={(s) => handleStatusChange(task.id, s)}
             />
@@ -191,17 +203,24 @@ function FilterChip({
 
 function TaskRow({
   task,
+  isAdmin,
   onOpen,
   onStatusChange,
 }: {
   task: TodoTask;
+  isAdmin: boolean;
   onOpen: () => void;
   onStatusChange: (s: TodoTaskStatus) => void;
 }) {
   const visual = getTaskTypeVisual(task.taskType as string);
   const Icon = visual.icon;
   const isDone = task.status === "DONE";
+  const isCampaignOpsTask = CAMPAIGN_OPS_TASK_TYPES.has(task.taskType as string);
+  const canDirectComplete = isAdmin && !isCampaignOpsTask;
   const flashing = (task as { flashing?: boolean }).flashing;
+  const statusOptions = Object.values(TodoTaskStatus).filter(
+    (s) => canDirectComplete || s !== "DONE" || task.status === "DONE",
+  );
 
   return (
     <div
@@ -269,18 +288,20 @@ function TaskRow({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {Object.values(TodoTaskStatus).map((s) => (
+              {statusOptions.map((s) => (
                 <SelectItem key={s} value={s}>
                   {STATUS_LABEL[s] ?? s}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <Checkbox
-            checked={isDone}
-            onCheckedChange={(checked) => onStatusChange(checked ? "DONE" : "TODO")}
-            aria-label="Mark task done"
-          />
+          {canDirectComplete && (
+            <Checkbox
+              checked={isDone}
+              onCheckedChange={(checked) => onStatusChange(checked ? "DONE" : "TODO")}
+              aria-label="Admin override: mark task done"
+            />
+          )}
         </div>
       </div>
     </div>
