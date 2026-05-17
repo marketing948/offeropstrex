@@ -385,6 +385,12 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
 
       let resolvedCampaignId = task.relatedCampaignId ?? null;
       let completionPayload: Record<string, unknown> = {};
+      let takeCampaignLive:
+        | {
+            campaignId: number;
+            trafficSourceCampaignId: string;
+          }
+        | null = null;
 
       switch (action.completion.kind) {
         case "generic":
@@ -455,27 +461,11 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
           if (task.relatedCampaignId == null) {
             throw new Error("Task missing relatedCampaignId");
           }
-          const [updatedCampaign] = await tx
-            .update(campaignsTable)
-            .set({
-              status: "live",
-              liveStartedAt: new Date(),
-              trafficSourceCampaignId: action.completion.trafficSourceCampaignId,
-              trafficSourceCampaignUrl: null,
-              notes: null,
-              updatedAt: new Date(),
-            })
-            .where(
-              and(
-                eq(campaignsTable.id, task.relatedCampaignId),
-                eq(campaignsTable.workspaceId, action.workspaceId),
-              ),
-            )
-            .returning({ id: campaignsTable.id });
-          if (!updatedCampaign) {
-            throw new Error("Campaign not found");
-          }
           resolvedCampaignId = task.relatedCampaignId;
+          takeCampaignLive = {
+            campaignId: task.relatedCampaignId,
+            trafficSourceCampaignId: action.completion.trafficSourceCampaignId,
+          };
           completionPayload = {
             trafficSourceCampaignId: action.completion.trafficSourceCampaignId,
           };
@@ -579,6 +569,27 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
         )
         .returning();
       if (!updated) return;
+
+      if (takeCampaignLive !== null) {
+        const [updatedCampaign] = await tx
+          .update(campaignsTable)
+          .set({
+            status: "live",
+            liveStartedAt: sql`coalesce(${campaignsTable.liveStartedAt}, now())`,
+            trafficSourceCampaignId: takeCampaignLive.trafficSourceCampaignId,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(campaignsTable.id, takeCampaignLive.campaignId),
+              eq(campaignsTable.workspaceId, action.workspaceId),
+            ),
+          )
+          .returning({ id: campaignsTable.id });
+        if (!updatedCampaign) {
+          throw new Error("Campaign not found");
+        }
+      }
 
       await emitWithinTx(tx, {
         type: "TaskCompleted",

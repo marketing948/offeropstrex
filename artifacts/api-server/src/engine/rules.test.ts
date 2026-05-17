@@ -812,6 +812,7 @@ describe("rules: TaskCompletionRequested", () => {
           voluumCampaignId: `dup-${Date.now()}`,
           voluumCampaignName: "Duplicate-safe Campaign",
           campaignName: "Duplicate-safe Campaign",
+          campaignUrl: "https://example.test/duplicate-safe",
         },
       },
       dedupeKey: `task_completion_requested:${task.id}:duplicate-test`,
@@ -842,6 +843,182 @@ describe("rules: TaskCompletionRequested", () => {
     assert.equal(completed.length, 1);
   });
 
+  test("take_campaign_live completes task and campaign atomically without resetting live state", async () => {
+    const batchId = await insertBatch();
+    const trafficSourceId = await getWorkspaceTrafficSourceId();
+    const [campaign] = await db
+      .insert(campaignsTable)
+      .values({
+        workspaceId,
+        batchId,
+        platform: "ios",
+        campaignName: "Take-live Campaign",
+        trafficSourceId,
+        status: "voluum_created",
+        trafficSourceCampaignUrl: "https://source.example/campaign",
+        notes: "preserve existing notes",
+      })
+      .returning({ id: campaignsTable.id });
+    const [task] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId,
+        employeeId,
+        relatedBatchId: batchId,
+        relatedCampaignId: campaign.id,
+        taskType: "take_campaign_live",
+        title: "Take campaign live",
+      })
+      .returning({ id: todoTasksTable.id });
+
+    await emit({
+      type: "TaskCompletionRequested",
+      workspaceId,
+      payload: {
+        taskId: task.id,
+        completedByEmployeeId: employeeId,
+        completion: {
+          kind: "take_campaign_live",
+          trafficSourceCampaignId: "source-campaign-1",
+        },
+      },
+      dedupeKey: `task_completion_requested:${task.id}:take-live-first`,
+    });
+
+    const [completedTask] = await db
+      .select({
+        status: todoTasksTable.status,
+        completionPayload: todoTasksTable.completionPayload,
+      })
+      .from(todoTasksTable)
+      .where(eq(todoTasksTable.id, task.id));
+    assert.equal(completedTask.status, "DONE");
+    assert.deepEqual(completedTask.completionPayload, {
+      trafficSourceCampaignId: "source-campaign-1",
+    });
+
+    const [liveCampaign] = await db
+      .select({
+        status: campaignsTable.status,
+        liveStartedAt: campaignsTable.liveStartedAt,
+        trafficSourceCampaignId: campaignsTable.trafficSourceCampaignId,
+        trafficSourceCampaignUrl: campaignsTable.trafficSourceCampaignUrl,
+        notes: campaignsTable.notes,
+      })
+      .from(campaignsTable)
+      .where(eq(campaignsTable.id, campaign.id));
+    assert.equal(liveCampaign.status, "live");
+    assert.ok(liveCampaign.liveStartedAt);
+    assert.equal(liveCampaign.trafficSourceCampaignId, "source-campaign-1");
+    assert.equal(liveCampaign.trafficSourceCampaignUrl, "https://source.example/campaign");
+    assert.equal(liveCampaign.notes, "preserve existing notes");
+
+    await emit({
+      type: "TaskCompletionRequested",
+      workspaceId,
+      payload: {
+        taskId: task.id,
+        completedByEmployeeId: employeeId,
+        completion: {
+          kind: "take_campaign_live",
+          trafficSourceCampaignId: "source-campaign-2",
+        },
+      },
+      dedupeKey: `task_completion_requested:${task.id}:take-live-retry`,
+    });
+
+    const [afterRetryCampaign] = await db
+      .select({
+        liveStartedAt: campaignsTable.liveStartedAt,
+        trafficSourceCampaignId: campaignsTable.trafficSourceCampaignId,
+      })
+      .from(campaignsTable)
+      .where(eq(campaignsTable.id, campaign.id));
+    assert.equal(afterRetryCampaign.liveStartedAt?.getTime(), liveCampaign.liveStartedAt?.getTime());
+    assert.equal(afterRetryCampaign.trafficSourceCampaignId, "source-campaign-1");
+
+    const completedEvents = await db
+      .select({ id: eventsTable.id })
+      .from(eventsTable)
+      .where(
+        and(
+          eq(eventsTable.workspaceId, workspaceId),
+          eq(eventsTable.type, "TaskCompleted"),
+          eq(eventsTable.dedupeKey, `task_completed:${task.id}`),
+        ),
+      );
+    assert.equal(completedEvents.length, 1);
+
+    const findWinnerTasks = await db
+      .select({ id: todoTasksTable.id })
+      .from(todoTasksTable)
+      .where(
+        and(
+          eq(todoTasksTable.workspaceId, workspaceId),
+          eq(todoTasksTable.relatedCampaignId, campaign.id),
+          eq(todoTasksTable.taskType, "find_winners"),
+        ),
+      );
+    assert.equal(findWinnerTasks.length, 0);
+  });
+
+  test("take_campaign_live rolls back task completion when campaign cannot become live", async () => {
+    const batchId = await insertBatch();
+    const [task] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId,
+        employeeId,
+        relatedBatchId: batchId,
+        relatedCampaignId: -1,
+        taskType: "take_campaign_live",
+        title: "Take missing campaign live",
+      })
+      .returning({ id: todoTasksTable.id });
+
+    await assert.rejects(
+      () =>
+        emit({
+          type: "TaskCompletionRequested",
+          workspaceId,
+          payload: {
+            taskId: task.id,
+            completedByEmployeeId: employeeId,
+            completion: {
+              kind: "take_campaign_live",
+              trafficSourceCampaignId: "missing-source-campaign",
+            },
+          },
+          dedupeKey: `task_completion_requested:${task.id}:missing-campaign`,
+        }),
+      /Campaign not found/,
+    );
+
+    const [afterFailure] = await db
+      .select({
+        status: todoTasksTable.status,
+        completedAt: todoTasksTable.completedAt,
+        completionPayload: todoTasksTable.completionPayload,
+      })
+      .from(todoTasksTable)
+      .where(eq(todoTasksTable.id, task.id));
+    assert.equal(afterFailure.status, "TODO");
+    assert.equal(afterFailure.completedAt, null);
+    assert.equal(afterFailure.completionPayload, null);
+
+    const completedEvents = await db
+      .select({ id: eventsTable.id })
+      .from(eventsTable)
+      .where(
+        and(
+          eq(eventsTable.workspaceId, workspaceId),
+          eq(eventsTable.type, "TaskCompleted"),
+          eq(eventsTable.dedupeKey, `task_completed:${task.id}`),
+        ),
+      );
+    assert.equal(completedEvents.length, 0);
+  });
+
   test("failed completion rolls back and can be retried with the same dedupe key", async () => {
     const batchId = await insertBatch();
     const trafficSourceId = await getWorkspaceTrafficSourceId();
@@ -869,6 +1046,7 @@ describe("rules: TaskCompletionRequested", () => {
           voluumCampaignId: `retry-${Date.now()}`,
           voluumCampaignName: "Retry Campaign",
           campaignName: "Retry Campaign",
+          campaignUrl: "https://example.test/retry",
         },
       },
       dedupeKey: `task_completion_requested:${task.id}:retry-test`,
