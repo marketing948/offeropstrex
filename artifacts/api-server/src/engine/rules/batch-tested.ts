@@ -37,9 +37,8 @@ export async function handleBatchTested(
   if (!batch) return [];
   if (batch.status === "TESTED" || batch.status === "COMPLETED") return [];
 
-  // Chain a BatchStatusChanged into the same tx so the notification
-  // rule fires on the auto-promote path. Dedupe on
-  // `auto_to_tested:<batchId>` keeps it distinct from manual transitions.
+  // Chain a BatchStatusChanged into the same tx; that event owns the
+  // status write and notification side effects.
   const fromStatus: BatchStatus = batch.status;
   await emitWithinTx(tx, {
     type: "BatchStatusChanged",
@@ -48,11 +47,5 @@ export async function handleBatchTested(
     dedupeKey: `auto_to_tested:${batch.id}`,
   });
 
-  return [
-    {
-      type: "ChangeBatchStatus",
-      batchId: batch.id,
-      status: "TESTED",
-    },
-  ];
+  return [];
 }

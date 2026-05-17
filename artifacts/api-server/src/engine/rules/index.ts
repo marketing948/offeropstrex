@@ -9,6 +9,7 @@
 
 import { registerHandler } from "../handlers.ts";
 import type { EventType } from "../types.ts";
+import { handleBatchCampaignsGoLiveRequested } from "./batch-campaigns-go-live-requested.ts";
 import { handleBatchCreated } from "./batch-created.ts";
 import { handleBatchResultsRecorded } from "./batch-results-recorded.ts";
 import { handleBatchStatsUpdated } from "./batch-stats-updated.ts";
@@ -18,6 +19,7 @@ import { handleCampaignStatusChanged } from "./campaign-status-changed.ts";
 import { handleOfferImported } from "./offer-imported.ts";
 import { handleOptimizationDue } from "./optimization-due.ts";
 import { handleTaskCompleted } from "./task-completed.ts";
+import { handleTaskCompletionRequested } from "./task-completion-requested.ts";
 import { handleTaskOverdue } from "./task-overdue.ts";
 import { handleTrackerCampaignImported } from "./tracker-campaign-imported.ts";
 import { handleTrafficSourceAdvanced } from "./traffic-source-advanced.ts";
@@ -37,10 +39,12 @@ export function registerAllRules(): void {
 
   registerHandler("OfferImported", handleOfferImported);
   registerHandler("BatchCreated", handleBatchCreated);
+  registerHandler("BatchCampaignsGoLiveRequested", handleBatchCampaignsGoLiveRequested);
   registerHandler("TrackerCampaignImported", handleTrackerCampaignImported);
   registerHandler("BatchStatusChanged", handleBatchStatusChanged);
   registerHandler("BatchTested", handleBatchTested);
   registerHandler("BatchStatsUpdated", handleBatchStatsUpdated);
+  registerHandler("TaskCompletionRequested", handleTaskCompletionRequested);
   registerHandler("TaskCompleted", handleTaskCompleted);
   registerHandler("TaskOverdue", handleTaskOverdue);
   registerHandler("TrafficSourceAdvanced", handleTrafficSourceAdvanced);
@@ -66,10 +70,12 @@ export function _resetRulesGuardForTests(): void {
 const COVERED_EVENT_TYPES = [
   "OfferImported",
   "BatchCreated",
+  "BatchCampaignsGoLiveRequested",
   "TrackerCampaignImported",
   "BatchStatusChanged",
   "BatchTested",
   "BatchStatsUpdated",
+  "TaskCompletionRequested",
   "TaskCompleted",
   "TaskOverdue",
   "TrafficSourceAdvanced",

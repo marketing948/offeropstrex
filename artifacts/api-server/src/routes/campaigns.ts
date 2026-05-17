@@ -193,7 +193,7 @@ router.patch("/campaigns/:id", async (req, res): Promise<void> => {
   const [row] = await db
     .update(campaignsTable)
     .set(updates)
-    .where(eq(campaignsTable.id, id))
+    .where(and(eq(campaignsTable.id, id), eq(campaignsTable.workspaceId, existing.workspaceId)))
     .returning();
 
   if (statusChanged) {

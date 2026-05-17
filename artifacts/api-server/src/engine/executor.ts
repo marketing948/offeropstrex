@@ -5,19 +5,179 @@
 
 import {
   campaignsTable,
+  batchTrafficSourceRunsTable,
   db,
   testingBatchesTable,
   todoTasksTable,
   notificationsTable,
   trackerCampaignsTable,
   voluumOffersTable,
+  workspaceTrafficSourcesTable,
 } from "@workspace/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, gt, ne, sql } from "drizzle-orm";
 import { emitWithinTx } from "./event-bus.ts";
 import type { Action, BatchStatus, Tx } from "./types.ts";
 import { assertNever } from "./types.ts";
 
 type CreateBatchAction = Extract<Action, { type: "CreateBatch" }>;
+type PlatformRunStatus = "pending" | "active" | "completed" | "failed" | "skipped";
+type TrafficSourceRunStatus = "pending" | "active" | "completed" | "failed" | "skipped";
+
+const TERMINAL_PLATFORM_STATUSES = new Set<PlatformRunStatus>([
+  "completed",
+  "failed",
+  "skipped",
+]);
+
+function deriveTrafficSourceRunStatus(
+  iosStatus: PlatformRunStatus,
+  androidStatus: PlatformRunStatus,
+): TrafficSourceRunStatus {
+  if (iosStatus === "pending" && androidStatus === "pending") return "pending";
+  if (iosStatus === "skipped" && androidStatus === "skipped") return "skipped";
+
+  const iosTerminal = TERMINAL_PLATFORM_STATUSES.has(iosStatus);
+  const androidTerminal = TERMINAL_PLATFORM_STATUSES.has(androidStatus);
+  if (iosTerminal && androidTerminal) {
+    if (iosStatus === "completed" || androidStatus === "completed") return "completed";
+    if (iosStatus === "failed" && androidStatus === "failed") return "failed";
+    return "skipped";
+  }
+
+  return "active";
+}
+
+async function activateNextTrafficSourceRun(
+  tx: Tx,
+  action: Extract<Action, { type: "CompleteTrafficSourceRunPlatform" }>,
+  currentPosition: number,
+): Promise<void> {
+  const [batch] = await tx
+    .select({
+      employeeId: testingBatchesTable.employeeId,
+      batchName: testingBatchesTable.batchName,
+    })
+    .from(testingBatchesTable)
+    .where(
+      and(
+        eq(testingBatchesTable.id, action.batchId),
+        eq(testingBatchesTable.workspaceId, action.workspaceId),
+      ),
+    )
+    .limit(1);
+  if (!batch || batch.employeeId == null) return;
+
+  const [nextRun] = await tx
+    .select({
+      id: batchTrafficSourceRunsTable.id,
+      trafficSourceId: batchTrafficSourceRunsTable.trafficSourceId,
+      status: batchTrafficSourceRunsTable.status,
+    })
+    .from(batchTrafficSourceRunsTable)
+    .where(
+      and(
+        eq(batchTrafficSourceRunsTable.workspaceId, action.workspaceId),
+        eq(batchTrafficSourceRunsTable.batchId, action.batchId),
+        gt(batchTrafficSourceRunsTable.position, currentPosition),
+      ),
+    )
+    .orderBy(asc(batchTrafficSourceRunsTable.position))
+    .limit(1);
+
+  if (!nextRun) {
+    const [existingAllDone] = await tx
+      .select({ id: todoTasksTable.id })
+      .from(todoTasksTable)
+      .where(
+        and(
+          eq(todoTasksTable.workspaceId, action.workspaceId),
+          eq(todoTasksTable.relatedBatchId, action.batchId),
+          eq(todoTasksTable.taskType, "all_traffic_sources_tested"),
+        ),
+      )
+      .limit(1);
+    if (existingAllDone) return;
+
+    await tx
+      .insert(todoTasksTable)
+      .values({
+        workspaceId: action.workspaceId,
+        employeeId: batch.employeeId,
+        relatedBatchId: action.batchId,
+        title: `All traffic sources tested for ${batch.batchName ?? `Batch #${action.batchId}`}`,
+        taskType: "all_traffic_sources_tested",
+        priority: "low",
+        status: "TODO",
+      })
+      .onConflictDoNothing();
+    return;
+  }
+
+  if (nextRun.status === "pending") {
+    const now = new Date();
+    await tx
+      .update(batchTrafficSourceRunsTable)
+      .set({
+        status: "active",
+        iosStatus: "active",
+        androidStatus: "active",
+        startedAt: now,
+      })
+      .where(eq(batchTrafficSourceRunsTable.id, nextRun.id));
+
+    await tx
+      .update(testingBatchesTable)
+      .set({
+        currentWorkspaceTrafficSourceId: nextRun.trafficSourceId,
+        trafficSourceStep: sql`${testingBatchesTable.trafficSourceStep} + 1`,
+      })
+      .where(
+        and(
+          eq(testingBatchesTable.id, action.batchId),
+          eq(testingBatchesTable.workspaceId, action.workspaceId),
+        ),
+      );
+  }
+
+  const [source] = await tx
+    .select({ name: workspaceTrafficSourcesTable.name })
+    .from(workspaceTrafficSourcesTable)
+    .where(
+      and(
+        eq(workspaceTrafficSourcesTable.id, nextRun.trafficSourceId),
+        eq(workspaceTrafficSourcesTable.workspaceId, action.workspaceId),
+      ),
+    )
+    .limit(1);
+  const sourceName = source?.name ?? `traffic source #${nextRun.trafficSourceId}`;
+  const batchName = batch.batchName ?? `Batch #${action.batchId}`;
+
+  await tx
+    .insert(todoTasksTable)
+    .values([
+      {
+        workspaceId: action.workspaceId,
+        employeeId: batch.employeeId,
+        relatedBatchId: action.batchId,
+        title: `Create Voluum campaign (iOS) for ${batchName} on ${sourceName}`,
+        taskType: "create_voluum_campaign_ios",
+        priority: "high",
+        status: "TODO",
+        trafficSourceId: nextRun.trafficSourceId,
+      },
+      {
+        workspaceId: action.workspaceId,
+        employeeId: batch.employeeId,
+        relatedBatchId: action.batchId,
+        title: `Create Voluum campaign (Android) for ${batchName} on ${sourceName}`,
+        taskType: "create_voluum_campaign_android",
+        priority: "high",
+        status: "TODO",
+        trafficSourceId: nextRun.trafficSourceId,
+      },
+    ])
+    .onConflictDoNothing();
+}
 
 /**
  * Phase 5e: idempotent CreateBatch executor. Upserts on
@@ -133,11 +293,371 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
       return;
     }
 
+    case "GoLiveBatchCampaigns": {
+      const batchCampaigns = await tx
+        .select({
+          id: campaignsTable.id,
+          status: campaignsTable.status,
+          platform: campaignsTable.platform,
+        })
+        .from(campaignsTable)
+        .where(
+          and(
+            eq(campaignsTable.workspaceId, action.workspaceId),
+            eq(campaignsTable.batchId, action.batchId),
+          ),
+        );
+
+      if (batchCampaigns.length === 0) {
+        throw new Error("Batch has no campaigns yet");
+      }
+      const blocking = batchCampaigns.filter(
+        (campaign) => campaign.status !== "ready" && campaign.status !== "live",
+      );
+      if (blocking.length > 0) {
+        throw new Error("All batch campaigns must be ready before going live");
+      }
+
+      await tx
+        .update(testingBatchesTable)
+        .set({ liveAt: sql`coalesce(${testingBatchesTable.liveAt}, now())` })
+        .where(
+          and(
+            eq(testingBatchesTable.id, action.batchId),
+            eq(testingBatchesTable.workspaceId, action.workspaceId),
+          ),
+        );
+
+      for (const campaign of batchCampaigns) {
+        if (campaign.status !== "ready") continue;
+        const [updated] = await tx
+          .update(campaignsTable)
+          .set({ status: "live", updatedAt: new Date() })
+          .where(
+            and(
+              eq(campaignsTable.id, campaign.id),
+              eq(campaignsTable.workspaceId, action.workspaceId),
+              eq(campaignsTable.status, "ready"),
+            ),
+          )
+          .returning({
+            id: campaignsTable.id,
+            batchId: campaignsTable.batchId,
+            platform: campaignsTable.platform,
+          });
+        if (!updated) continue;
+        await emitWithinTx(tx, {
+          type: "CampaignStatusChanged",
+          workspaceId: action.workspaceId,
+          payload: {
+            campaignId: updated.id,
+            batchId: updated.batchId,
+            platform: updated.platform,
+            from: "ready",
+            to: "live",
+          },
+          dedupeKey: `phase5_go_live:${updated.id}`,
+        });
+      }
+      return;
+    }
+
     case "CompleteTask": {
       await tx
         .update(todoTasksTable)
         .set({ status: "DONE" })
         .where(eq(todoTasksTable.id, action.taskId));
+      return;
+    }
+
+    case "CompleteTaskFromRequest": {
+      const [task] = await tx
+        .select()
+        .from(todoTasksTable)
+        .where(
+          and(
+            eq(todoTasksTable.id, action.taskId),
+            eq(todoTasksTable.workspaceId, action.workspaceId),
+          ),
+        )
+        .limit(1);
+      if (!task || task.status === "DONE") return;
+
+      let resolvedCampaignId = task.relatedCampaignId ?? null;
+      let completionPayload: Record<string, unknown> = {};
+
+      switch (action.completion.kind) {
+        case "generic":
+          completionPayload = action.completion.completionPayload ?? {};
+          break;
+
+        case "create_voluum_campaign": {
+          if (task.relatedBatchId == null) {
+            throw new Error("Task is missing relatedBatchId");
+          }
+          const [tsRow] = await tx
+            .select({ id: workspaceTrafficSourcesTable.id })
+            .from(workspaceTrafficSourcesTable)
+            .where(
+              and(
+                eq(workspaceTrafficSourcesTable.id, action.completion.trafficSourceId),
+                eq(workspaceTrafficSourcesTable.workspaceId, action.workspaceId),
+              ),
+            )
+            .limit(1);
+          if (!tsRow) {
+            throw new Error("trafficSourceId does not belong to this workspace");
+          }
+
+          const [campaign] = await tx
+            .insert(campaignsTable)
+            .values({
+              workspaceId: action.workspaceId,
+              batchId: task.relatedBatchId,
+              platform: action.completion.platform,
+              campaignName: action.completion.campaignName,
+              trafficSourceId: action.completion.trafficSourceId,
+              campaignUrl: action.completion.campaignUrl ?? null,
+              voluumCampaignId: action.completion.voluumCampaignId,
+              voluumCampaignName: action.completion.voluumCampaignName,
+              status: "voluum_created",
+            })
+            .returning({ id: campaignsTable.id });
+          resolvedCampaignId = campaign.id;
+
+          await tx
+            .update(batchTrafficSourceRunsTable)
+            .set(
+              action.completion.platform === "ios"
+                ? { iosCampaignId: campaign.id }
+                : { androidCampaignId: campaign.id },
+            )
+            .where(
+              and(
+                eq(batchTrafficSourceRunsTable.workspaceId, action.workspaceId),
+                eq(batchTrafficSourceRunsTable.batchId, task.relatedBatchId),
+                eq(batchTrafficSourceRunsTable.trafficSourceId, action.completion.trafficSourceId),
+                eq(batchTrafficSourceRunsTable.status, "active"),
+              ),
+            );
+
+          completionPayload = {
+            trafficSourceId: action.completion.trafficSourceId,
+            voluumCampaignId: action.completion.voluumCampaignId,
+            voluumCampaignName: action.completion.voluumCampaignName,
+            campaignName: action.completion.campaignName,
+            campaignUrl: action.completion.campaignUrl ?? null,
+          };
+          break;
+        }
+
+        case "take_campaign_live": {
+          if (task.relatedCampaignId == null) {
+            throw new Error("Task missing relatedCampaignId");
+          }
+          const [updatedCampaign] = await tx
+            .update(campaignsTable)
+            .set({
+              status: "live",
+              liveStartedAt: new Date(),
+              trafficSourceCampaignId: action.completion.trafficSourceCampaignId ?? null,
+              trafficSourceCampaignUrl: action.completion.trafficSourceCampaignUrl ?? null,
+              notes: action.completion.notes ?? null,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(campaignsTable.id, task.relatedCampaignId),
+                eq(campaignsTable.workspaceId, action.workspaceId),
+              ),
+            )
+            .returning({ id: campaignsTable.id });
+          if (!updatedCampaign) {
+            throw new Error("Campaign not found");
+          }
+          resolvedCampaignId = task.relatedCampaignId;
+          completionPayload = {
+            trafficSourceCampaignId: action.completion.trafficSourceCampaignId ?? null,
+            trafficSourceCampaignUrl: action.completion.trafficSourceCampaignUrl ?? null,
+            notes: action.completion.notes ?? null,
+          };
+          break;
+        }
+
+        case "find_winners": {
+          if (task.relatedCampaignId == null) {
+            throw new Error("Task missing relatedCampaignId");
+          }
+          if (action.completion.outcome === "failed") {
+            const [updatedCampaign] = await tx
+              .update(campaignsTable)
+              .set({
+                status: "closed",
+                notes: action.completion.notes ?? action.completion.failureReason,
+                updatedAt: new Date(),
+              })
+              .where(
+                and(
+                  eq(campaignsTable.id, task.relatedCampaignId),
+                  eq(campaignsTable.workspaceId, action.workspaceId),
+                ),
+              )
+              .returning({ id: campaignsTable.id });
+            if (!updatedCampaign) {
+              throw new Error("Campaign not found");
+            }
+            resolvedCampaignId = task.relatedCampaignId;
+            completionPayload = {
+              outcome: "failed",
+              failureReason: action.completion.failureReason,
+              notes: action.completion.notes ?? null,
+            };
+            break;
+          }
+
+          const roi =
+            action.completion.cost > 0
+              ? (action.completion.revenue - action.completion.cost) / action.completion.cost
+              : null;
+          const [updatedCampaign] = await tx
+            .update(campaignsTable)
+            .set({
+              status: "tested",
+              winnersCount: action.completion.winnersCount,
+              revenue: String(action.completion.revenue),
+              cost: String(action.completion.cost),
+              clicks: action.completion.clicks ?? null,
+              conversions: action.completion.conversions ?? null,
+              roi: roi != null ? String(roi) : null,
+              notes: action.completion.notes ?? null,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(campaignsTable.id, task.relatedCampaignId),
+                eq(campaignsTable.workspaceId, action.workspaceId),
+              ),
+            )
+            .returning({ id: campaignsTable.id });
+          if (!updatedCampaign) {
+            throw new Error("Campaign not found");
+          }
+          resolvedCampaignId = task.relatedCampaignId;
+          completionPayload = {
+            ...(action.completion.outcome === "success" ? { outcome: "success" } : {}),
+            winnersCount: action.completion.winnersCount,
+            revenue: action.completion.revenue,
+            cost: action.completion.cost,
+            clicks: action.completion.clicks ?? null,
+            conversions: action.completion.conversions ?? null,
+            notes: action.completion.notes ?? null,
+          };
+          break;
+        }
+
+        case "all_traffic_sources_tested":
+          completionPayload = {};
+          break;
+
+        default:
+          assertNever(action.completion);
+      }
+
+      const [updated] = await tx
+        .update(todoTasksTable)
+        .set({
+          status: "DONE",
+          relatedCampaignId: resolvedCampaignId,
+          completedAt: new Date(),
+          completedByEmployeeId: action.completedByEmployeeId,
+          completionPayload,
+        })
+        .where(
+          and(
+            eq(todoTasksTable.id, action.taskId),
+            eq(todoTasksTable.workspaceId, action.workspaceId),
+            ne(todoTasksTable.status, "DONE"),
+          ),
+        )
+        .returning();
+      if (!updated) return;
+
+      await emitWithinTx(tx, {
+        type: "TaskCompleted",
+        workspaceId: action.workspaceId,
+        payload: {
+          taskId: updated.id,
+          taskType: updated.taskType,
+          relatedBatchId: updated.relatedBatchId,
+          relatedCampaignId: resolvedCampaignId,
+        },
+        dedupeKey: `task_completed:${updated.id}`,
+      });
+      return;
+    }
+
+    case "CompleteTrafficSourceRunPlatform": {
+      const [run] = await tx
+        .select({
+          id: batchTrafficSourceRunsTable.id,
+          position: batchTrafficSourceRunsTable.position,
+          status: batchTrafficSourceRunsTable.status,
+          iosStatus: batchTrafficSourceRunsTable.iosStatus,
+          androidStatus: batchTrafficSourceRunsTable.androidStatus,
+        })
+        .from(batchTrafficSourceRunsTable)
+        .where(
+          and(
+            eq(batchTrafficSourceRunsTable.workspaceId, action.workspaceId),
+            eq(batchTrafficSourceRunsTable.batchId, action.batchId),
+            eq(batchTrafficSourceRunsTable.trafficSourceId, action.trafficSourceId),
+          ),
+        )
+        .limit(1);
+      if (!run) return;
+
+      const currentPlatformStatus =
+        action.platform === "ios" ? run.iosStatus : run.androidStatus;
+      if (TERMINAL_PLATFORM_STATUSES.has(currentPlatformStatus)) return;
+
+      const nextIosStatus =
+        action.platform === "ios" ? action.outcome : run.iosStatus;
+      const nextAndroidStatus =
+        action.platform === "android" ? action.outcome : run.androidStatus;
+      const nextRunStatus = deriveTrafficSourceRunStatus(
+        nextIosStatus,
+        nextAndroidStatus,
+      );
+      const now = new Date();
+
+      await tx
+        .update(batchTrafficSourceRunsTable)
+        .set({
+          status: nextRunStatus,
+          ...(nextRunStatus === "completed" || nextRunStatus === "failed" || nextRunStatus === "skipped"
+            ? { completedAt: now }
+            : {}),
+          ...(action.platform === "ios"
+            ? {
+                iosStatus: action.outcome,
+                iosCampaignId: action.campaignId,
+                iosCompletedAt: now,
+                iosFailureReason:
+                  action.outcome === "failed" ? action.failureReason ?? null : null,
+              }
+            : {
+                androidStatus: action.outcome,
+                androidCampaignId: action.campaignId,
+                androidCompletedAt: now,
+                androidFailureReason:
+                  action.outcome === "failed" ? action.failureReason ?? null : null,
+              }),
+        })
+        .where(eq(batchTrafficSourceRunsTable.id, run.id));
+
+      if (nextRunStatus === "completed") {
+        await activateNextTrafficSourceRun(tx, action, run.position);
+      }
       return;
     }
 
@@ -186,8 +706,16 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
     case "ChangeBatchStatus": {
       await tx
         .update(testingBatchesTable)
-        .set({ status: action.status })
-        .where(eq(testingBatchesTable.id, action.batchId));
+        .set({
+          status: action.status,
+          ...(action.liveAt !== undefined ? { liveAt: action.liveAt } : {}),
+        })
+        .where(
+          and(
+            eq(testingBatchesTable.id, action.batchId),
+            eq(testingBatchesTable.workspaceId, action.workspaceId),
+          ),
+        );
       return;
     }
 
@@ -329,7 +857,12 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
           currentTrafficSourceId: action.nextTrafficSourceId,
           trafficSourceStep: sql`${testingBatchesTable.trafficSourceStep} + 1`,
         })
-        .where(eq(testingBatchesTable.id, action.batchId));
+        .where(
+          and(
+            eq(testingBatchesTable.id, action.batchId),
+            eq(testingBatchesTable.workspaceId, action.workspaceId),
+          ),
+        );
       return;
     }
 

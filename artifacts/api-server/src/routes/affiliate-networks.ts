@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, affiliateNetworksTable } from "@workspace/db";
 import { requireWorkspaceFromQuery, requireAdmin, requireWorkspaceAccess } from "../lib/workspace-access";
 
@@ -79,7 +79,7 @@ router.patch("/affiliate-networks/:id", async (req, res): Promise<void> => {
     const [row] = await db
       .update(affiliateNetworksTable)
       .set(updates)
-      .where(eq(affiliateNetworksTable.id, id))
+      .where(and(eq(affiliateNetworksTable.id, id), eq(affiliateNetworksTable.workspaceId, existing.workspaceId)))
       .returning();
     res.json(serialize(row));
   } catch (err: any) {
@@ -106,7 +106,9 @@ router.delete("/affiliate-networks/:id", async (req, res): Promise<void> => {
   const access = await requireWorkspaceAccess(req, res, existing.workspaceId);
   if (!access) return;
   try {
-    await db.delete(affiliateNetworksTable).where(eq(affiliateNetworksTable.id, id));
+    await db
+      .delete(affiliateNetworksTable)
+      .where(and(eq(affiliateNetworksTable.id, id), eq(affiliateNetworksTable.workspaceId, existing.workspaceId)));
     res.json({ success: true });
   } catch (err: any) {
     if (err?.code === "23503" || err?.cause?.code === "23503") {

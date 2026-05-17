@@ -29,6 +29,8 @@ import {
   notificationsTable,
   testingBatchesTable,
   todoTasksTable,
+  trackerCampaignsTable,
+  voluumCampaignsTable,
   voluumOffersTable,
   voluumTrafficSourcesTable,
   workspacesTable,
@@ -127,6 +129,9 @@ beforeEach(async () => {
       .delete(testingBatchesTable)
       .where(eq(testingBatchesTable.workspaceId, ws));
     await db
+      .delete(voluumCampaignsTable)
+      .where(eq(voluumCampaignsTable.workspaceId, ws));
+    await db
       .delete(voluumOffersTable)
       .where(eq(voluumOffersTable.workspaceId, ws));
     await db
@@ -152,13 +157,36 @@ async function seedOffers(
   );
 }
 
+async function seedCampaigns(
+  ws: number,
+  rows: Array<{
+    campaignId: string;
+    campaignName: string;
+    trafficSourceName: string | null;
+    tags: string[];
+  }>,
+) {
+  if (rows.length === 0) return;
+  await db.insert(voluumCampaignsTable).values(
+    rows.map((r) => ({
+      workspaceId: ws,
+      campaignId: r.campaignId,
+      campaignName: r.campaignName,
+      trafficSourceName: r.trafficSourceName,
+      allTags: JSON.stringify(r.tags),
+      primaryTag: r.tags[0] ?? null,
+      isActive: true,
+    })),
+  );
+}
+
 describe("sync.autoGroupOffersIntoBatches (Phase 5h)", () => {
   test("snapshot: emits BatchCreated per unique tag + cascaded tasks/notification", async () => {
     await seedOffers(workspaceId, [
-      // Two offers under tag SL_DE_BATCH1 → one batch with 2 offers.
+      // Two offers under tag sl_de_batch1 → one batch with 2 offers.
       { offerId: "o1", offerName: "O1", primaryTag: "sl_de_batch1" },
       { offerId: "o2", offerName: "O2", primaryTag: "sl_de_batch1" },
-      // One offer under tag YK_US_BATCH7 → one batch with 1 offer.
+      // One offer under tag yk_us_batch7 → one batch with 1 offer.
       { offerId: "o3", offerName: "O3", primaryTag: "yk_us_batch7" },
       // Untagged → skipped.
       { offerId: "o4", offerName: "O4", primaryTag: null },
@@ -177,8 +205,8 @@ describe("sync.autoGroupOffersIntoBatches (Phase 5h)", () => {
       .where(eq(testingBatchesTable.workspaceId, workspaceId));
     assert.equal(batches.length, 2);
     const tagsCreated = new Set(batches.map((b) => b.batchTag));
-    assert.ok(tagsCreated.has("SL_DE_BATCH1"));
-    assert.ok(tagsCreated.has("YK_US_BATCH7"));
+    assert.ok(tagsCreated.has("sl_de_batch1"));
+    assert.ok(tagsCreated.has("yk_us_batch7"));
     // Spec-correction (post Phase 10): batches stay NEW_BATCH at
     // creation; transition to WAITING_FOR_TRACKER_CAMPAIGNS only
     // happens when the FIRST tracker campaign is imported.
@@ -191,8 +219,8 @@ describe("sync.autoGroupOffersIntoBatches (Phase 5h)", () => {
     // workflow seeds CREATE_IOS_CAMPAIGN + CREATE_ANDROID_CAMPAIGN
     // tasks instead — see the BatchCreated suite in rules.test.ts.
     // numberOfOffers carried through the CreateBatch action.
-    const slBatch = batches.find((b) => b.batchTag === "SL_DE_BATCH1")!;
-    const ykBatch = batches.find((b) => b.batchTag === "YK_US_BATCH7")!;
+    const slBatch = batches.find((b) => b.batchTag === "sl_de_batch1")!;
+    const ykBatch = batches.find((b) => b.batchTag === "yk_us_batch7")!;
     assert.equal(slBatch.numberOfOffers, 2);
     assert.equal(ykBatch.numberOfOffers, 1);
 
@@ -209,10 +237,10 @@ describe("sync.autoGroupOffersIntoBatches (Phase 5h)", () => {
       );
     assert.equal(batchCreatedEvents.length, 2);
     const dedupeKeys = new Set(batchCreatedEvents.map((e) => e.dedupeKey));
-    assert.ok(dedupeKeys.has("voluum_tag:SL_DE_BATCH1"));
-    assert.ok(dedupeKeys.has("voluum_tag:YK_US_BATCH7"));
+    assert.ok(dedupeKeys.has("voluum_tag:sl_de_batch1"));
+    assert.ok(dedupeKeys.has("voluum_tag:yk_us_batch7"));
 
-    // 2 batches × (ios + android) = 4 tracker tasks.
+    // 2 batches × (ios + android) = 4 CampaignOps create-campaign tasks.
     const tasks = await db
       .select()
       .from(todoTasksTable)
@@ -220,10 +248,10 @@ describe("sync.autoGroupOffersIntoBatches (Phase 5h)", () => {
     assert.equal(tasks.length, 4);
     const taskTypes = tasks.map((t) => t.taskType).sort();
     assert.deepEqual(taskTypes, [
-      "CREATE_ANDROID_CAMPAIGN",
-      "CREATE_ANDROID_CAMPAIGN",
-      "CREATE_IOS_CAMPAIGN",
-      "CREATE_IOS_CAMPAIGN",
+      "create_voluum_campaign_android",
+      "create_voluum_campaign_android",
+      "create_voluum_campaign_ios",
+      "create_voluum_campaign_ios",
     ]);
 
     // 2 NEW_BATCH_CREATED notifications.
@@ -323,6 +351,97 @@ describe("sync.autoGroupOffersIntoBatches (Phase 5h)", () => {
     assert.equal(batches.length, 2);
   });
 
+  test("duplicate exact lowercase tags create one batch and uppercase tags are ignored", async () => {
+    await seedOffers(workspaceId, [
+      { offerId: "dup-1", offerName: "Dup 1", primaryTag: "sl_de_batch1" },
+      { offerId: "dup-2", offerName: "Dup 2", primaryTag: "sl_de_batch1" },
+      { offerId: "upper", offerName: "Uppercase ignored", primaryTag: "SL_DE_BATCH1" },
+    ]);
+
+    const result = await autoGroupOffersIntoBatches(workspaceId, silentLog);
+
+    assert.equal(result.batchesCreated, 1);
+    assert.equal(result.offersGrouped, 2);
+
+    const batches = await db
+      .select()
+      .from(testingBatchesTable)
+      .where(eq(testingBatchesTable.workspaceId, workspaceId));
+    assert.equal(batches.length, 1);
+    assert.equal(batches[0].batchTag, "sl_de_batch1");
+    assert.equal(batches[0].numberOfOffers, 2);
+
+    const ignored = await db
+      .select()
+      .from(voluumOffersTable)
+      .where(
+        and(
+          eq(voluumOffersTable.workspaceId, workspaceId),
+          eq(voluumOffersTable.offerId, "upper"),
+        ),
+      );
+    assert.equal(ignored[0].batchId, null);
+  });
+
+  test("campaign matching links ios and and campaigns to the same batch and traffic source", async () => {
+    await seedOffers(workspaceId, [
+      { offerId: "match-offer", offerName: "Match offer", primaryTag: "sl_de_batch1" },
+    ]);
+    await seedCampaigns(workspaceId, [
+      {
+        campaignId: "camp-ios",
+        campaignName: "iOS tracker",
+        trafficSourceName: "Source A",
+        tags: ["sl_de_batch1_ios"],
+      },
+      {
+        campaignId: "camp-and",
+        campaignName: "Android tracker",
+        trafficSourceName: "Source A",
+        tags: ["sl_de_batch1_and"],
+      },
+      {
+        campaignId: "camp-no-suffix",
+        campaignName: "Ignored missing suffix",
+        trafficSourceName: "Source A",
+        tags: ["sl_de_batch1"],
+      },
+      {
+        campaignId: "camp-legacy-android",
+        campaignName: "Ignored legacy suffix",
+        trafficSourceName: "Source A",
+        tags: ["sl_de_batch1_android"],
+      },
+    ]);
+
+    const result = await autoGroupOffersIntoBatches(workspaceId, silentLog);
+    assert.equal(result.batchesCreated, 1);
+
+    const [batch] = await db
+      .select()
+      .from(testingBatchesTable)
+      .where(eq(testingBatchesTable.workspaceId, workspaceId));
+    assert.equal(batch.batchTag, "sl_de_batch1");
+
+    const trackerCampaigns = await db
+      .select()
+      .from(trackerCampaignsTable)
+      .where(eq(trackerCampaignsTable.workspaceId, workspaceId));
+    assert.equal(trackerCampaigns.length, 2);
+    assert.ok(trackerCampaigns.every((c) => c.batchId === batch.id));
+
+    const trafficSourceIds = new Set(trackerCampaigns.map((c) => c.trafficSourceId));
+    assert.equal(trafficSourceIds.size, 1);
+    assert.deepEqual(
+      trackerCampaigns.map((c) => c.device).sort(),
+      ["android", "ios"],
+    );
+    assert.deepEqual(
+      trackerCampaigns.map((c) => c.tag).sort(),
+      ["sl_de_batch1_and", "sl_de_batch1_ios"],
+    );
+  });
+
   test("cross-workspace isolation: same tag in WS-A and WS-B produces independent batches", async () => {
     // Identical tag in both workspaces.
     await seedOffers(workspaceId, [
@@ -399,7 +518,7 @@ describe("sync.autoGroupOffersIntoBatches (Phase 5h)", () => {
       bBatch.id,
       "the two workspaces own distinct batch rows",
     );
-    assert.equal(aBatch.batchTag, "SL_DE_BATCH1");
-    assert.equal(bBatch.batchTag, "SL_DE_BATCH1");
+    assert.equal(aBatch.batchTag, "sl_de_batch1");
+    assert.equal(bBatch.batchTag, "sl_de_batch1");
   });
 });

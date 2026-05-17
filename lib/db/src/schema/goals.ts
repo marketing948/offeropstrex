@@ -2,11 +2,13 @@ import { pgTable, text, serial, timestamp, integer, numeric, pgEnum } from "driz
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { employeesTable } from "./employees";
+import { workspacesTable } from "./workspaces";
 
 export const periodTypeEnum = pgEnum("period_type", ["weekly", "monthly"]);
 
 export const goalsTable = pgTable("goals", {
   id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").notNull().references(() => workspacesTable.id, { onDelete: "cascade" }),
   employeeId: integer("employee_id").notNull().references(() => employeesTable.id, { onDelete: "cascade" }),
   periodType: periodTypeEnum("period_type").notNull(),
   periodStart: text("period_start").notNull(),

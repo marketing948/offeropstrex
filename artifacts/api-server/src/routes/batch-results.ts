@@ -229,7 +229,7 @@ router.patch("/batch-results/:id", async (req, res): Promise<void> => {
   const [row] = await db
     .update(batchResultsTable)
     .set(updates)
-    .where(eq(batchResultsTable.id, id))
+    .where(and(eq(batchResultsTable.id, id), eq(batchResultsTable.workspaceId, existing.workspaceId)))
     .returning();
 
   // Re-emit if the updated row qualifies — preserves the ability for

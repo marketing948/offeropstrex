@@ -6,7 +6,7 @@
 // preserved so the OpenAPI contract and existing FE consumers keep
 // working — only the data origin changes.
 import { Router, type IRouter } from "express";
-import { eq, and, or, gte, lt, count, sum, sql, inArray } from "drizzle-orm";
+import { eq, and, gte, lt, count, sum, sql, inArray } from "drizzle-orm";
 import {
   db,
   testingBatchesTable,
@@ -372,6 +372,18 @@ router.get("/dashboard/employee-summary", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Employee not found" });
     return;
   }
+  const [assignment] = await db
+    .select({ id: employeeWorkspaceAssignmentsTable.id })
+    .from(employeeWorkspaceAssignmentsTable)
+    .where(and(
+      eq(employeeWorkspaceAssignmentsTable.employeeId, employee_id),
+      eq(employeeWorkspaceAssignmentsTable.workspaceId, workspaceId),
+    ))
+    .limit(1);
+  if (!assignment) {
+    res.status(404).json({ error: "Employee not found in workspace" });
+    return;
+  }
 
   const weekStart = getWeekStart();
   const monthStart = getMonthStart();
@@ -379,7 +391,7 @@ router.get("/dashboard/employee-summary", async (req, res): Promise<void> => {
   const goals = await db
     .select()
     .from(goalsTable)
-    .where(eq(goalsTable.employeeId, employee_id))
+    .where(and(eq(goalsTable.workspaceId, workspaceId), eq(goalsTable.employeeId, employee_id)))
     .orderBy(goalsTable.createdAt);
 
   const weeklyGoal = goals.find(g => g.periodType === "weekly") ?? null;
@@ -455,25 +467,20 @@ router.get("/dashboard/employee-leaderboard", async (req, res): Promise<void> =>
   const weekStart = (req.query.date_from as string | undefined) ?? getWeekStart();
   const dateTo = req.query.date_to as string | undefined;
 
-  // Scope leaderboard to workspace members (admins always included).
+  // Scope leaderboard to explicit workspace members only. Admin role is not
+  // global workspace access.
   const assignments = await db
     .select({ employeeId: employeeWorkspaceAssignmentsTable.employeeId })
     .from(employeeWorkspaceAssignmentsTable)
     .where(eq(employeeWorkspaceAssignmentsTable.workspaceId, workspaceId));
   const assignedIds = assignments.map(a => a.employeeId);
 
-  const empConditions = [
-    and(eq(employeesTable.status, "active"), eq(employeesTable.role, "admin"))!,
-  ];
-  if (assignedIds.length > 0) {
-    empConditions.push(
-      and(eq(employeesTable.status, "active"), inArray(employeesTable.id, assignedIds))!,
-    );
-  }
-  const employees = await db
-    .select()
-    .from(employeesTable)
-    .where(or(...empConditions));
+  const employees = assignedIds.length > 0
+    ? await db
+        .select()
+        .from(employeesTable)
+        .where(and(eq(employeesTable.status, "active"), inArray(employeesTable.id, assignedIds)))
+    : [];
 
   const leaderboard = await Promise.all(
     employees.map(async (emp) => {
@@ -522,7 +529,7 @@ router.get("/dashboard/goal-progress", async (req, res): Promise<void> => {
     return;
   }
 
-  const conditions = [];
+  const conditions = [eq(goalsTable.workspaceId, workspaceId)];
   if (params.data.period_type) {
     conditions.push(eq(goalsTable.periodType, params.data.period_type));
   }
@@ -530,9 +537,7 @@ router.get("/dashboard/goal-progress", async (req, res): Promise<void> => {
     conditions.push(eq(goalsTable.employeeId, params.data.employee_id));
   }
 
-  const goals = conditions.length > 0
-    ? await db.select().from(goalsTable).where(and(...conditions))
-    : await db.select().from(goalsTable);
+  const goals = await db.select().from(goalsTable).where(and(...conditions));
 
   const result = await Promise.all(
     goals.map(async (goal) => {

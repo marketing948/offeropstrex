@@ -182,7 +182,10 @@ router.delete("/performance/:id", async (req, res): Promise<void> => {
 
   const [record] = await db
     .delete(performanceTable)
-    .where(eq(performanceTable.id, params.data.id))
+    .where(and(
+      eq(performanceTable.id, params.data.id),
+      sql`exists (select 1 from testing_batches tb where tb.id = ${performanceTable.batchId} and tb.workspace_id = ${existing.workspaceId})`,
+    ))
     .returning();
 
   if (!record) {

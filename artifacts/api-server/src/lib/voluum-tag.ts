@@ -4,14 +4,12 @@ export const ALLOWED_AFFILIATE_INITIALS = [
 
 export type AffiliateInitials = (typeof ALLOWED_AFFILIATE_INITIALS)[number];
 
-// Voluum stores tags in lowercase, but operators sometimes type them mixed-case
-// or upper-case. Validation is case-insensitive; parsed fields are normalized
-// to upper-case for storage so downstream grouping (auto-batching, reports)
-// always sees a single canonical form.
+// OfferOps automation is strictly tag-driven. Batch tags must already be
+// lowercase in Voluum; mixed/upper-case tags are ignored rather than
+// normalized so operators can fix the source data.
 const AFFILIATE_PATTERN = ALLOWED_AFFILIATE_INITIALS.join("|").toLowerCase();
 export const VOLUUM_TAG_REGEX = new RegExp(
-  `^(${AFFILIATE_PATTERN})_([a-z]{2,3})_([a-z]+)([0-9]+)$`,
-  "i",
+  `^(${AFFILIATE_PATTERN})_([a-z]{2,3})_batch([0-9]+)$`,
 );
 
 const ANY_AFFILIATE_PREFIX_REGEX = /^([A-Za-z]+)_/;
@@ -43,32 +41,28 @@ function parseSingleTag(raw: string):
   | { ok: false; reason: VoluumTagSkipReason } {
   const tag = raw.trim();
   if (!tag) return { ok: false, reason: "invalid_tag_format" };
+  if (tag !== tag.toLowerCase()) return { ok: false, reason: "invalid_tag_format" };
 
   const m = VOLUUM_TAG_REGEX.exec(tag);
   if (m) {
-    const [, affiliate, geo, batchPrefix, batchNumberStr] = m;
+    const [, affiliate, geo, batchNumberStr] = m;
     const batchNumber = Number(batchNumberStr);
     if (!Number.isFinite(batchNumber) || batchNumber <= 0) {
       return { ok: false, reason: "invalid_batch_number" };
     }
-    const affiliateUpper = affiliate.toUpperCase() as AffiliateInitials;
-    const geoUpper = geo.toUpperCase();
-    const batchPrefixUpper = batchPrefix.toUpperCase();
     return {
       ok: true,
       parsed: {
-        // Canonical form, regardless of how Voluum stored it.
-        tag: `${affiliateUpper}_${geoUpper}_${batchPrefixUpper}${batchNumber}`,
-        affiliateInitials: affiliateUpper,
-        geo: geoUpper,
-        batchPrefix: batchPrefixUpper,
+        tag,
+        affiliateInitials: affiliate.toUpperCase() as AffiliateInitials,
+        geo,
+        batchPrefix: "batch",
         batchNumber,
       },
     };
   }
 
-  // Tag did not match. Diagnose the most useful reason. All comparisons are
-  // case-insensitive to match the lowercase tags Voluum actually stores.
+  // Tag did not match. Diagnose the most useful reason.
   const prefixRaw = ANY_AFFILIATE_PREFIX_REGEX.exec(tag)?.[1] ?? null;
   if (prefixRaw && !ALLOWED_AFFILIATE_SET.has(prefixRaw.toUpperCase())) {
     return { ok: false, reason: "unknown_affiliate_initials" };
@@ -78,10 +72,10 @@ function parseSingleTag(raw: string):
   const looseParts = tag.split("_");
   if (looseParts.length === 3) {
     const [, geoPart, tail] = looseParts;
-    if (!/^[A-Za-z]{2,3}$/.test(geoPart)) {
+    if (!/^[a-z]{2,3}$/.test(geoPart)) {
       return { ok: false, reason: "invalid_geo" };
     }
-    const tailMatch = /^([A-Za-z]+)([0-9]+)$/.exec(tail);
+    const tailMatch = /^(batch)([0-9]+)$/.exec(tail);
     if (tailMatch && Number(tailMatch[2]) <= 0) {
       return { ok: false, reason: "invalid_batch_number" };
     }
@@ -102,8 +96,8 @@ export function normalizeRawTags(rawTags: unknown): string[] {
 }
 
 /**
- * Inspect every tag on an item and pick the first one that matches the
- * canonical OfferOps tag pattern. If at least one valid tag is found, the
+ * Inspect every tag on an item and pick the first lowercase tag that matches
+ * the canonical OfferOps batch tag pattern. If at least one valid tag is found, the
  * item is importable. If none match, return a structured skip reason that
  * favors the most informative diagnosis seen across all tags.
  */
@@ -145,8 +139,8 @@ export function pickValidVoluumTag(rawTags: unknown): PickValidTagResult {
 // tags identify a single tracker slot (one device for one batch) and
 // follow this shape:
 //
-//   <initials>_<geo>_batch<n>_<device>
-//   e.g. sl_gb_batch1_ios
+//   <initials>_<geo>_batch<n>_<platform>
+//   e.g. sl_gb_batch1_ios, sl_gb_batch1_and
 //
 // SPEC §4: traffic source is NOT part of the tag. The traffic source
 // for a tracker campaign is detected from Voluum's campaign-level
@@ -154,11 +148,11 @@ export function pickValidVoluumTag(rawTags: unknown): PickValidTagResult {
 // used by the sync producer when emitting TrackerCampaignImported.
 
 export type TrackerDevice = "ios" | "android";
+export type TrackerPlatformSuffix = "ios" | "and";
 
 const TRACKER_AFFILIATE_PATTERN = ALLOWED_AFFILIATE_INITIALS.join("|").toLowerCase();
 export const TRACKER_CAMPAIGN_TAG_REGEX = new RegExp(
-  `^(${TRACKER_AFFILIATE_PATTERN})_([a-z]{2,3})_batch([0-9]+)_(ios|android)$`,
-  "i",
+  `^(${TRACKER_AFFILIATE_PATTERN})_([a-z]{2,3})_batch([0-9]+)_(ios|and)$`,
 );
 
 export type ParsedTrackerCampaignTag = {
@@ -167,6 +161,8 @@ export type ParsedTrackerCampaignTag = {
   affiliateInitials: AffiliateInitials;
   geo: string;
   batchNumber: number;
+  batchTag: string;
+  platformSuffix: TrackerPlatformSuffix;
   device: TrackerDevice;
 };
 
@@ -188,26 +184,29 @@ export function parseTrackerCampaignTag(raw: unknown): ParseTrackerCampaignTagRe
   if (raw == null) return { valid: false, reason: "missing_tag", offendingTag: null };
   const tag = String(raw).trim();
   if (!tag) return { valid: false, reason: "missing_tag", offendingTag: null };
+  if (tag !== tag.toLowerCase()) {
+    return { valid: false, reason: "invalid_tag_format", offendingTag: tag };
+  }
 
   const m = TRACKER_CAMPAIGN_TAG_REGEX.exec(tag);
   if (m) {
-    const [, affiliate, geo, batchNumberStr, device] = m;
+    const [, affiliate, geo, batchNumberStr, platformSuffix] = m;
     const batchNumber = Number(batchNumberStr);
     if (!Number.isFinite(batchNumber) || batchNumber <= 0) {
       return { valid: false, reason: "invalid_batch_number", offendingTag: tag };
     }
-    const affiliateUpper = affiliate.toUpperCase() as AffiliateInitials;
-    const geoLower = geo.toLowerCase();
-    const deviceLower = device.toLowerCase() as TrackerDevice;
+    const batchTag = `${affiliate}_${geo}_batch${batchNumber}`;
+    const suffix = platformSuffix as TrackerPlatformSuffix;
     return {
       valid: true,
       parsed: {
-        // Canonical storage form: lower-case (Voluum convention).
-        tag: `${affiliateUpper.toLowerCase()}_${geoLower}_batch${batchNumber}_${deviceLower}`,
-        affiliateInitials: affiliateUpper,
-        geo: geoLower,
+        tag,
+        affiliateInitials: affiliate.toUpperCase() as AffiliateInitials,
+        geo,
         batchNumber,
-        device: deviceLower,
+        batchTag,
+        platformSuffix: suffix,
+        device: suffix === "ios" ? "ios" : "android",
       },
     };
   }
@@ -220,21 +219,21 @@ export function parseTrackerCampaignTag(raw: unknown): ParseTrackerCampaignTagRe
   }
 
   // Tracker tags have exactly 4 underscore-separated parts:
-  // <initials>_<geo>_batch<n>_<device>
+  // <initials>_<geo>_batch<n>_<platform>
   const parts = tag.split("_");
   if (parts.length === 4) {
-    const [, geoPart, batchPart, devicePart] = parts;
-    if (!/^[A-Za-z]{2,3}$/.test(geoPart)) {
+    const [, geoPart, batchPart, platformPart] = parts;
+    if (!/^[a-z]{2,3}$/.test(geoPart)) {
       return { valid: false, reason: "invalid_geo", offendingTag: tag };
     }
-    const batchMatch = /^batch([0-9]+)$/i.exec(batchPart);
+    const batchMatch = /^batch([0-9]+)$/.exec(batchPart);
     if (batchMatch) {
       const n = Number(batchMatch[1]);
       if (!Number.isFinite(n) || n <= 0) {
         return { valid: false, reason: "invalid_batch_number", offendingTag: tag };
       }
     }
-    if (devicePart && !/^(ios|android)$/i.test(devicePart)) {
+    if (platformPart && !/^(ios|and)$/.test(platformPart)) {
       return { valid: false, reason: "invalid_tag_format", offendingTag: tag };
     }
   }

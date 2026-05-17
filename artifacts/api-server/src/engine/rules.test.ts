@@ -29,18 +29,19 @@ import {
 } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { emit } from "./event-bus.ts";
-import { _resetRegistryForTests } from "./handlers.ts";
+import { _resetRegistryForTests, registerHandler } from "./handlers.ts";
 import { _resetRulesGuardForTests, registerAllRules } from "./rules/index.ts";
 import { runOverdueTasksScan } from "../cron/overdue-tasks.ts";
 
 let workspaceId: number;
 let otherWorkspaceId: number;
 let employeeId: number;
-// IDs in voluum_traffic_sources (the FK target on todo_tasks +
-// testing_batches). The workspace_traffic_sources rotation rows are
-// joined onto these via (workspace_id, voluum_id).
+// Legacy Voluum IDs are still used by tracker_campaigns/currentTrafficSourceId.
 let trafficSourceAId: number;
 let trafficSourceBId: number;
+// CampaignOps task/run state uses workspace traffic-source IDs.
+let workspaceTrafficSourceAId: number;
+let workspaceTrafficSourceBId: number;
 
 before(async () => {
   const [ws] = await db
@@ -78,20 +79,22 @@ before(async () => {
   trafficSourceAId = vtsA.id;
   trafficSourceBId = vtsB.id;
 
-  await db.insert(workspaceTrafficSourcesTable).values({
+  const [wtsA] = await db.insert(workspaceTrafficSourcesTable).values({
     workspaceId,
     name: "Source A",
     voluumTrafficSourceId: voluumIdA,
     position: 1,
     isActive: true,
-  });
-  await db.insert(workspaceTrafficSourcesTable).values({
+  }).returning({ id: workspaceTrafficSourcesTable.id });
+  const [wtsB] = await db.insert(workspaceTrafficSourcesTable).values({
     workspaceId,
     name: "Source B",
     voluumTrafficSourceId: voluumIdB,
     position: 2,
     isActive: true,
-  });
+  }).returning({ id: workspaceTrafficSourcesTable.id });
+  workspaceTrafficSourceAId = wtsA.id;
+  workspaceTrafficSourceBId = wtsB.id;
 });
 
 after(async () => {
@@ -132,11 +135,21 @@ async function insertBatch(opts?: {
   return b.id;
 }
 
+async function getWorkspaceTrafficSourceId(): Promise<number> {
+  const [source] = await db
+    .select({ id: workspaceTrafficSourcesTable.id })
+    .from(workspaceTrafficSourcesTable)
+    .where(eq(workspaceTrafficSourcesTable.workspaceId, workspaceId))
+    .limit(1);
+  assert.ok(source, "expected seeded workspace traffic source");
+  return source.id;
+}
+
 describe("rules: BatchCreated (Pivot Phase 4)", () => {
   // Pivot Phase 4 (Task #27): BatchCreated seeds the manual
-  // CREATE_IOS_CAMPAIGN + CREATE_ANDROID_CAMPAIGN tasks for the
+  // create_voluum_campaign_ios + create_voluum_campaign_android tasks for the
   // assigned worker. Idempotent via dedupe key `batch_created:<id>`.
-  test("seeds CREATE_IOS_CAMPAIGN + CREATE_ANDROID_CAMPAIGN tasks for assigned worker", async () => {
+  test("seeds create_voluum_campaign_ios + create_voluum_campaign_android tasks for assigned worker", async () => {
     const batchId = await insertBatch();
 
     const result = await emit({
@@ -159,7 +172,7 @@ describe("rules: BatchCreated (Pivot Phase 4)", () => {
       .where(eq(todoTasksTable.relatedBatchId, batchId));
     assert.equal(tasks.length, 2, "should seed two campaign tasks");
     const types = tasks.map((t) => t.taskType).sort();
-    assert.deepEqual(types, ["CREATE_ANDROID_CAMPAIGN", "CREATE_IOS_CAMPAIGN"]);
+    assert.deepEqual(types, ["create_voluum_campaign_android", "create_voluum_campaign_ios"]);
     for (const t of tasks) {
       assert.equal(t.employeeId, employeeId);
       assert.equal(t.workspaceId, workspaceId);
@@ -520,7 +533,7 @@ describe("rules: TrackerCampaignImported", () => {
         title: "iOS",
         taskType: "CREATE_IOS_TRACKER_CAMPAIGN",
         trackerCampaignDevice: "ios",
-        trafficSourceId: trafficSourceAId,
+        trafficSourceId: workspaceTrafficSourceAId,
       })
       .returning({ id: todoTasksTable.id });
     await db.insert(todoTasksTable).values({
@@ -530,7 +543,7 @@ describe("rules: TrackerCampaignImported", () => {
       title: "Android",
       taskType: "CREATE_ANDROID_TRACKER_CAMPAIGN",
       trackerCampaignDevice: "android",
-      trafficSourceId: trafficSourceAId,
+      trafficSourceId: workspaceTrafficSourceAId,
     });
 
     // Phase 5c: producer no longer pre-inserts. Emit with descriptors;
@@ -645,7 +658,7 @@ describe("rules: TaskCompleted", () => {
     assert.ok(true);
   });
 
-  test("CREATE_IOS_CAMPAIGN done → ios campaign draft→ready, chains GO_LIVE when both ready", async () => {
+  test("legacy CREATE_IOS_CAMPAIGN completion no-ops", async () => {
     const batchId = await insertBatch();
     const [ios] = await db
       .insert(campaignsTable)
@@ -692,7 +705,7 @@ describe("rules: TaskCompleted", () => {
       .select({ status: campaignsTable.status })
       .from(campaignsTable)
       .where(eq(campaignsTable.id, ios.id));
-    assert.equal(iosAfter.status, "ready");
+    assert.equal(iosAfter.status, "draft");
 
     // Cascade: chain-emit CampaignStatusChanged → GO_LIVE seeded.
     const goLive = await db
@@ -704,10 +717,10 @@ describe("rules: TaskCompleted", () => {
           eq(todoTasksTable.taskType, "GO_LIVE"),
         ),
       );
-    assert.equal(goLive.length, 1, "GO_LIVE task chained");
+    assert.equal(goLive.length, 0, "legacy completion does not schedule GO_LIVE");
   });
 
-  test("GO_LIVE done → both ready campaigns flip to live", async () => {
+  test("legacy GO_LIVE completion no-ops", async () => {
     const batchId = await insertBatch();
     const [ios] = await db
       .insert(campaignsTable)
@@ -755,10 +768,141 @@ describe("rules: TaskCompleted", () => {
       .from(campaignsTable)
       .where(eq(campaignsTable.batchId, batchId));
     for (const r of rows) {
-      assert.equal(r.status, "live", `campaign ${r.id} should be live`);
+      assert.equal(r.status, "ready", `campaign ${r.id} should remain ready`);
     }
     void ios;
     void android;
+  });
+});
+
+describe("rules: TaskCompletionRequested", () => {
+  test("duplicate completion events are idempotent", async () => {
+    const batchId = await insertBatch();
+    const trafficSourceId = await getWorkspaceTrafficSourceId();
+    const [task] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId,
+        employeeId,
+        relatedBatchId: batchId,
+        taskType: "create_voluum_campaign_ios",
+        title: "Create iOS campaign",
+      })
+      .returning({ id: todoTasksTable.id });
+
+    const event = {
+      type: "TaskCompletionRequested" as const,
+      workspaceId,
+      payload: {
+        taskId: task.id,
+        completedByEmployeeId: employeeId,
+        completion: {
+          kind: "create_voluum_campaign" as const,
+          platform: "ios" as const,
+          trafficSourceId,
+          voluumCampaignId: `dup-${Date.now()}`,
+          voluumCampaignName: "Duplicate-safe Campaign",
+          campaignName: "Duplicate-safe Campaign",
+        },
+      },
+      dedupeKey: `task_completion_requested:${task.id}:duplicate-test`,
+    };
+
+    const first = await emit(event);
+    const second = await emit(event);
+
+    assert.equal(first.deduped, false);
+    assert.equal(second.deduped, true);
+
+    const campaigns = await db
+      .select({ id: campaignsTable.id })
+      .from(campaignsTable)
+      .where(and(eq(campaignsTable.batchId, batchId), eq(campaignsTable.platform, "ios")));
+    assert.equal(campaigns.length, 1);
+
+    const completed = await db
+      .select({ id: eventsTable.id })
+      .from(eventsTable)
+      .where(
+        and(
+          eq(eventsTable.workspaceId, workspaceId),
+          eq(eventsTable.type, "TaskCompleted"),
+          eq(eventsTable.dedupeKey, `task_completed:${task.id}`),
+        ),
+      );
+    assert.equal(completed.length, 1);
+  });
+
+  test("failed completion rolls back and can be retried with the same dedupe key", async () => {
+    const batchId = await insertBatch();
+    const trafficSourceId = await getWorkspaceTrafficSourceId();
+    const [task] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId,
+        employeeId,
+        relatedBatchId: batchId,
+        taskType: "create_voluum_campaign_android",
+        title: "Create Android campaign",
+      })
+      .returning({ id: todoTasksTable.id });
+
+    const event = {
+      type: "TaskCompletionRequested" as const,
+      workspaceId,
+      payload: {
+        taskId: task.id,
+        completedByEmployeeId: employeeId,
+        completion: {
+          kind: "create_voluum_campaign" as const,
+          platform: "android" as const,
+          trafficSourceId,
+          voluumCampaignId: `retry-${Date.now()}`,
+          voluumCampaignName: "Retry Campaign",
+          campaignName: "Retry Campaign",
+        },
+      },
+      dedupeKey: `task_completion_requested:${task.id}:retry-test`,
+    };
+
+    registerHandler("TaskCompleted", async () => {
+      throw new Error("forced retry failure");
+    });
+
+    await assert.rejects(() => emit(event), /forced retry failure/);
+
+    const [afterFailure] = await db
+      .select({
+        status: todoTasksTable.status,
+        relatedCampaignId: todoTasksTable.relatedCampaignId,
+      })
+      .from(todoTasksTable)
+      .where(eq(todoTasksTable.id, task.id));
+    assert.equal(afterFailure.status, "TODO");
+    assert.equal(afterFailure.relatedCampaignId, null);
+
+    const failedCampaigns = await db
+      .select({ id: campaignsTable.id })
+      .from(campaignsTable)
+      .where(eq(campaignsTable.batchId, batchId));
+    assert.equal(failedCampaigns.length, 0);
+
+    _resetRegistryForTests();
+    _resetRulesGuardForTests();
+    registerAllRules();
+
+    const retry = await emit(event);
+    assert.equal(retry.deduped, false);
+
+    const [afterRetry] = await db
+      .select({
+        status: todoTasksTable.status,
+        relatedCampaignId: todoTasksTable.relatedCampaignId,
+      })
+      .from(todoTasksTable)
+      .where(eq(todoTasksTable.id, task.id));
+    assert.equal(afterRetry.status, "DONE");
+    assert.ok(afterRetry.relatedCampaignId !== null);
   });
 });
 
@@ -881,7 +1025,7 @@ describe("rules: TrafficSourceAdvanced", () => {
       payload: {
         batchId,
         previousTrafficSourceId: trafficSourceAId,
-        nextTrafficSourceId: trafficSourceBId,
+        nextTrafficSourceId: workspaceTrafficSourceBId,
         nextTrafficSourceName: "Source B",
       },
     });
@@ -892,7 +1036,7 @@ describe("rules: TrafficSourceAdvanced", () => {
       .where(
         and(
           eq(todoTasksTable.relatedBatchId, batchId),
-          eq(todoTasksTable.trafficSourceId, trafficSourceBId),
+          eq(todoTasksTable.trafficSourceId, workspaceTrafficSourceBId),
         ),
       );
     assert.equal(tasks.length, 2);

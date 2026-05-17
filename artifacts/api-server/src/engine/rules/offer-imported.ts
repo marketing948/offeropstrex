@@ -66,7 +66,7 @@ export async function handleOfferImported(
       .limit(1);
     const ownerEmployeeId = defaultEmployee?.id ?? 1;
 
-    // Derive display fields from the canonical tag (already UPPER_CASE).
+    // Derive display fields from the canonical lowercase batch tag.
     const batchName = `${payload.affiliateNetworkName} / ${payload.geo} / ${tag}`;
 
     const upsert = await executeCreateBatch(

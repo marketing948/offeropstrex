@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, geosTable } from "@workspace/db";
 import { requireWorkspaceFromQuery, requireAdmin, requireWorkspaceAccess } from "../lib/workspace-access";
 
@@ -88,7 +88,7 @@ router.patch("/geos/:id", async (req, res): Promise<void> => {
     const [row] = await db
       .update(geosTable)
       .set(updates)
-      .where(eq(geosTable.id, id))
+      .where(and(eq(geosTable.id, id), eq(geosTable.workspaceId, existing.workspaceId)))
       .returning();
     res.json(serialize(row));
   } catch (err: any) {
@@ -115,7 +115,9 @@ router.delete("/geos/:id", async (req, res): Promise<void> => {
   const access = await requireWorkspaceAccess(req, res, existing.workspaceId);
   if (!access) return;
   try {
-    await db.delete(geosTable).where(eq(geosTable.id, id));
+    await db
+      .delete(geosTable)
+      .where(and(eq(geosTable.id, id), eq(geosTable.workspaceId, existing.workspaceId)));
     res.json({ success: true });
   } catch (err: any) {
     if (err?.code === "23503" || err?.cause?.code === "23503") {

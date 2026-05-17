@@ -708,6 +708,11 @@ paths:
       tags: [goals]
       summary: List goals
       parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: integer
         - name: employee_id
           in: query
           schema:
@@ -2504,6 +2509,8 @@ components:
       properties:
         id:
           type: integer
+        workspaceId:
+          type: integer
         employeeId:
           type: integer
         periodType:
@@ -2533,6 +2540,7 @@ components:
           type: string
       required:
         - id
+        - workspaceId
         - employeeId
         - periodType
         - periodStart
@@ -2542,6 +2550,8 @@ components:
     CreateGoalBody:
       type: object
       properties:
+        workspaceId:
+          type: integer
         employeeId:
           type: integer
         periodType:
@@ -2568,6 +2578,7 @@ components:
         notes:
           type: ["string", "null"]
       required:
+        - workspaceId
         - employeeId
         - periodType
         - periodStart
@@ -3204,6 +3215,8 @@ components:
           type: ["string", "null"]
         relatedBatchId:
           type: ["integer", "null"]
+        blockedReason:
+          type: ["string", "null"]
 
     TrafficSourceDevicePlan:
       type: object

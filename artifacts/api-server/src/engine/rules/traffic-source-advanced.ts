@@ -73,6 +73,7 @@ export async function handleTrafficSourceAdvanced(
   if (batch.status !== "NEW_BATCH") {
     actions.push({
       type: "ChangeBatchStatus",
+      workspaceId,
       batchId: batch.id,
       status: "NEW_BATCH",
     });

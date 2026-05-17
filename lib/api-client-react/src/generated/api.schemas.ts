@@ -109,6 +109,7 @@ export const GoalPeriodType = {
 
 export interface Goal {
   id: number;
+  workspaceId: number;
   employeeId: number;
   periodType: GoalPeriodType;
   periodStart: string;
@@ -141,6 +142,7 @@ export const CreateGoalBodyPeriodType = {
 } as const;
 
 export interface CreateGoalBody {
+  workspaceId: number;
   employeeId: number;
   periodType: CreateGoalBodyPeriodType;
   periodStart: string;
@@ -803,6 +805,8 @@ export interface UpdateTodoTaskBody {
   dueDate?: string | null;
   /** @nullable */
   relatedBatchId?: number | null;
+  /** @nullable */
+  blockedReason?: string | null;
 }
 
 export interface TrafficSourceDevicePlan {
@@ -1525,6 +1529,7 @@ export type ListEmployeesParams = {
 };
 
 export type ListGoalsParams = {
+  workspace_id: number;
   employee_id?: number;
   period_type?: ListGoalsPeriodType;
 };

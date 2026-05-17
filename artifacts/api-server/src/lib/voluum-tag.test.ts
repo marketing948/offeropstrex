@@ -1,9 +1,45 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  pickValidVoluumTag,
   parseTrackerCampaignTag,
   validateTrackerCampaignTag,
 } from "./voluum-tag.ts";
+
+describe("pickValidVoluumTag", () => {
+  it("parses a strict lowercase batch tag", () => {
+    const r = pickValidVoluumTag(["sl_de_batch1"]);
+    assert.equal(r.valid, true);
+    if (!r.valid) return;
+    assert.deepEqual(r.parsed, {
+      tag: "sl_de_batch1",
+      affiliateInitials: "SL",
+      geo: "de",
+      batchPrefix: "batch",
+      batchNumber: 1,
+    });
+  });
+
+  it("rejects mixed or uppercase batch tags", () => {
+    assert.equal(pickValidVoluumTag(["SL_DE_BATCH1"]).valid, false);
+    assert.equal(pickValidVoluumTag(["sl_DE_batch1"]).valid, false);
+  });
+
+  it("rejects non-batch tag shapes", () => {
+    const r = pickValidVoluumTag(["sl_de_round1"]);
+    assert.equal(r.valid, false);
+    if (r.valid) return;
+    assert.equal(r.reason, "invalid_tag_format");
+  });
+
+  it("picks the first valid lowercase tag from duplicate/noisy tags", () => {
+    const r = pickValidVoluumTag(["noise", "sl_de_batch1", "sl_de_batch1"]);
+    assert.equal(r.valid, true);
+    if (!r.valid) return;
+    assert.equal(r.parsed.tag, "sl_de_batch1");
+    assert.deepEqual(r.allTags, ["noise", "sl_de_batch1", "sl_de_batch1"]);
+  });
+});
 
 describe("parseTrackerCampaignTag", () => {
   it("parses a canonical iOS tag", () => {
@@ -15,29 +51,31 @@ describe("parseTrackerCampaignTag", () => {
       affiliateInitials: "SL",
       geo: "gb",
       batchNumber: 1,
+      batchTag: "sl_gb_batch1",
+      platformSuffix: "ios",
       device: "ios",
     });
   });
 
   it("parses a canonical Android tag", () => {
-    const r = parseTrackerCampaignTag("yk_de_batch12_android");
+    const r = parseTrackerCampaignTag("yk_de_batch12_and");
     assert.equal(r.valid, true);
     if (!r.valid) return;
     assert.equal(r.parsed.device, "android");
+    assert.equal(r.parsed.platformSuffix, "and");
+    assert.equal(r.parsed.batchTag, "yk_de_batch12");
     assert.equal(r.parsed.batchNumber, 12);
   });
 
-  it("is case-insensitive on input but canonicalises to lower-case", () => {
+  it("rejects mixed or uppercase campaign tags", () => {
     const r = parseTrackerCampaignTag("SL_GB_BATCH3_IOS");
-    assert.equal(r.valid, true);
-    if (!r.valid) return;
-    assert.equal(r.parsed.tag, "sl_gb_batch3_ios");
-    assert.equal(r.parsed.device, "ios");
-    assert.equal(r.parsed.affiliateInitials, "SL");
+    assert.equal(r.valid, false);
+    if (r.valid) return;
+    assert.equal(r.reason, "invalid_tag_format");
   });
 
   it("accepts 3-letter GEO", () => {
-    const r = parseTrackerCampaignTag("br_gbr_batch2_android");
+    const r = parseTrackerCampaignTag("br_gbr_batch2_and");
     assert.equal(r.valid, true);
     if (!r.valid) return;
     assert.equal(r.parsed.geo, "gbr");
@@ -83,6 +121,13 @@ describe("parseTrackerCampaignTag", () => {
 
   it("rejects bad device segment", () => {
     const r = parseTrackerCampaignTag("sl_gb_batch1_desktop");
+    assert.equal(r.valid, false);
+    if (r.valid) return;
+    assert.equal(r.reason, "invalid_tag_format");
+  });
+
+  it("rejects the legacy android suffix in favor of and", () => {
+    const r = parseTrackerCampaignTag("sl_gb_batch1_android");
     assert.equal(r.valid, false);
     if (r.valid) return;
     assert.equal(r.reason, "invalid_tag_format");

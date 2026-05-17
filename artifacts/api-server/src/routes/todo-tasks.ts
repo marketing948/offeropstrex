@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { eq, and } from "drizzle-orm";
-import { db, todoTasksTable, employeesTable, testingBatchesTable, campaignsTable, workspaceTrafficSourcesTable, batchTrafficSourceRunsTable } from "@workspace/db";
+import { db, todoTasksTable, employeesTable, testingBatchesTable } from "@workspace/db";
 import { z } from "zod/v4";
 import {
   CreateTodoTaskBody,
@@ -12,7 +12,8 @@ import {
 } from "@workspace/api-zod";
 import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access";
 import { requireWorkspaceFromBody } from "../lib/require-workspace";
-import { emit, emitWithinTx } from "../engine/event-bus.ts";
+import { emit } from "../engine/event-bus.ts";
+import type { TaskCompletionDetails } from "../engine/types.ts";
 import { getEmployeeFromToken } from "./auth";
 
 const router: IRouter = Router();
@@ -227,46 +228,44 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  // Spec-correction (post Phase 10): the engine TaskCompleted handler
-  // (FIND_WINNERS → PAUSE; PAUSE → AdvanceTrafficSource) only runs if
-  // someone actually emits TaskCompleted. The PATCH route is the only
-  // place workers mark tasks DONE, so emit from here when the status
-  // transitions TO DONE (and was not DONE before). Idempotent via the
-  // event log: dedupeKey `task_completed:<taskId>`.
+  if (parsed.data.status === "DONE" && existing.status !== "DONE") {
+    const actor = await getEmployeeFromToken(req);
+    if (!actor) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    await emit({
+      type: "TaskCompletionRequested",
+      workspaceId: existing.workspaceId,
+      payload: {
+        taskId: params.data.id,
+        completedByEmployeeId: actor.id,
+        completion: { kind: "generic" },
+      },
+      dedupeKey: `task_completion_requested:${params.data.id}`,
+    });
+
+    const [completedTask] = await db
+      .select()
+      .from(todoTasksTable)
+      .where(eq(todoTasksTable.id, params.data.id));
+    if (!completedTask) {
+      res.status(404).json({ error: "Task not found" });
+      return;
+    }
+    res.json(serializeTask(completedTask));
+    return;
+  }
+
   const [task] = await db
     .update(todoTasksTable)
     .set(parsed.data as Partial<typeof todoTasksTable.$inferInsert>)
-    .where(eq(todoTasksTable.id, params.data.id))
+    .where(and(eq(todoTasksTable.id, params.data.id), eq(todoTasksTable.workspaceId, existing.workspaceId)))
     .returning();
 
   if (!task) {
     res.status(404).json({ error: "Task not found" });
     return;
-  }
-
-  if (
-    task.status === "DONE" &&
-    existing.status !== "DONE" &&
-    task.relatedBatchId !== null
-  ) {
-    try {
-      await emit({
-        type: "TaskCompleted",
-        workspaceId: task.workspaceId,
-        payload: {
-          taskId: task.id,
-          taskType: task.taskType,
-          relatedBatchId: task.relatedBatchId,
-          relatedCampaignId: task.relatedCampaignId,
-        },
-        dedupeKey: `task_completed:${task.id}`,
-      });
-    } catch (err) {
-      req.log.warn(
-        { err, taskId: task.id },
-        "[todo-tasks] TaskCompleted emit failed — tombstoned",
-      );
-    }
   }
 
   res.json(serializeTask(task));
@@ -286,8 +285,9 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
 //      { trafficSourceCampaignId?, trafficSourceCampaignUrl?, notes? }
 //      → updates Campaign(status=live, liveStartedAt=now()), marks DONE, emits.
 //  - find_winners:
-//      { winnersCount, revenue, cost, clicks?, conversions?, notes? }
-//      → updates Campaign perf cols + status=tested, marks DONE, emits.
+//      success: { winnersCount, revenue, cost, clicks?, conversions?, notes? }
+//      failure: { outcome: "failed", failureReason, notes? }
+//      → updates Campaign outcome, marks DONE, emits.
 //  - all_traffic_sources_tested:
 //      no body — terminal acknowledgement; just mark DONE.
 
@@ -311,7 +311,8 @@ const takeCampaignLiveSchema = z.object({
     });
   }
 });
-const findWinnersSchema = z.object({
+const findWinnersSuccessSchema = z.object({
+  outcome: z.literal("success").optional(),
   winnersCount: z.number().int().min(0),
   revenue: z.number().min(0),
   cost: z.number().min(0),
@@ -319,15 +320,12 @@ const findWinnersSchema = z.object({
   conversions: z.number().int().min(0).nullable().optional(),
   notes: z.string().nullable().optional(),
 });
-
-class CompletionHttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+const findWinnersFailureSchema = z.object({
+  outcome: z.literal("failed"),
+  failureReason: z.string().trim().min(1),
+  notes: z.string().nullable().optional(),
+});
+const findWinnersSchema = z.union([findWinnersSuccessSchema, findWinnersFailureSchema]);
 
 router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
   const taskId = Number(req.params.id);
@@ -347,7 +345,7 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
   if ((await requireWorkspaceAccess(req, res, task.workspaceId)) === null) return;
   if (!(await requireTaskOwnerOrAdmin(req, res, task))) return;
   if (task.status === "DONE") {
-    res.status(409).json({ error: "Task already complete" });
+    res.json({ ...serializeTask(task), campaignId: task.relatedCampaignId ?? null });
     return;
   }
 
@@ -357,10 +355,7 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       ? "android"
       : null;
 
-  let parsedCreate: z.infer<typeof createVoluumCampaignSchema> | null = null;
-  let parsedTakeLive: z.infer<typeof takeCampaignLiveSchema> | null = null;
-  let parsedFindWinners: z.infer<typeof findWinnersSchema> | null = null;
-  let completionPayload: Record<string, unknown> = {};
+  let completion: TaskCompletionDetails;
 
   if (platformFromType !== null) {
     if (task.relatedBatchId == null) {
@@ -372,8 +367,7 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    parsedCreate = parsed.data;
-    completionPayload = parsed.data;
+    completion = { kind: "create_voluum_campaign", platform: platformFromType, ...parsed.data };
   } else if (task.taskType === "take_campaign_live") {
     if (task.relatedCampaignId == null) {
       res.status(400).json({ error: "Task missing relatedCampaignId" });
@@ -384,8 +378,7 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    parsedTakeLive = parsed.data;
-    completionPayload = parsed.data;
+    completion = { kind: "take_campaign_live", ...parsed.data };
   } else if (task.taskType === "find_winners") {
     if (task.relatedCampaignId == null) {
       res.status(400).json({ error: "Task missing relatedCampaignId" });
@@ -396,10 +389,9 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    parsedFindWinners = parsed.data;
-    completionPayload = parsed.data;
+    completion = { kind: "find_winners", ...parsed.data };
   } else if (task.taskType === "all_traffic_sources_tested") {
-    // no payload, just an ack
+    completion = { kind: "all_traffic_sources_tested" };
   } else {
     res.status(400).json({
       error: `Task type "${task.taskType}" is not supported by this endpoint. Use PATCH /todo-tasks/:id for legacy task types.`,
@@ -413,139 +405,39 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
-    const result = await db.transaction(async (tx) => {
-      let resolvedCampaignId: number | null = task.relatedCampaignId ?? null;
-
-      if (platformFromType !== null && parsedCreate !== null) {
-        const [tsRow] = await tx
-          .select({ id: workspaceTrafficSourcesTable.id })
-          .from(workspaceTrafficSourcesTable)
-          .where(
-            and(
-              eq(workspaceTrafficSourcesTable.id, parsedCreate.trafficSourceId),
-              eq(workspaceTrafficSourcesTable.workspaceId, task.workspaceId),
-            ),
-          );
-        if (!tsRow) {
-          throw new CompletionHttpError(400, "trafficSourceId does not belong to this workspace");
-        }
-
-        const [c] = await tx
-          .insert(campaignsTable)
-          .values({
-            workspaceId: task.workspaceId,
-            batchId: task.relatedBatchId!,
-            platform: platformFromType,
-            campaignName: parsedCreate.campaignName,
-            trafficSourceId: parsedCreate.trafficSourceId,
-            campaignUrl: parsedCreate.campaignUrl ?? null,
-            voluumCampaignId: parsedCreate.voluumCampaignId,
-            voluumCampaignName: parsedCreate.voluumCampaignName,
-            status: "voluum_created",
-          })
-          .returning();
-        resolvedCampaignId = c.id;
-
-        await tx
-          .update(batchTrafficSourceRunsTable)
-          .set(
-            platformFromType === "ios"
-              ? { iosCampaignId: c.id }
-              : { androidCampaignId: c.id },
-          )
-          .where(
-            and(
-              eq(batchTrafficSourceRunsTable.workspaceId, task.workspaceId),
-              eq(batchTrafficSourceRunsTable.batchId, task.relatedBatchId!),
-              eq(batchTrafficSourceRunsTable.trafficSourceId, parsedCreate.trafficSourceId),
-              eq(batchTrafficSourceRunsTable.status, "active"),
-            ),
-          );
-      } else if (task.taskType === "take_campaign_live" && parsedTakeLive !== null) {
-        const updatedCampaign = await tx
-          .update(campaignsTable)
-          .set({
-            status: "live",
-            liveStartedAt: new Date(),
-            trafficSourceCampaignId: parsedTakeLive.trafficSourceCampaignId ?? null,
-            trafficSourceCampaignUrl: parsedTakeLive.trafficSourceCampaignUrl ?? null,
-            notes: parsedTakeLive.notes ?? null,
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(campaignsTable.id, task.relatedCampaignId!),
-              eq(campaignsTable.workspaceId, task.workspaceId),
-            ),
-          )
-          .returning({ id: campaignsTable.id });
-        if (updatedCampaign.length === 0) {
-          throw new CompletionHttpError(404, "Campaign not found");
-        }
-        resolvedCampaignId = task.relatedCampaignId;
-      } else if (task.taskType === "find_winners" && parsedFindWinners !== null) {
-        const roi = parsedFindWinners.cost > 0
-          ? (parsedFindWinners.revenue - parsedFindWinners.cost) / parsedFindWinners.cost
-          : null;
-        const updatedCampaign = await tx
-          .update(campaignsTable)
-          .set({
-            status: "tested",
-            winnersCount: parsedFindWinners.winnersCount,
-            revenue: String(parsedFindWinners.revenue),
-            cost: String(parsedFindWinners.cost),
-            clicks: parsedFindWinners.clicks ?? null,
-            conversions: parsedFindWinners.conversions ?? null,
-            roi: roi != null ? String(roi) : null,
-            notes: parsedFindWinners.notes ?? null,
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(campaignsTable.id, task.relatedCampaignId!),
-              eq(campaignsTable.workspaceId, task.workspaceId),
-            ),
-          )
-          .returning({ id: campaignsTable.id });
-        if (updatedCampaign.length === 0) {
-          throw new CompletionHttpError(404, "Campaign not found");
-        }
-        resolvedCampaignId = task.relatedCampaignId;
-      }
-
-      const [updated] = await tx
-        .update(todoTasksTable)
-        .set({
-          status: "DONE",
-          relatedCampaignId: resolvedCampaignId,
-          completedAt: new Date(),
-          completedByEmployeeId: actor.id,
-          completionPayload,
-        })
-        .where(eq(todoTasksTable.id, taskId))
-        .returning();
-
-      if (updated.relatedBatchId !== null) {
-        await emitWithinTx(tx, {
-          type: "TaskCompleted",
-          workspaceId: updated.workspaceId,
-          payload: {
-            taskId: updated.id,
-            taskType: updated.taskType,
-            relatedBatchId: updated.relatedBatchId,
-            relatedCampaignId: resolvedCampaignId,
-          },
-          dedupeKey: `task_completed:${updated.id}`,
-        });
-      }
-
-      return { updated, resolvedCampaignId };
+    await emit({
+      type: "TaskCompletionRequested",
+      workspaceId: task.workspaceId,
+      payload: {
+        taskId,
+        completedByEmployeeId: actor.id,
+        completion,
+      },
+      dedupeKey: `task_completion_requested:${taskId}`,
     });
 
-    res.json({ ...serializeTask(result.updated), campaignId: result.resolvedCampaignId });
+    const [updated] = await db
+      .select()
+      .from(todoTasksTable)
+      .where(eq(todoTasksTable.id, taskId));
+    if (!updated) {
+      res.status(404).json({ error: "Task not found" });
+      return;
+    }
+
+    res.json({ ...serializeTask(updated), campaignId: updated.relatedCampaignId ?? null });
   } catch (err) {
-    if (err instanceof CompletionHttpError) {
-      res.status(err.status).json({ error: err.message });
+    const message = err instanceof Error ? err.message : String(err);
+    if (
+      message === "trafficSourceId does not belong to this workspace" ||
+      message === "Task is missing relatedBatchId" ||
+      message === "Task missing relatedCampaignId"
+    ) {
+      res.status(400).json({ error: message });
+      return;
+    }
+    if (message === "Campaign not found") {
+      res.status(404).json({ error: message });
       return;
     }
     const code =
@@ -572,7 +464,10 @@ router.delete("/todo-tasks/:id", async (req, res): Promise<void> => {
   if (!existing) { res.status(404).json({ error: "Task not found" }); return; }
   if ((await requireWorkspaceAccess(req, res, existing.workspaceId)) === null) return;
 
-  const [task] = await db.delete(todoTasksTable).where(eq(todoTasksTable.id, params.data.id)).returning();
+  const [task] = await db
+    .delete(todoTasksTable)
+    .where(and(eq(todoTasksTable.id, params.data.id), eq(todoTasksTable.workspaceId, existing.workspaceId)))
+    .returning();
 
   if (!task) {
     res.status(404).json({ error: "Task not found" });

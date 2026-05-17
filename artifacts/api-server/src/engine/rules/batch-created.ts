@@ -23,6 +23,7 @@ export async function handleBatchCreated(
       id: testingBatchesTable.id,
       employeeId: testingBatchesTable.employeeId,
       batchName: testingBatchesTable.batchName,
+      currentWorkspaceTrafficSourceId: testingBatchesTable.currentWorkspaceTrafficSourceId,
     })
     .from(testingBatchesTable)
     .where(
@@ -64,6 +65,7 @@ export async function handleBatchCreated(
         title: `Create Voluum campaign (iOS) for ${batchName}`,
         taskType: "create_voluum_campaign_ios",
         priority: "high",
+          trafficSourceId: batch.currentWorkspaceTrafficSourceId,
       },
     },
     {
@@ -75,6 +77,7 @@ export async function handleBatchCreated(
         title: `Create Voluum campaign (Android) for ${batchName}`,
         taskType: "create_voluum_campaign_android",
         priority: "high",
+          trafficSourceId: batch.currentWorkspaceTrafficSourceId,
       },
     },
     {

@@ -28,7 +28,7 @@
 //      its absence (every healthy new-flow batch would otherwise trip).
 //      `invariant1Violations` is preserved on the result for log/metric
 //      back-compat and is always 0.
-//   2. Every active batch with a currentTrafficSourceId (Voluum-driven
+//   2. Every active batch with a currentWorkspaceTrafficSourceId
 //      batches only — empty in the manual flow) has exactly one OPEN
 //      (TODO|IN_PROGRESS) `CREATE_IOS_TRACKER_CAMPAIGN` task and one OPEN
 //      `CREATE_ANDROID_TRACKER_CAMPAIGN` task scoped to that batch +
@@ -136,6 +136,7 @@ export async function reconcileWorkspace(
       batchTag: testingBatchesTable.batchTag,
       status: testingBatchesTable.status,
       currentTrafficSourceId: testingBatchesTable.currentTrafficSourceId,
+      currentWorkspaceTrafficSourceId: testingBatchesTable.currentWorkspaceTrafficSourceId,
     })
     .from(testingBatchesTable)
     .where(
@@ -154,10 +155,10 @@ export async function reconcileWorkspace(
   // invariant 2 already guards the Voluum task pair when
   // `currentTrafficSourceId` is set.
 
-  // Invariant 2: each active batch with a currentTrafficSourceId must have
+  // Invariant 2: each active batch with a currentWorkspaceTrafficSourceId must have
   // exactly one OPEN ios + one OPEN android tracker-creation task scoped
   // to the (batch, currentTS) pair.
-  const eligible = activeBatches.filter((b) => b.currentTrafficSourceId != null);
+  const eligible = activeBatches.filter((b) => b.currentWorkspaceTrafficSourceId != null);
   if (eligible.length > 0) {
     const eligibleBatchIds = eligible.map((b) => b.id);
     const taskRows = await db
@@ -202,7 +203,7 @@ export async function reconcileWorkspace(
       issues: string[];
     }> = [];
     for (const b of eligible) {
-      const key = `${b.id}::${b.currentTrafficSourceId}`;
+      const key = `${b.id}::${b.currentWorkspaceTrafficSourceId}`;
       const counts = countByKey.get(key) ?? { ios: 0, android: 0 };
       const issues: string[] = [];
       if (counts.ios === 0) issues.push("missing_ios");
@@ -213,7 +214,7 @@ export async function reconcileWorkspace(
         result.invariant2Violations += 1;
         violatingBatches.push({
           batchId: b.id,
-          trafficSourceId: b.currentTrafficSourceId as number,
+          trafficSourceId: b.currentWorkspaceTrafficSourceId as number,
           issues,
         });
       }

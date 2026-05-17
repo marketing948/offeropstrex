@@ -116,7 +116,10 @@ router.patch("/daily-reports/:id", async (req, res): Promise<void> => {
   const [report] = await db
     .update(dailyReportsTable)
     .set(parsed.data as Partial<typeof dailyReportsTable.$inferInsert>)
-    .where(eq(dailyReportsTable.id, params.data.id))
+    .where(and(
+      eq(dailyReportsTable.id, params.data.id),
+      eq(dailyReportsTable.workspaceId, existing.workspaceId),
+    ))
     .returning();
 
   if (!report) {

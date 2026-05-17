@@ -102,6 +102,9 @@ export const todoTasksTable = pgTable("todo_tasks", {
       'take_campaign_live',
       'find_winners'
     ) AND related_campaign_id IS NOT NULL`),
+  uniqOpenCampaignOpsTerminalTask: uniqueIndex("todo_tasks_open_campaignops_terminal_unique")
+    .on(t.workspaceId, t.relatedBatchId, t.taskType)
+    .where(sql`status IN ('TODO', 'IN_PROGRESS') AND task_type = 'all_traffic_sources_tested'`),
 }));
 
 export const insertTodoTaskSchema = createInsertSchema(todoTasksTable).omit({ id: true, createdAt: true });

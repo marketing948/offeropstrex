@@ -10,6 +10,7 @@ import {
   voluumOffersTable,
   voluumTrafficSourcesTable,
   workspacesTable,
+  workspaceTrafficSourcesTable,
 } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "../../lib/logger.ts";
@@ -20,6 +21,7 @@ const silentLog = logger.child({ test: "reconciliation" });
 let workspaceId: number;
 let employeeId: number;
 let trafficSourceId: number;
+let workspaceTrafficSourceId: number;
 
 before(async () => {
   const [ws] = await db
@@ -44,6 +46,17 @@ before(async () => {
     .values({ workspaceId, voluumId: `vts-recon-${Date.now()}`, name: "Source R" })
     .returning({ id: voluumTrafficSourcesTable.id });
   trafficSourceId = vts.id;
+  const [wts] = await db
+    .insert(workspaceTrafficSourcesTable)
+    .values({
+      workspaceId,
+      name: "Source R",
+      voluumTrafficSourceId: `vts-recon-${Date.now()}`,
+      position: 1,
+      isActive: true,
+    })
+    .returning({ id: workspaceTrafficSourcesTable.id });
+  workspaceTrafficSourceId = wts.id;
 });
 
 after(async () => {
@@ -64,6 +77,7 @@ describe("reconciliation: invariants on a healthy workspace", () => {
         geo: "DE",
         trafficSource: "Source R",
         currentTrafficSourceId: trafficSourceId,
+        currentWorkspaceTrafficSourceId: workspaceTrafficSourceId,
         status: "WAITING_FOR_TRACKER_CAMPAIGNS",
       })
       .returning({ id: testingBatchesTable.id });
@@ -72,7 +86,7 @@ describe("reconciliation: invariants on a healthy workspace", () => {
       workspaceId,
       employeeId,
       relatedBatchId: batch.id,
-      trafficSourceId,
+      trafficSourceId: workspaceTrafficSourceId,
       title: "Create iOS tracker",
       taskType: "CREATE_IOS_TRACKER_CAMPAIGN",
       trackerCampaignDevice: "ios",
@@ -82,7 +96,7 @@ describe("reconciliation: invariants on a healthy workspace", () => {
       workspaceId,
       employeeId,
       relatedBatchId: batch.id,
-      trafficSourceId,
+      trafficSourceId: workspaceTrafficSourceId,
       title: "Create Android tracker",
       taskType: "CREATE_ANDROID_TRACKER_CAMPAIGN",
       trackerCampaignDevice: "android",
@@ -245,6 +259,7 @@ describe("reconciliation: invariants on a healthy workspace", () => {
         geo: "DE",
         trafficSource: "Source R",
         currentTrafficSourceId: trafficSourceId,
+        currentWorkspaceTrafficSourceId: workspaceTrafficSourceId,
         status: "WAITING_FOR_TRACKER_CAMPAIGNS",
       })
       .returning({ id: testingBatchesTable.id });
@@ -254,7 +269,7 @@ describe("reconciliation: invariants on a healthy workspace", () => {
       workspaceId,
       employeeId,
       relatedBatchId: batch.id,
-      trafficSourceId,
+      trafficSourceId: workspaceTrafficSourceId,
       title: "Create iOS tracker",
       taskType: "CREATE_IOS_TRACKER_CAMPAIGN",
       trackerCampaignDevice: "ios",

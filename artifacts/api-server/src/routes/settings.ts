@@ -1,10 +1,268 @@
 import { Router, type IRouter } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { requireWorkspaceFromQuery } from "../lib/workspace-access";
+import {
+  db,
+  affiliateNetworksTable,
+  employeesTable,
+  employeeWorkspaceAssignmentsTable,
+  workerAffiliateNetworksTable,
+  workspaceTrafficSourcesTable,
+} from "@workspace/db";
+import { requireAdmin, requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access";
 import { getSettingValue, upsertSetting } from "../lib/settings-store";
 
 const router: IRouter = Router();
+
+const ADMIN_FOUNDATION_CONFIG_KEY = "admin_foundation_config";
+
+const goalTargetSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  target: z.number().nonnegative(),
+  enabled: z.boolean(),
+});
+
+const bonusTierSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  minScore: z.number().nonnegative(),
+  bonusAmount: z.number().nonnegative(),
+  enabled: z.boolean(),
+});
+
+const adminFoundationConfigSchema = z.object({
+  trafficSourceVisibility: z.object({
+    mode: z.enum(["all", "restricted"]),
+    restrictedEmployeeIds: z.array(z.number().int().positive()),
+  }),
+  testingProgression: z.object({
+    trafficSourceIds: z.array(z.number().int().positive()).max(3),
+  }),
+  defaultTestWindow: z.object({
+    durationHours: z.number().int().positive(),
+  }),
+  clickThresholds: z.object({
+    averageVisitsPerOffer: z.number().int().positive(),
+    clicks: z.number().int().positive().nullable(),
+    spend: z.number().nonnegative().nullable(),
+    days: z.number().int().positive().nullable(),
+  }),
+  winnerThresholds: z.object({
+    mode: z.enum(["positive_roi", "revenue"]),
+    revenueGreaterThan: z.number().nonnegative(),
+    roiGreaterThan: z.number(),
+  }),
+  goals: z.object({
+    weekly: z.array(goalTargetSchema),
+    monthly: z.array(goalTargetSchema),
+  }),
+  bonusTiers: z.array(bonusTierSchema),
+});
+
+type AdminFoundationConfig = z.infer<typeof adminFoundationConfigSchema>;
+
+const DEFAULT_ADMIN_FOUNDATION_CONFIG: AdminFoundationConfig = {
+  // Traffic sources are shared by default; this shape gives a future
+  // restriction switch without gating the current manual workflow.
+  trafficSourceVisibility: { mode: "all", restrictedEmployeeIds: [] },
+  testingProgression: { trafficSourceIds: [] },
+  defaultTestWindow: { durationHours: 48 },
+  clickThresholds: {
+    averageVisitsPerOffer: 25000,
+    clicks: null,
+    spend: null,
+    days: null,
+  },
+  // Existing winner handling treats positive ROI as the deciding threshold.
+  winnerThresholds: {
+    mode: "positive_roi",
+    revenueGreaterThan: 0.1,
+    roiGreaterThan: 0,
+  },
+  goals: { weekly: [], monthly: [] },
+  bonusTiers: [],
+};
+
+function mergeAdminFoundationConfig(raw: unknown): AdminFoundationConfig {
+  const input = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const trafficSourceVisibility = input.trafficSourceVisibility && typeof input.trafficSourceVisibility === "object"
+    ? input.trafficSourceVisibility as Partial<AdminFoundationConfig["trafficSourceVisibility"]>
+    : {};
+  const testingProgression = input.testingProgression && typeof input.testingProgression === "object"
+    ? input.testingProgression as Partial<AdminFoundationConfig["testingProgression"]>
+    : {};
+  const defaultTestWindow = input.defaultTestWindow && typeof input.defaultTestWindow === "object"
+    ? input.defaultTestWindow as Partial<AdminFoundationConfig["defaultTestWindow"]>
+    : {};
+  const clickThresholds = input.clickThresholds && typeof input.clickThresholds === "object"
+    ? input.clickThresholds as Partial<AdminFoundationConfig["clickThresholds"]>
+    : {};
+  const winnerThresholds = input.winnerThresholds && typeof input.winnerThresholds === "object"
+    ? input.winnerThresholds as Partial<AdminFoundationConfig["winnerThresholds"]>
+    : {};
+  const goals = input.goals && typeof input.goals === "object"
+    ? input.goals as Partial<AdminFoundationConfig["goals"]>
+    : {};
+
+  const candidate = {
+    ...DEFAULT_ADMIN_FOUNDATION_CONFIG,
+    ...input,
+    trafficSourceVisibility: {
+      ...DEFAULT_ADMIN_FOUNDATION_CONFIG.trafficSourceVisibility,
+      ...trafficSourceVisibility,
+    },
+    testingProgression: {
+      ...DEFAULT_ADMIN_FOUNDATION_CONFIG.testingProgression,
+      ...testingProgression,
+    },
+    defaultTestWindow: {
+      ...DEFAULT_ADMIN_FOUNDATION_CONFIG.defaultTestWindow,
+      ...defaultTestWindow,
+    },
+    clickThresholds: {
+      ...DEFAULT_ADMIN_FOUNDATION_CONFIG.clickThresholds,
+      ...clickThresholds,
+    },
+    winnerThresholds: {
+      ...DEFAULT_ADMIN_FOUNDATION_CONFIG.winnerThresholds,
+      ...winnerThresholds,
+    },
+    goals: {
+      ...DEFAULT_ADMIN_FOUNDATION_CONFIG.goals,
+      ...goals,
+    },
+  };
+
+  return adminFoundationConfigSchema.parse(candidate);
+}
+
+function mergeAdminFoundationPatch(
+  current: AdminFoundationConfig,
+  patch: Record<string, unknown>,
+): AdminFoundationConfig {
+  return mergeAdminFoundationConfig({
+    ...current,
+    ...patch,
+    trafficSourceVisibility: {
+      ...current.trafficSourceVisibility,
+      ...(
+        patch.trafficSourceVisibility && typeof patch.trafficSourceVisibility === "object"
+          ? patch.trafficSourceVisibility as Record<string, unknown>
+          : {}
+      ),
+    },
+    testingProgression: {
+      ...current.testingProgression,
+      ...(
+        patch.testingProgression && typeof patch.testingProgression === "object"
+          ? patch.testingProgression as Record<string, unknown>
+          : {}
+      ),
+    },
+    defaultTestWindow: {
+      ...current.defaultTestWindow,
+      ...(
+        patch.defaultTestWindow && typeof patch.defaultTestWindow === "object"
+          ? patch.defaultTestWindow as Record<string, unknown>
+          : {}
+      ),
+    },
+    clickThresholds: {
+      ...current.clickThresholds,
+      ...(
+        patch.clickThresholds && typeof patch.clickThresholds === "object"
+          ? patch.clickThresholds as Record<string, unknown>
+          : {}
+      ),
+    },
+    winnerThresholds: {
+      ...current.winnerThresholds,
+      ...(
+        patch.winnerThresholds && typeof patch.winnerThresholds === "object"
+          ? patch.winnerThresholds as Record<string, unknown>
+          : {}
+      ),
+    },
+    goals: {
+      ...current.goals,
+      ...(
+        patch.goals && typeof patch.goals === "object"
+          ? patch.goals as Record<string, unknown>
+          : {}
+      ),
+    },
+  });
+}
+
+async function readAdminFoundationConfig(workspaceId: number): Promise<AdminFoundationConfig> {
+  const raw = await getSettingValue(workspaceId, ADMIN_FOUNDATION_CONFIG_KEY);
+  if (!raw) return DEFAULT_ADMIN_FOUNDATION_CONFIG;
+  try {
+    return mergeAdminFoundationConfig(JSON.parse(raw));
+  } catch {
+    return DEFAULT_ADMIN_FOUNDATION_CONFIG;
+  }
+}
+
+async function validateAdminFoundationReferences(
+  workspaceId: number,
+  config: AdminFoundationConfig,
+): Promise<string | null> {
+  const uniqueTrafficSourceIds = new Set(config.testingProgression.trafficSourceIds);
+  if (uniqueTrafficSourceIds.size !== config.testingProgression.trafficSourceIds.length) {
+    return "testingProgression.trafficSourceIds must not contain duplicates";
+  }
+  if (uniqueTrafficSourceIds.size > 0) {
+    const rows = await db
+      .select({ id: workspaceTrafficSourcesTable.id })
+      .from(workspaceTrafficSourcesTable)
+      .where(
+        and(
+          eq(workspaceTrafficSourcesTable.workspaceId, workspaceId),
+          inArray(workspaceTrafficSourcesTable.id, [...uniqueTrafficSourceIds]),
+        ),
+      );
+    if (rows.length !== uniqueTrafficSourceIds.size) {
+      return "One or more testingProgression.trafficSourceIds do not belong to this workspace";
+    }
+  }
+
+  const uniqueRestrictedEmployeeIds = new Set(config.trafficSourceVisibility.restrictedEmployeeIds);
+  if (uniqueRestrictedEmployeeIds.size !== config.trafficSourceVisibility.restrictedEmployeeIds.length) {
+    return "trafficSourceVisibility.restrictedEmployeeIds must not contain duplicates";
+  }
+  if (uniqueRestrictedEmployeeIds.size > 0) {
+    const rows = await db
+      .select({ employeeId: employeeWorkspaceAssignmentsTable.employeeId })
+      .from(employeeWorkspaceAssignmentsTable)
+      .where(
+        and(
+          eq(employeeWorkspaceAssignmentsTable.workspaceId, workspaceId),
+          inArray(employeeWorkspaceAssignmentsTable.employeeId, [...uniqueRestrictedEmployeeIds]),
+        ),
+      );
+    if (rows.length !== uniqueRestrictedEmployeeIds.size) {
+      return "One or more trafficSourceVisibility.restrictedEmployeeIds do not belong to this workspace";
+    }
+  }
+
+  return null;
+}
+
+async function listAffiliateNetworkAssignments(workspaceId: number) {
+  return db
+    .select({
+      employeeId: workerAffiliateNetworksTable.employeeId,
+      affiliateNetworkId: workerAffiliateNetworksTable.affiliateNetworkId,
+      employeeName: employeesTable.name,
+      affiliateNetworkName: affiliateNetworksTable.name,
+    })
+    .from(workerAffiliateNetworksTable)
+    .leftJoin(employeesTable, eq(workerAffiliateNetworksTable.employeeId, employeesTable.id))
+    .leftJoin(affiliateNetworksTable, eq(workerAffiliateNetworksTable.affiliateNetworkId, affiliateNetworksTable.id))
+    .where(eq(workerAffiliateNetworksTable.workspaceId, workspaceId));
+}
 
 // The legacy global Voluum settings endpoints (GET/PATCH /settings/voluum)
 // were removed. Voluum credentials live on the workspaces row and are managed
@@ -119,6 +377,47 @@ router.get("/settings/goals-audit", async (req, res): Promise<void> => {
   res.json(raw ? JSON.parse(raw) : []);
 });
 
+router.get("/settings/admin-foundation", async (req, res): Promise<void> => {
+  const workspaceId = await requireWorkspaceFromQuery(req, res);
+  if (workspaceId === null) return;
+
+  const config = await readAdminFoundationConfig(workspaceId);
+  const affiliateNetworkAssignments = await listAffiliateNetworkAssignments(workspaceId);
+  res.json({ ...config, affiliateNetworkAssignments });
+});
+
+router.patch("/settings/admin-foundation", async (req, res): Promise<void> => {
+  const admin = await requireAdmin(req, res);
+  if (admin === null) return;
+
+  const body = req.body;
+  if (!body || typeof body !== "object") {
+    res.status(400).json({ error: "Invalid body" });
+    return;
+  }
+  const workspaceId = Number((body as Record<string, unknown>).workspaceId ?? (body as Record<string, unknown>).workspace_id);
+  if ((await requireWorkspaceAccess(req, res, workspaceId)) === null) return;
+
+  const current = await readAdminFoundationConfig(workspaceId);
+  const { workspaceId: _workspaceId, workspace_id: _workspace_id, ...patch } = body as Record<string, unknown>;
+  let config: AdminFoundationConfig;
+  try {
+    config = mergeAdminFoundationPatch(current, patch);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Invalid admin foundation config" });
+    return;
+  }
+  const referenceError = await validateAdminFoundationReferences(workspaceId, config);
+  if (referenceError) {
+    res.status(400).json({ error: referenceError });
+    return;
+  }
+
+  await upsertSetting(workspaceId, ADMIN_FOUNDATION_CONFIG_KEY, JSON.stringify(config));
+  const affiliateNetworkAssignments = await listAffiliateNetworkAssignments(workspaceId);
+  res.json({ ...config, affiliateNetworkAssignments });
+});
+
 // ─── Traffic source × device plan (REMOVED in Phase 2) ────────────────
 // The legacy `traffic_source_device_plans` table backed an
 // (any traffic source) × (5 fixed device labels) matrix per workspace.
@@ -137,11 +436,5 @@ router.put("/settings/traffic-source-device-plan", (_req, res) => {
     error: "The traffic-source × device plan has been replaced. Configure traffic sources per workspace in Settings → Workspaces → Traffic Sources (Phase 4).",
   });
 });
-
-// Suppress unused-import warnings for symbols Phase 4 will bring back.
-void z;
-void requireWorkspaceFromQuery;
-void getSettingValue;
-void upsertSetting;
 
 export default router;

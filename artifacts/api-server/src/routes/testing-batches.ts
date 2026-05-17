@@ -10,7 +10,6 @@ import {
   geosTable,
   workspaceTrafficSourcesTable,
   workerAffiliateNetworksTable,
-  campaignsTable,
 } from "@workspace/db";
 import {
   CreateTestingBatchBody,
@@ -24,7 +23,6 @@ import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/worksp
 import { emit } from "../engine/event-bus.ts";
 import {
   executeDeleteBatch,
-  executeGoLiveBatch,
   executeUpdateBatchFields,
 } from "../engine/executor.ts";
 import type { BatchStatus } from "../engine/types.ts";
@@ -622,30 +620,21 @@ router.post("/testing-batches/:id/go-live", async (req, res): Promise<void> => {
     return;
   }
 
-  await executeGoLiveBatch(existing.workspaceId, existing.id);
-
-  try {
-    await emit({
-      type: "BatchStatusChanged",
-      workspaceId: existing.workspaceId,
-      payload: {
-        batchId: existing.id,
-        from: "OFFER_READY_FOR_LIVE_TESTING",
-        to: "LIVE_TESTS",
-      },
-      dedupeKey: `manual_go_live:${existing.id}`,
-    });
-  } catch (err) {
-    req.log.warn(
-      { err: err instanceof Error ? err.message : String(err), batchId: existing.id },
-      "[testing-batches] BatchStatusChanged emit failed after go-live status write",
-    );
-  }
+  await emit({
+    type: "BatchStatusChanged",
+    workspaceId: existing.workspaceId,
+    payload: {
+      batchId: existing.id,
+      from: "OFFER_READY_FOR_LIVE_TESTING",
+      to: "LIVE_TESTS",
+    },
+    dedupeKey: `manual_go_live:${existing.id}`,
+  });
 
   const [batch] = await db
     .select()
     .from(testingBatchesTable)
-    .where(eq(testingBatchesTable.id, existing.id));
+    .where(and(eq(testingBatchesTable.id, existing.id), eq(testingBatchesTable.workspaceId, existing.workspaceId)));
   const enrich = await buildEnrichment([batch]);
   res.json(serializeBatch(batch, enrich));
 });
@@ -677,106 +666,29 @@ router.post("/testing-batches/:id/campaigns-go-live", async (req, res): Promise<
   }
   if ((await requireWorkspaceAccess(req, res, existing.workspaceId)) === null) return;
 
-  // All-or-nothing precondition (architect re-review): every batch
-  // campaign must be either `ready` (will flip) or already `live`
-  // (retry path). Anything else (draft, tested, closed, missing) is
-  // a 409 — we refuse to stamp `liveAt` on a half-built batch.
-  const flipped: Array<{ id: number; platform: "ios" | "android" }> = [];
-  type PreconditionError = { status: number; body: Record<string, unknown> };
-  let preconditionError: PreconditionError | null = null;
-
-  await db.transaction(async (tx) => {
-    const batchCampaigns = await tx
-      .select({
-        id: campaignsTable.id,
-        status: campaignsTable.status,
-        platform: campaignsTable.platform,
-      })
-      .from(campaignsTable)
-      .where(
-        and(
-          eq(campaignsTable.workspaceId, existing.workspaceId),
-          eq(campaignsTable.batchId, existing.id),
-        ),
-      );
-
-    if (batchCampaigns.length === 0) {
-      preconditionError = {
-        status: 409,
-        body: { error: "Batch has no campaigns yet" },
-      };
+  try {
+    await emit({
+      type: "BatchCampaignsGoLiveRequested",
+      workspaceId: existing.workspaceId,
+      payload: { batchId: existing.id },
+      dedupeKey: `batch_campaigns_go_live:${existing.id}`,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (
+      message === "Batch has no campaigns yet" ||
+      message === "All batch campaigns must be ready before going live"
+    ) {
+      res.status(409).json({ error: message });
       return;
     }
-    const blocking = batchCampaigns.filter(
-      (c) => c.status !== "ready" && c.status !== "live",
-    );
-    if (blocking.length > 0) {
-      preconditionError = {
-        status: 409,
-        body: {
-          error: "All batch campaigns must be ready before going live",
-          blocking: blocking.map((c) => ({ id: c.id, platform: c.platform, status: c.status })),
-        },
-      };
-      return;
-    }
-
-    // Idempotent liveAt: only stamp on the first successful go-live;
-    // retries preserve the original timestamp so downstream rules
-    // (e.g. OPTIMIZATION_FOLLOWUP due-date arithmetic) stay stable.
-    if (existing.liveAt == null) {
-      await tx
-        .update(testingBatchesTable)
-        .set({ liveAt: new Date() })
-        .where(eq(testingBatchesTable.id, existing.id));
-    }
-
-    for (const c of batchCampaigns) {
-      if (c.status === "ready") {
-        await tx
-          .update(campaignsTable)
-          .set({ status: "live", updatedAt: new Date() })
-          .where(eq(campaignsTable.id, c.id));
-        flipped.push({ id: c.id, platform: c.platform });
-      }
-    }
-  });
-
-  const pErr = preconditionError as PreconditionError | null;
-  if (pErr) {
-    res.status(pErr.status).json(pErr.body);
-    return;
-  }
-
-  // Best-effort emit of CampaignStatusChanged for each flipped row so
-  // any downstream rules can chain. Not in-tx because the bus is
-  // engine-managed; failures are tombstoned and logged.
-  for (const f of flipped) {
-    try {
-      await emit({
-        type: "CampaignStatusChanged",
-        workspaceId: existing.workspaceId,
-        payload: {
-          campaignId: f.id,
-          batchId: existing.id,
-          platform: f.platform,
-          from: "ready",
-          to: "live",
-        },
-        dedupeKey: `phase5_go_live:${f.id}`,
-      });
-    } catch (err) {
-      req.log.warn(
-        { err: err instanceof Error ? err.message : String(err), campaignId: f.id },
-        "[testing-batches] CampaignStatusChanged emit failed after Phase-5 go-live",
-      );
-    }
+    throw err;
   }
 
   const [batch] = await db
     .select()
     .from(testingBatchesTable)
-    .where(eq(testingBatchesTable.id, existing.id));
+    .where(and(eq(testingBatchesTable.id, existing.id), eq(testingBatchesTable.workspaceId, existing.workspaceId)));
   const enrich = await buildEnrichment([batch]);
   res.json(serializeBatch(batch, enrich));
 });

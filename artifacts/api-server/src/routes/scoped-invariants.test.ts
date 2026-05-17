@@ -11,6 +11,7 @@ import {
   employeesTable,
   employeeWorkspaceAssignmentsTable,
   eventsTable,
+  goalsTable,
   testingBatchesTable,
   todoTasksTable,
   workspacesTable,
@@ -290,6 +291,60 @@ describe("route scoped invariants", { concurrency: false }, () => {
     assert.equal(employee.activeWorkspaceId, null);
   });
 
+  test("admin workspace access is limited to explicit assignments", async () => {
+    const assignedWs = await createWorkspace("admin-assigned");
+    const unassignedWs = await createWorkspace("admin-unassigned");
+    const adminId = await createEmployee("admin");
+    await assign(adminId, assignedWs);
+
+    const visible = await request("GET", "/auth/my-workspaces", adminId);
+    assert.equal(visible.response.status, 200);
+    assert.deepEqual(visible.json.map((ws: { id: number }) => ws.id), [assignedWs]);
+
+    const denied = await request("PATCH", `/workspaces/${unassignedWs}/activate`, adminId);
+    assert.equal(denied.response.status, 403);
+
+    const allowed = await request("PATCH", `/workspaces/${assignedWs}/activate`, adminId);
+    assert.equal(allowed.response.status, 200);
+  });
+
+  test("goals are scoped to workspace membership", async () => {
+    const wsOne = await createWorkspace("goals-one");
+    const wsTwo = await createWorkspace("goals-two");
+    const employeeOne = await createEmployee();
+    const employeeTwo = await createEmployee();
+    await assign(employeeOne, wsOne);
+    await assign(employeeTwo, wsTwo);
+
+    const [goalOne] = await db
+      .insert(goalsTable)
+      .values({
+        workspaceId: wsOne,
+        employeeId: employeeOne,
+        periodType: "weekly",
+        periodStart: "2026-05-11",
+        periodEnd: "2026-05-17",
+      })
+      .returning({ id: goalsTable.id });
+    await db.insert(goalsTable).values({
+      workspaceId: wsTwo,
+      employeeId: employeeTwo,
+      periodType: "weekly",
+      periodStart: "2026-05-11",
+      periodEnd: "2026-05-17",
+    });
+
+    const ownGoals = await request("GET", `/goals?workspace_id=${wsOne}`, employeeOne);
+    assert.equal(ownGoals.response.status, 200);
+    assert.deepEqual(ownGoals.json.map((goal: { id: number }) => goal.id), [goalOne.id]);
+
+    const deniedList = await request("GET", `/goals?workspace_id=${wsTwo}`, employeeOne);
+    assert.equal(deniedList.response.status, 403);
+
+    const deniedGoal = await request("GET", `/goals/${goalOne.id}`, employeeTwo);
+    assert.equal(deniedGoal.response.status, 403);
+  });
+
   test("legacy sync activation path is isolated", async () => {
     const wsOne = await createWorkspace("legacy-one");
     const wsTwo = await createWorkspace("legacy-two");
@@ -404,6 +459,7 @@ describe("route scoped invariants", { concurrency: false }, () => {
   test("typed CampaignOps completion rolls back on follow-up failure", async () => {
     _resetRegistryForTests();
     _resetRulesGuardForTests();
+    registerAllRules();
     registerHandler("TaskCompleted", async () => {
       throw new Error("forced follow-up failure");
     });
@@ -441,6 +497,64 @@ describe("route scoped invariants", { concurrency: false }, () => {
       .from(campaignsTable)
       .where(eq(campaignsTable.batchId, seed.batchId));
     assert.equal(campaigns.length, 0);
+
+    const events = await db
+      .select()
+      .from(eventsTable)
+      .where(and(eq(eventsTable.workspaceId, seed.workspaceId), eq(eventsTable.dedupeKey, `task_completed:${task.id}`)));
+    assert.equal(events.length, 0);
+
+    const followUps = await db
+      .select()
+      .from(todoTasksTable)
+      .where(and(eq(todoTasksTable.relatedBatchId, seed.batchId), eq(todoTasksTable.taskType, "take_campaign_live")));
+    assert.equal(followUps.length, 0);
+  });
+
+  test("duplicate typed CampaignOps completion is idempotent without duplicate automation", async () => {
+    const seed = await seedCampaignOpsBase();
+    const [task] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        employeeId: seed.employeeId,
+        relatedBatchId: seed.batchId,
+        taskType: "create_voluum_campaign_ios",
+        title: "Create iOS campaign",
+        trafficSourceId: seed.sourceOneId,
+      })
+      .returning({ id: todoTasksTable.id });
+
+    const payload = {
+      trafficSourceId: seed.sourceOneId,
+      voluumCampaignId: `duplicate-${Date.now()}`,
+      voluumCampaignName: "Duplicate Campaign",
+      campaignName: "Duplicate Campaign",
+    };
+
+    const first = await request("POST", `/todo-tasks/${task.id}/complete`, seed.employeeId, payload);
+    assert.equal(first.response.status, 200);
+
+    const second = await request("POST", `/todo-tasks/${task.id}/complete`, seed.employeeId, payload);
+    assert.equal(second.response.status, 200);
+
+    const campaigns = await db
+      .select()
+      .from(campaignsTable)
+      .where(eq(campaignsTable.batchId, seed.batchId));
+    assert.equal(campaigns.length, 1);
+
+    const events = await db
+      .select()
+      .from(eventsTable)
+      .where(and(eq(eventsTable.workspaceId, seed.workspaceId), eq(eventsTable.dedupeKey, `task_completed:${task.id}`)));
+    assert.equal(events.length, 1);
+
+    const followUps = await db
+      .select()
+      .from(todoTasksTable)
+      .where(and(eq(todoTasksTable.relatedCampaignId, campaigns[0]!.id), eq(todoTasksTable.taskType, "take_campaign_live")));
+    assert.equal(followUps.length, 1);
   });
 
   test("generic PATCH cannot complete CampaignOps tasks", async () => {
@@ -580,6 +694,27 @@ describe("route scoped invariants", { concurrency: false }, () => {
 
   test("take_campaign_live and find_winners typed behavior", async () => {
     const seed = await seedCampaignOpsBase();
+    await db.insert(batchTrafficSourceRunsTable).values([
+      {
+        workspaceId: seed.workspaceId,
+        batchId: seed.batchId,
+        trafficSourceId: seed.sourceOneId,
+        position: 1,
+        status: "active",
+        iosStatus: "active",
+        androidStatus: "active",
+        startedAt: new Date(),
+      },
+      {
+        workspaceId: seed.workspaceId,
+        batchId: seed.batchId,
+        trafficSourceId: seed.sourceTwoId,
+        position: 2,
+        status: "pending",
+        iosStatus: "pending",
+        androidStatus: "pending",
+      },
+    ]);
     const [campaign] = await db
       .insert(campaignsTable)
       .values({
@@ -650,6 +785,34 @@ describe("route scoped invariants", { concurrency: false }, () => {
     assert.equal(liveCampaign.status, "live");
     assert.ok(liveCampaign.liveStartedAt);
     assert.equal(liveCampaign.trafficSourceCampaignId, "ts-campaign-1");
+
+    const [androidCampaign] = await db
+      .insert(campaignsTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        batchId: seed.batchId,
+        platform: "android",
+        campaignName: "Android Source One",
+        trafficSourceId: seed.sourceOneId,
+        status: "live",
+      })
+      .returning({ id: campaignsTable.id });
+    const [androidFindWinners] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        employeeId: seed.employeeId,
+        relatedBatchId: seed.batchId,
+        relatedCampaignId: androidCampaign.id,
+        taskType: "find_winners",
+        title: "Find Android winners",
+      })
+      .returning({ id: todoTasksTable.id });
+    const androidFailed = await request("POST", `/todo-tasks/${androidFindWinners.id}/complete`, seed.employeeId, {
+      outcome: "failed",
+      failureReason: "source rejected campaign",
+    });
+    assert.equal(androidFailed.response.status, 200);
 
     const [findWinners] = await db
       .insert(todoTasksTable)

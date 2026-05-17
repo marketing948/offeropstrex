@@ -1,8 +1,8 @@
-// SPEC §6 — BatchStatusChanged rule. Notification-only.
+// SPEC §6 — BatchStatusChanged rule.
 //
-// The status change itself is performed by other rules' ChangeBatchStatus
-// actions (or by lifecycle routes via emit()), so this rule MUST NOT emit
-// ChangeBatchStatus to avoid loops.
+// BatchStatusChanged is the source of truth for lifecycle status writes:
+// producers emit it, this rule validates the current state and returns
+// ChangeBatchStatus plus any follow-on notifications.
 //
 // Phase 1 cleanup: TESTED no longer seeds a FIND_WINNERS task here. The
 // canonical replacement task (MOVE_WINNERS_TO_SCALED_CAMPAIGN, with winner
@@ -33,6 +33,7 @@ export async function handleBatchStatusChanged(
       id: testingBatchesTable.id,
       employeeId: testingBatchesTable.employeeId,
       batchName: testingBatchesTable.batchName,
+      status: testingBatchesTable.status,
     })
     .from(testingBatchesTable)
     .where(
@@ -44,8 +45,18 @@ export async function handleBatchStatusChanged(
     .limit(1);
 
   if (!batch) return [];
+  if (batch.status === payload.to) return [];
+  if (batch.status !== payload.from) return [];
 
-  const actions: Action[] = [];
+  const actions: Action[] = [
+    {
+      type: "ChangeBatchStatus",
+      workspaceId,
+      batchId: batch.id,
+      status: payload.to,
+      ...(payload.to === "LIVE_TESTS" ? { liveAt: new Date() } : {}),
+    },
+  ];
 
   if (payload.to === "LIVE_TESTS") {
     actions.push({

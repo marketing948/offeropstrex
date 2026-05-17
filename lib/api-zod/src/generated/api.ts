@@ -521,12 +521,14 @@ export const DeleteEmployeeResponse = zod.object({
  * @summary List goals
  */
 export const ListGoalsQueryParams = zod.object({
+  workspace_id: zod.coerce.number(),
   employee_id: zod.coerce.number().optional(),
   period_type: zod.enum(["weekly", "monthly"]).optional(),
 });
 
 export const ListGoalsResponseItem = zod.object({
   id: zod.number(),
+  workspaceId: zod.number(),
   employeeId: zod.number(),
   periodType: zod.enum(["weekly", "monthly"]),
   periodStart: zod.string(),
@@ -547,6 +549,7 @@ export const ListGoalsResponse = zod.array(ListGoalsResponseItem);
  * @summary Create goal
  */
 export const CreateGoalBody = zod.object({
+  workspaceId: zod.number(),
   employeeId: zod.number(),
   periodType: zod.enum(["weekly", "monthly"]),
   periodStart: zod.string(),
@@ -570,6 +573,7 @@ export const GetGoalParams = zod.object({
 
 export const GetGoalResponse = zod.object({
   id: zod.number(),
+  workspaceId: zod.number(),
   employeeId: zod.number(),
   periodType: zod.enum(["weekly", "monthly"]),
   periodStart: zod.string(),
@@ -608,6 +612,7 @@ export const UpdateGoalBody = zod.object({
 
 export const UpdateGoalResponse = zod.object({
   id: zod.number(),
+  workspaceId: zod.number(),
   employeeId: zod.number(),
   periodType: zod.enum(["weekly", "monthly"]),
   periodStart: zod.string(),
@@ -1833,6 +1838,7 @@ export const GetEmployeeDashboardSummaryResponse = zod.object({
   weeklyGoal: zod
     .object({
       id: zod.number(),
+      workspaceId: zod.number(),
       employeeId: zod.number(),
       periodType: zod.enum(["weekly", "monthly"]),
       periodStart: zod.string(),
@@ -1851,6 +1857,7 @@ export const GetEmployeeDashboardSummaryResponse = zod.object({
   monthlyGoal: zod
     .object({
       id: zod.number(),
+      workspaceId: zod.number(),
       employeeId: zod.number(),
       periodType: zod.enum(["weekly", "monthly"]),
       periodStart: zod.string(),
@@ -1940,6 +1947,7 @@ export const GetGoalProgressResponseItem = zod.object({
   goal: zod
     .object({
       id: zod.number(),
+      workspaceId: zod.number(),
       employeeId: zod.number(),
       periodType: zod.enum(["weekly", "monthly"]),
       periodStart: zod.string(),

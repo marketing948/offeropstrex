@@ -1,8 +1,8 @@
 import { Router, type IRouter } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { db, employeeWorkspaceAssignmentsTable, employeesTable, workspacesTable } from "@workspace/db";
 import { getEmployeeFromToken } from "./auth";
-import { requireWorkspaceFromQuery, requireAdmin } from "../lib/workspace-access";
+import { requireWorkspaceAccess, requireWorkspaceFromQuery, requireAdmin } from "../lib/workspace-access";
 import { serializeWorkspaceForEmployee, serializeWorkspacesForEmployee, setActiveWorkspaceForEmployee } from "../lib/active-workspace";
 
 const router: IRouter = Router();
@@ -39,22 +39,21 @@ router.patch("/workspaces/:id/activate", async (req, res): Promise<void> => {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
-  // Caller must have access to the target workspace (admin OR assigned).
-  if (employee.role !== "admin") {
-    const [assignment] = await db
-      .select({ id: employeeWorkspaceAssignmentsTable.id })
-      .from(employeeWorkspaceAssignmentsTable)
-      .where(
-        and(
-          eq(employeeWorkspaceAssignmentsTable.employeeId, employee.id),
-          eq(employeeWorkspaceAssignmentsTable.workspaceId, id),
-        ),
-      )
-      .limit(1);
-    if (!assignment) {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
+  // Caller must be explicitly assigned to the target workspace. Admin role
+  // only controls privileged actions within assigned workspaces.
+  const [assignment] = await db
+    .select({ id: employeeWorkspaceAssignmentsTable.id })
+    .from(employeeWorkspaceAssignmentsTable)
+    .where(
+      and(
+        eq(employeeWorkspaceAssignmentsTable.employeeId, employee.id),
+        eq(employeeWorkspaceAssignmentsTable.workspaceId, id),
+      ),
+    )
+    .limit(1);
+  if (!assignment) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
   }
   const updated = await setActiveWorkspaceForEmployee(employee.id, id);
   if (!updated) {
@@ -97,13 +96,16 @@ router.post("/workspace-members", async (req, res): Promise<void> => {
 
   if ((await requireAdmin(req, res)) === null) return;
 
+  const targetWorkspaceId = Number(workspaceId);
+  if ((await requireWorkspaceAccess(req, res, targetWorkspaceId)) === null) return;
+
   // Check for existing assignment
   const [existing] = await db
     .select()
     .from(employeeWorkspaceAssignmentsTable)
     .where(and(
       eq(employeeWorkspaceAssignmentsTable.employeeId, Number(employeeId)),
-      eq(employeeWorkspaceAssignmentsTable.workspaceId, Number(workspaceId))
+      eq(employeeWorkspaceAssignmentsTable.workspaceId, targetWorkspaceId)
     ));
 
   if (existing) {
@@ -112,7 +114,7 @@ router.post("/workspace-members", async (req, res): Promise<void> => {
   }
 
   const [employee] = await db.select().from(employeesTable).where(eq(employeesTable.id, Number(employeeId)));
-  const [workspace] = await db.select().from(workspacesTable).where(eq(workspacesTable.id, Number(workspaceId)));
+  const [workspace] = await db.select().from(workspacesTable).where(eq(workspacesTable.id, targetWorkspaceId));
 
   if (!employee || !workspace) {
     res.status(404).json({ error: "Employee or workspace not found" });
@@ -121,7 +123,7 @@ router.post("/workspace-members", async (req, res): Promise<void> => {
 
   const [inserted] = await db
     .insert(employeeWorkspaceAssignmentsTable)
-    .values({ employeeId: Number(employeeId), workspaceId: Number(workspaceId), role })
+    .values({ employeeId: Number(employeeId), workspaceId: targetWorkspaceId, role })
     .returning();
 
   res.status(201).json({
@@ -153,6 +155,7 @@ router.delete("/workspace-members/:id", async (req, res): Promise<void> => {
     return;
   }
   if ((await requireAdmin(req, res)) === null) return;
+  if ((await requireWorkspaceAccess(req, res, target.workspaceId)) === null) return;
 
   const [deleted] = await db
     .delete(employeeWorkspaceAssignmentsTable)
@@ -175,23 +178,7 @@ router.get("/auth/my-workspaces", async (req, res): Promise<void> => {
     return;
   }
 
-  // Ensure Default Workspace exists (same logic as listVoluumWorkspaces)
-  const allWorkspaces = await db.select().from(workspacesTable).orderBy(workspacesTable.id);
-  if (allWorkspaces.length === 0) {
-    const [defaultWs] = await db
-      .insert(workspacesTable)
-      .values({ name: "Default Workspace", isDefault: true, isActive: true })
-      .returning();
-    allWorkspaces.push(defaultWs);
-  }
-
-  // Admins see all workspaces
-  if (employee.role === "admin") {
-    res.json(serializeWorkspacesForEmployee(allWorkspaces, employee));
-    return;
-  }
-
-  // Employees: see only assigned workspaces. No fallback — an employee with
+  // All employees, including admins, see only assigned workspaces. No fallback — an employee with
   // zero assignments returns an empty list (must be explicitly added by an
   // admin via Settings → Workspace → Members).
   const assignments = await db
@@ -199,8 +186,14 @@ router.get("/auth/my-workspaces", async (req, res): Promise<void> => {
     .from(employeeWorkspaceAssignmentsTable)
     .where(eq(employeeWorkspaceAssignmentsTable.employeeId, employee.id));
 
-  const assignedIds = new Set(assignments.map(a => a.workspaceId));
-  const myWorkspaces = allWorkspaces.filter(ws => assignedIds.has(ws.id));
+  const assignedIds = assignments.map(a => a.workspaceId);
+  const myWorkspaces = assignedIds.length > 0
+    ? await db
+        .select()
+        .from(workspacesTable)
+        .where(inArray(workspacesTable.id, assignedIds))
+        .orderBy(workspacesTable.id)
+    : [];
 
   res.json(serializeWorkspacesForEmployee(myWorkspaces, employee));
 });

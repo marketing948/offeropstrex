@@ -16,6 +16,46 @@ export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 /** Spec-canonical batch status values (Automation Bible §6). */
 export type BatchStatus = (typeof batchStatusEnum.enumValues)[number];
 
+export type TaskCompletionDetails =
+  | {
+      kind: "generic";
+      completionPayload?: Record<string, unknown>;
+    }
+  | {
+      kind: "create_voluum_campaign";
+      platform: "ios" | "android";
+      trafficSourceId: number;
+      voluumCampaignId: string;
+      voluumCampaignName: string;
+      campaignName: string;
+      campaignUrl?: string | null;
+    }
+  | {
+      kind: "take_campaign_live";
+      trafficSourceCampaignId?: string | null;
+      trafficSourceCampaignUrl?: string | null;
+      notes?: string | null;
+    }
+  | {
+      kind: "find_winners";
+      outcome?: "success";
+      winnersCount: number;
+      revenue: number;
+      cost: number;
+      clicks?: number | null;
+      conversions?: number | null;
+      notes?: string | null;
+    }
+  | {
+      kind: "find_winners";
+      outcome: "failed";
+      failureReason: string;
+      notes?: string | null;
+    }
+  | {
+      kind: "all_traffic_sources_tested";
+    };
+
 // ── Events ────────────────────────────────────────────────────────────
 // The 7 canonical events from the Automation Bible. Producers (sync
 // routes, route handlers, scheduled jobs) emit one of these via
@@ -105,6 +145,24 @@ export type EventInput =
       workspaceId: number;
       payload: {
         batchId: number;
+      };
+    }
+  | {
+      type: "BatchCampaignsGoLiveRequested";
+      workspaceId: number;
+      payload: {
+        batchId: number;
+      };
+    }
+  | {
+      // Route-level completion is only a request. The engine owns the
+      // task/campaign mutations and chain-emits TaskCompleted atomically.
+      type: "TaskCompletionRequested";
+      workspaceId: number;
+      payload: {
+        taskId: number;
+        completedByEmployeeId: number;
+        completion: TaskCompletionDetails;
       };
     }
   | {
@@ -232,7 +290,7 @@ export type EventInput =
   | {
       // Phase 6b / SPEC §1+§4: producer (Voluum sync) detected a Voluum
       // campaign whose tags do not satisfy the tracker-campaign tag
-      // contract (`<initials>_<geo>_batch<n>_<device>`). The rule fans
+      // contract (`<initials>_<geo>_batch<n>_<platform>`). The rule fans
       // out one INVALID_TAG notification to every workspace admin so
       // the bad tag can be fixed in Voluum. Idempotency: producer sets
       // `dedupeKey` = `invalid_tag:<voluumCampaignId>:<reason>` so
@@ -345,8 +403,20 @@ export type Action =
       };
     }
   | {
+      type: "GoLiveBatchCampaigns";
+      workspaceId: number;
+      batchId: number;
+    }
+  | {
       type: "CompleteTask";
       taskId: number;
+    }
+  | {
+      type: "CompleteTaskFromRequest";
+      workspaceId: number;
+      taskId: number;
+      completedByEmployeeId: number;
+      completion: TaskCompletionDetails;
     }
   // Pivot Phase 4 (Task #27): TaskCompleted advances the campaign
   // state machine. Engine-owned because `campaigns` will be added
@@ -361,8 +431,10 @@ export type Action =
     }
   | {
       type: "ChangeBatchStatus";
+      workspaceId: number;
       batchId: number;
       status: BatchStatus;
+      liveAt?: Date | null;
     }
   | {
       type: "CreateNotification";
@@ -398,6 +470,16 @@ export type Action =
       workspaceId: number;
       batchId: number;
       nextTrafficSourceId: number;
+    }
+  | {
+      type: "CompleteTrafficSourceRunPlatform";
+      workspaceId: number;
+      batchId: number;
+      trafficSourceId: number;
+      platform: "ios" | "android";
+      campaignId: number;
+      outcome: "completed" | "failed";
+      failureReason?: string | null;
     }
   // Phase 7: engine-owned escalation. The overdue-tasks cron emits
   // TaskOverdue and the rule converts it to MarkTaskOverdue (which sets

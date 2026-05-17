@@ -549,9 +549,8 @@ async function detectBatchesInVoluumCampaigns(
   // ── Phase 6b: invalid tracker-tag detection pass ────────────────────
   // Independently of the mapping/import flow below, scan every active
   // voluum_campaign in this workspace whose tags STRUCTURALLY look like
-  // tracker-campaign tags (5 underscore-parts with a `batch<n>` middle
-  // segment) and validate them against the workspace's
-  // workspace_traffic_sources.name list. If none of the campaign's
+  // tracker-campaign tags (4 underscore-parts with a `batch<n>` middle
+  // segment). If none of the campaign's
   // tracker-shaped tags is valid, emit a VoluumCampaignTagInvalid event
   // so the engine can fan out an INVALID_TAG notification to admins.
   //
@@ -578,7 +577,7 @@ async function detectBatchesInVoluumCampaigns(
       ));
 
     // SPEC §4: tracker tags have exactly 4 underscore-separated segments
-    // with a `batch<n>` token in the middle (`<aff>_<geo>_batch<n>_<device>`).
+    // with a `batch<n>` token in the middle (`<aff>_<geo>_batch<n>_<platform>`).
     // Anything else is presumed to be an offer tag (or noise) and skipped —
     // we don't want to tell admins their offer tags are invalid tracker tags.
     const looksLikeTrackerTag = (t: string): boolean => {
@@ -650,7 +649,7 @@ async function detectBatchesInVoluumCampaigns(
   // The auto-mapping path below relies on campaign-NAME parsing, which
   // can drift from how operators actually tag campaigns. Per spec
   // §6.3, tracker campaigns are identified by their TAG matching the
-  // canonical pattern `<aff>_<geo>_batch<n>_<device>_<source>`. For
+  // canonical pattern `<aff>_<geo>_batch<n>_<platform>`. For
   // every active voluum_campaign in this workspace whose tags include
   // a valid tracker tag whose (affiliate, geo, batchN) matches a
   // batch_tag in the workspace, emit TrackerCampaignImported directly.
@@ -686,13 +685,12 @@ async function detectBatchesInVoluumCampaigns(
           isNotNull(testingBatchesTable.batchTag),
         ),
       );
-    // Index batches by canonical (aff_geo_batchN) — UPPER-CASE since
-    // batch_tag is stored canonical UPPER, and parsed tracker tag's
-    // (affiliateInitials, geo, batchNumber) are normalized to that.
+    // Index batches by exact lowercase batch tag. Offer and campaign tags
+    // must match byte-for-byte on their shared batch segment.
     const batchIdByCanonical = new Map<string, number>();
     for (const b of wsBatchRows) {
       if (!b.batchTag) continue;
-      batchIdByCanonical.set(b.batchTag.toUpperCase(), b.id);
+      batchIdByCanonical.set(b.batchTag, b.id);
     }
 
     const allCampsForTag = await db
@@ -729,9 +727,7 @@ async function detectBatchesInVoluumCampaigns(
       for (const t of tags) {
         const r = validateTrackerCampaignTag(t);
         if (!r.valid) continue;
-        const canonicalBatchKey =
-          `${r.parsed.affiliateInitials}_${r.parsed.geo.toUpperCase()}_BATCH${r.parsed.batchNumber}`;
-        const batchId = batchIdByCanonical.get(canonicalBatchKey);
+        const batchId = batchIdByCanonical.get(r.parsed.batchTag);
         if (!batchId) continue;
         try {
           await emit({
@@ -857,8 +853,8 @@ async function detectBatchesInVoluumCampaigns(
       // (affiliateInitials, geo). The (affiliate, geo) pair is taken from
       // whichever source we trust most: the parsed batch_tag when present
       // and valid, otherwise the batch row's own affiliate_network / geo
-      // columns. The batch row already stores canonical UPPER-CASE values
-      // (auto_group writes parsed.affiliateInitials / parsed.geo there),
+      // columns. Auto-group writes strict lowercase tags while preserving
+      // parsed affiliate/geo display fields on the batch row,
       // so structured matching does not silently fail when a batch was
       // created without a tag or with a non-canonical / cleared tag.
       const wsBatches = await db.select({
@@ -1058,7 +1054,7 @@ async function detectBatchesInVoluumCampaigns(
     // TODO(Phase 2): replace parseVoluumCampaignName-based device
     // detection with tag-driven extraction (look up the matching
     // voluum_campaigns row by mapping.campaignId, parse its primary
-    // tracker tag suffix `_ios` / `_android`). Until Phase 2 lands,
+    // tracker tag suffix `_ios` / `_and`). Until Phase 2 lands,
     // this legacy parser is the only source of device for the engine
     // event emission below; without it the workflow stalls between
     // Phase 1 and Phase 2.
@@ -2109,7 +2105,7 @@ router.post("/sync/voluum/workspaces/:id/sync", async (req, res): Promise<void> 
     // --- Tag classification (no filtering): every campaign is upserted so it
     // remains visible in the UI. We only attach a canonical primaryTag when
     // the campaign carries a valid OfferOps tag; allTags is always persisted.
-    // Pattern: {AFFILIATE_INITIALS}_{GEO}_{BATCH_PREFIX}{BATCH_NUMBER}
+    // Pattern: {affiliateInitials}_{geo}_batch{number}
     const campaignSkipCounts: Record<VoluumTagSkipReason, number> = {
       missing_tag: 0,
       invalid_tag_format: 0,
@@ -2287,8 +2283,8 @@ router.post("/sync/voluum/workspaces/:id/sync", async (req, res): Promise<void> 
     offers = offersValidated.kept;
 
     // --- Tag filter: ONLY import offers with at least one valid OfferOps tag ---
-    // Pattern: {AFFILIATE_INITIALS}_{GEO}_{BATCH_PREFIX}{BATCH_NUMBER}
-    // (e.g. SL_DE_BATCH1). The matched tag becomes the canonical primaryTag
+    // Pattern: {affiliateInitials}_{geo}_batch{number}
+    // (e.g. sl_de_batch1). The matched tag becomes the canonical primaryTag
     // used by auto-grouping. Invalid items are skipped before DB insert.
     const offerSkipCounts: Record<VoluumTagSkipReason, number> = {
       missing_tag: 0,

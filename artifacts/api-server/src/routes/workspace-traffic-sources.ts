@@ -159,7 +159,7 @@ router.patch(`${PATH}/:id`, async (req, res): Promise<void> => {
     const [row] = await db
       .update(workspaceTrafficSourcesTable)
       .set(patch)
-      .where(eq(workspaceTrafficSourcesTable.id, id))
+      .where(and(eq(workspaceTrafficSourcesTable.id, id), eq(workspaceTrafficSourcesTable.workspaceId, existing.workspaceId)))
       .returning();
     res.json(row);
   } catch (err) {
@@ -212,7 +212,7 @@ router.delete(`${PATH}/:id`, async (req, res): Promise<void> => {
 
   await db
     .delete(workspaceTrafficSourcesTable)
-    .where(eq(workspaceTrafficSourcesTable.id, id));
+    .where(and(eq(workspaceTrafficSourcesTable.id, id), eq(workspaceTrafficSourcesTable.workspaceId, existing.workspaceId)));
   res.status(204).end();
 });
 

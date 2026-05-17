@@ -17,6 +17,8 @@ import {
   testingBatchesTable,
   todoTasksTable,
   trackerCampaignsTable,
+  voluumTrafficSourcesTable,
+  workspaceTrafficSourcesTable,
 } from "@workspace/db";
 import type { Action, EventInput, Tx } from "../types.ts";
 
@@ -51,6 +53,30 @@ export async function handleTrackerCampaignImported(
       ? "CREATE_IOS_TRACKER_CAMPAIGN"
       : "CREATE_ANDROID_TRACKER_CAMPAIGN";
 
+  const [voluumSource] = await tx
+    .select({ voluumId: voluumTrafficSourcesTable.voluumId })
+    .from(voluumTrafficSourcesTable)
+    .where(
+      and(
+        eq(voluumTrafficSourcesTable.id, payload.trafficSourceId),
+        eq(voluumTrafficSourcesTable.workspaceId, workspaceId),
+      ),
+    )
+    .limit(1);
+  const [workspaceSource] = voluumSource
+    ? await tx
+        .select({ id: workspaceTrafficSourcesTable.id })
+        .from(workspaceTrafficSourcesTable)
+        .where(
+          and(
+            eq(workspaceTrafficSourcesTable.workspaceId, workspaceId),
+            eq(workspaceTrafficSourcesTable.voluumTrafficSourceId, voluumSource.voluumId),
+          ),
+        )
+        .limit(1)
+    : [];
+  const taskTrafficSourceId = workspaceSource?.id ?? payload.trafficSourceId;
+
   const openTasks = await tx
     .select({ id: todoTasksTable.id })
     .from(todoTasksTable)
@@ -58,7 +84,7 @@ export async function handleTrackerCampaignImported(
       and(
         eq(todoTasksTable.workspaceId, workspaceId),
         eq(todoTasksTable.relatedBatchId, payload.batchId),
-        eq(todoTasksTable.trafficSourceId, payload.trafficSourceId),
+        eq(todoTasksTable.trafficSourceId, taskTrafficSourceId),
         eq(todoTasksTable.taskType, matchingTaskType),
       ),
     );
@@ -115,6 +141,7 @@ export async function handleTrackerCampaignImported(
     ) {
       actions.push({
         type: "ChangeBatchStatus",
+        workspaceId,
         batchId: batch.id,
         status: "OFFER_READY_FOR_LIVE_TESTING",
       });
@@ -130,6 +157,7 @@ export async function handleTrackerCampaignImported(
     // not advance status.
     actions.push({
       type: "ChangeBatchStatus",
+      workspaceId,
       batchId: batch.id,
       status: "WAITING_FOR_TRACKER_CAMPAIGNS",
     });

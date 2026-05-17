@@ -75,7 +75,7 @@ export const voluumCampaignsTable = pgTable("voluum_campaigns", {
   affiliateNetworkId: text("affiliate_network_id"),
   country: text("country"),
   status: text("status"),
-  // Canonical OfferOps tag matched on this campaign (UPPER_CASE), or NULL if
+  // Canonical lowercase OfferOps tag matched on this campaign, or NULL if
   // none of the campaign's Voluum tags matched the OfferOps tag pattern.
   primaryTag: text("primary_tag"),
   // JSON-encoded array of all Voluum tags returned for this campaign.

@@ -2570,7 +2570,7 @@ export const useDeleteEmployee = <
 /**
  * @summary List goals
  */
-export const getListGoalsUrl = (params?: ListGoalsParams) => {
+export const getListGoalsUrl = (params: ListGoalsParams) => {
   const normalizedParams = new URLSearchParams();
 
   Object.entries(params || {}).forEach(([key, value]) => {
@@ -2587,7 +2587,7 @@ export const getListGoalsUrl = (params?: ListGoalsParams) => {
 };
 
 export const listGoals = async (
-  params?: ListGoalsParams,
+  params: ListGoalsParams,
   options?: RequestInit,
 ): Promise<Goal[]> => {
   return customFetch<Goal[]>(getListGoalsUrl(params), {
@@ -2604,7 +2604,7 @@ export const getListGoalsQueryOptions = <
   TData = Awaited<ReturnType<typeof listGoals>>,
   TError = ErrorType<unknown>,
 >(
-  params?: ListGoalsParams,
+  params: ListGoalsParams,
   options?: {
     query?: UseQueryOptions<
       Awaited<ReturnType<typeof listGoals>>,
@@ -2642,7 +2642,7 @@ export function useListGoals<
   TData = Awaited<ReturnType<typeof listGoals>>,
   TError = ErrorType<unknown>,
 >(
-  params?: ListGoalsParams,
+  params: ListGoalsParams,
   options?: {
     query?: UseQueryOptions<
       Awaited<ReturnType<typeof listGoals>>,

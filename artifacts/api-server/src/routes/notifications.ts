@@ -170,7 +170,7 @@ router.patch("/notifications/:id/read", async (req, res): Promise<void> => {
     .select({ notification: notificationsTable, batchName: testingBatchesTable.batchName })
     .from(notificationsTable)
     .leftJoin(testingBatchesTable, eq(notificationsTable.batchId, testingBatchesTable.id))
-    .where(eq(notificationsTable.id, id));
+    .where(and(eq(notificationsTable.id, id), eq(notificationsTable.workspaceId, existing.workspaceId)));
 
   res.json(serializeNotification(row.notification, row.batchName));
 });

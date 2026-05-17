@@ -9,8 +9,9 @@ export type WorkspaceAccessResult =
 
 /**
  * Verify that the requesting employee has access to the given workspace.
- * Admins may access all workspaces. Employees may access only workspaces they
- * are explicitly assigned to in `employee_workspace_assignments`.
+ * All employees, including admins, must be explicitly assigned to the
+ * workspace. Admin role controls privileged actions inside an allowed
+ * workspace; it is not global workspace access.
  *
  * No fallback: an employee with zero assignments will receive 403. Seed any
  * existing employees into the Default Workspace before deploying this change.
@@ -21,8 +22,6 @@ export async function checkWorkspaceAccess(
 ): Promise<WorkspaceAccessResult> {
   const employee = await getEmployeeFromToken(req);
   if (!employee) return { allowed: false, status: 401, reason: "Unauthorized" };
-  if (employee.role === "admin") return { allowed: true, employee };
-
   const [assignment] = await db
     .select({ id: employeeWorkspaceAssignmentsTable.id })
     .from(employeeWorkspaceAssignmentsTable)

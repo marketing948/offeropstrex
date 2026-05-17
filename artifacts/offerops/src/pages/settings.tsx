@@ -97,6 +97,7 @@ import {
   ArrowUp,
   ArrowDown,
   Radio,
+  Save,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -104,7 +105,7 @@ import AdminGoalsConfig from "@/pages/admin-goals-config";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { authedFetch, authedJson } from "@/lib/api-fetch";
 
-type SettingsTab = "goal-engine" | "affiliate-networks" | "worker-networks" | "traffic-sources" | "geos" | "workspace";
+type SettingsTab = "goal-engine" | "admin-defaults" | "affiliate-networks" | "worker-networks" | "traffic-sources" | "geos" | "workspace";
 
 // Pivot Phase 0 — Voluum disabled. The legacy Workspace tab (Voluum
 // credentials/sync/mappings) is hidden until automation comes back.
@@ -116,6 +117,12 @@ const TABS: { id: SettingsTab; label: string; icon: React.ReactNode; description
     label: "Goal Engine",
     icon: <SlidersHorizontal size={15} />,
     description: "Scoring rules, ranks, bonuses, and KPI targets",
+  },
+  {
+    id: "admin-defaults",
+    label: "Admin Defaults",
+    icon: <Settings2 size={15} />,
+    description: "Workspace testing defaults and progression settings",
   },
   {
     id: "affiliate-networks",
@@ -177,6 +184,7 @@ export default function Settings() {
           <AdminGoalsConfig embedded />
         </div>
       )}
+      {activeTab === "admin-defaults" && <AdminFoundationTab />}
       {activeTab === "affiliate-networks" && <AffiliateNetworksTab />}
       {activeTab === "worker-networks" && <WorkerNetworksTab />}
       {activeTab === "traffic-sources" && <TrafficSourcesTab />}
@@ -195,6 +203,225 @@ function errorMessage(err: unknown): string {
     return (err as { message: string }).message;
   }
   return "Unknown error";
+}
+
+type AdminFoundationConfig = {
+  trafficSourceVisibility: { mode: "all" | "restricted"; restrictedEmployeeIds: number[] };
+  testingProgression: { trafficSourceIds: number[] };
+  defaultTestWindow: { durationHours: number };
+  clickThresholds: {
+    averageVisitsPerOffer: number;
+    clicks: number | null;
+    spend: number | null;
+    days: number | null;
+  };
+  winnerThresholds: {
+    mode: "positive_roi" | "revenue";
+    revenueGreaterThan: number;
+    roiGreaterThan: number;
+  };
+  goals: {
+    weekly: Array<{ id: string; name: string; target: number; enabled: boolean }>;
+    monthly: Array<{ id: string; name: string; target: number; enabled: boolean }>;
+  };
+  bonusTiers: Array<{ id: string; name: string; minScore: number; bonusAmount: number; enabled: boolean }>;
+  affiliateNetworkAssignments?: Array<{ employeeId: number; affiliateNetworkId: number }>;
+};
+
+function AdminFoundationTab() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { activeWorkspaceId } = useWorkspace();
+  const wsId = activeWorkspaceId ?? 0;
+  const [draft, setDraft] = useState<AdminFoundationConfig | null>(null);
+  const [weeklyGoalsJson, setWeeklyGoalsJson] = useState("[]");
+  const [monthlyGoalsJson, setMonthlyGoalsJson] = useState("[]");
+  const [bonusTiersJson, setBonusTiersJson] = useState("[]");
+
+  const queryKey = ["admin-foundation-settings", wsId];
+  const { data, isLoading } = useQuery<AdminFoundationConfig>({
+    queryKey,
+    enabled: !!wsId,
+    queryFn: () => authedJson(`/api/settings/admin-foundation?workspace_id=${wsId}`),
+  });
+  const { data: trafficSources = [] } = useListWorkspaceTrafficSources(
+    { workspace_id: wsId },
+    { query: { enabled: !!wsId, queryKey: getListWorkspaceTrafficSourcesQueryKey({ workspace_id: wsId }) } },
+  );
+
+  useEffect(() => {
+    if (!data) return;
+    setDraft(data);
+    setWeeklyGoalsJson(JSON.stringify(data.goals.weekly, null, 2));
+    setMonthlyGoalsJson(JSON.stringify(data.goals.monthly, null, 2));
+    setBonusTiersJson(JSON.stringify(data.bonusTiers, null, 2));
+  }, [data]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      if (!draft) return;
+      const weekly = JSON.parse(weeklyGoalsJson);
+      const monthly = JSON.parse(monthlyGoalsJson);
+      const bonusTiers = JSON.parse(bonusTiersJson);
+      return authedJson<AdminFoundationConfig>("/api/settings/admin-foundation", {
+        method: "PATCH",
+        body: JSON.stringify({
+          workspaceId: wsId,
+          ...draft,
+          goals: { weekly, monthly },
+          bonusTiers,
+          affiliateNetworkAssignments: undefined,
+        }),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      toast({ title: "Admin defaults saved" });
+    },
+    onError: (err) => toast({ title: "Save failed", description: errorMessage(err), variant: "destructive" }),
+  });
+
+  if (!wsId) return <p className="text-sm text-muted-foreground">Select a workspace.</p>;
+  if (isLoading || !draft) return <Skeleton className="h-40 w-full" />;
+
+  const selectedTrafficSourceIds = draft.testingProgression.trafficSourceIds;
+
+  function setTrafficSourceAt(index: number, value: string) {
+    if (!draft) return;
+    const next = [...selectedTrafficSourceIds];
+    if (value === "none") {
+      next.splice(index, 1);
+    } else {
+      next[index] = Number(value);
+    }
+    setDraft({
+      ...draft,
+      testingProgression: { trafficSourceIds: next.filter((id, i) => Number.isInteger(id) && id > 0 && next.indexOf(id) === i).slice(0, 3) },
+    });
+  }
+
+  function setNumber(path: "durationHours" | "averageVisitsPerOffer" | "clicks" | "spend" | "days" | "revenueGreaterThan" | "roiGreaterThan", value: string) {
+    if (!draft) return;
+    const parsed = value === "" ? null : Number(value);
+    if (path === "durationHours") {
+      setDraft({ ...draft, defaultTestWindow: { durationHours: Number(parsed ?? 0) } });
+    } else if (path === "averageVisitsPerOffer" || path === "clicks" || path === "spend" || path === "days") {
+      setDraft({ ...draft, clickThresholds: { ...draft.clickThresholds, [path]: parsed } });
+    } else {
+      setDraft({ ...draft, winnerThresholds: { ...draft.winnerThresholds, [path]: Number(parsed ?? 0) } });
+    }
+  }
+
+  return (
+    <div className="space-y-4 max-w-5xl">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2"><Settings2 size={16} /> Admin Settings Foundation</CardTitle>
+          <CardDescription>
+            Workspace-scoped defaults used by the manual testing workflow before Voluum automation is enabled.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="rounded-md border bg-muted/20 p-3">
+            <p className="text-sm font-medium">Traffic source visibility</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              All employees can see all workspace traffic sources. Restriction support is stored for later but not applied in the UI workflow yet.
+            </p>
+            <Badge variant="outline" className="mt-2">Mode: {draft.trafficSourceVisibility.mode}</Badge>
+          </div>
+
+          <div>
+            <Label className="text-sm font-medium">Testing progression traffic sources</Label>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2">
+              {[0, 1, 2].map((index) => (
+                <div key={index}>
+                  <Label className="text-xs text-muted-foreground">Step {index + 1}</Label>
+                  <Select
+                    value={selectedTrafficSourceIds[index] ? String(selectedTrafficSourceIds[index]) : "none"}
+                    onValueChange={(value) => setTrafficSourceAt(index, value)}
+                  >
+                    <SelectTrigger className="mt-1">
+                      <SelectValue placeholder="Select source" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Not set</SelectItem>
+                      {(trafficSources as WorkspaceTrafficSource[]).map((source) => (
+                        <SelectItem key={source.id} value={String(source.id)}>{source.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div>
+              <Label className="text-xs text-muted-foreground">Default test window hours</Label>
+              <Input className="mt-1" type="number" min={1} value={draft.defaultTestWindow.durationHours} onChange={(e) => setNumber("durationHours", e.target.value)} />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Average visits per offer</Label>
+              <Input className="mt-1" type="number" min={1} value={draft.clickThresholds.averageVisitsPerOffer} onChange={(e) => setNumber("averageVisitsPerOffer", e.target.value)} />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Click threshold</Label>
+              <Input className="mt-1" type="number" min={1} value={draft.clickThresholds.clicks ?? ""} onChange={(e) => setNumber("clicks", e.target.value)} placeholder="Optional" />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Days threshold</Label>
+              <Input className="mt-1" type="number" min={1} value={draft.clickThresholds.days ?? ""} onChange={(e) => setNumber("days", e.target.value)} placeholder="Optional" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <Label className="text-xs text-muted-foreground">Winner threshold mode</Label>
+              <Select
+                value={draft.winnerThresholds.mode}
+                onValueChange={(value: "positive_roi" | "revenue") => setDraft({ ...draft, winnerThresholds: { ...draft.winnerThresholds, mode: value } })}
+              >
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="positive_roi">Positive ROI</SelectItem>
+                  <SelectItem value="revenue">Revenue</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Revenue greater than</Label>
+              <Input className="mt-1" type="number" min={0} step="0.01" value={draft.winnerThresholds.revenueGreaterThan} onChange={(e) => setNumber("revenueGreaterThan", e.target.value)} />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">ROI greater than</Label>
+              <Input className="mt-1" type="number" step="0.01" value={draft.winnerThresholds.roiGreaterThan} onChange={(e) => setNumber("roiGreaterThan", e.target.value)} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <Label className="text-xs text-muted-foreground">Weekly goals JSON</Label>
+              <textarea className="mt-1 min-h-28 w-full rounded-md border bg-background p-2 font-mono text-xs" value={weeklyGoalsJson} onChange={(e) => setWeeklyGoalsJson(e.target.value)} />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Monthly goals JSON</Label>
+              <textarea className="mt-1 min-h-28 w-full rounded-md border bg-background p-2 font-mono text-xs" value={monthlyGoalsJson} onChange={(e) => setMonthlyGoalsJson(e.target.value)} />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Bonus tiers JSON</Label>
+              <textarea className="mt-1 min-h-28 w-full rounded-md border bg-background p-2 font-mono text-xs" value={bonusTiersJson} onChange={(e) => setBonusTiersJson(e.target.value)} />
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+              <Save size={14} className="mr-2" /> Save Admin Defaults
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
 }
 
 function AffiliateNetworksTab() {
