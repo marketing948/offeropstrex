@@ -20,6 +20,7 @@ import { requireWorkspaceFromBody } from "../lib/require-workspace";
 import { serializeWorkspaceForEmployee, setActiveWorkspaceForEmployee } from "../lib/active-workspace";
 import { upsertSetting } from "../lib/settings-store";
 import { normalizeRawTags, pickValidVoluumTag, validateTrackerCampaignTag, type VoluumTagSkipReason, type TrackerCampaignTagSkipReason } from "../lib/voluum-tag";
+import { isVoluumDryRunEnabled } from "../lib/feature-flags";
 // SPEC Phase 1: parseVoluumCampaignName is being phased out as a workflow
 // driver. The structured-name auto-mapping pre-pass it powered has been
 // removed. The remaining call site (device detection in the mapping loop
@@ -1303,6 +1304,35 @@ async function shouldIncludeArchived(req: import("express").Request): Promise<bo
 // come from Phase 4 rules) and is idempotent via the events
 // dedupe-key index.
 export { checkClickThresholds } from "./sync/click-threshold.ts";
+
+// POST /sync/voluum/discovery-preview — inert dry-run safety shell.
+// This route intentionally performs no Voluum calls, emits no events, and
+// creates no tasks/batches. It only proves the caller can access workspaceId.
+router.post("/sync/voluum/discovery-preview", async (req, res): Promise<void> => {
+  if (!isVoluumDryRunEnabled()) {
+    res.status(410).json({
+      error: "voluum_dry_run_disabled",
+      message: "Voluum dry-run discovery preview is disabled.",
+    });
+    return;
+  }
+
+  const workspaceId = await requireWorkspaceFromBody(req, res);
+  if (workspaceId === null) return;
+
+  res.json({
+    mode: "dry_run",
+    workspaceId,
+    enabled: true,
+    sideEffects: {
+      voluumCalls: false,
+      dbWrites: false,
+      events: false,
+      tasks: false,
+      batches: false,
+    },
+  });
+});
 
 // GET /sync/voluum/status?workspace_id=N — workspace-scoped sync status.
 // Reads per-workspace credentials and timestamps from the workspaces row.

@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { isVoluumEnabled } from "../lib/feature-flags";
+import { isVoluumDryRunEnabled, isVoluumEnabled } from "../lib/feature-flags";
 import healthRouter from "./health";
 import authRouter from "./auth";
 import workspaceMembersRouter from "./workspace-members";
@@ -40,6 +40,10 @@ function voluumDisabledGate(req: Request, res: Response, next: NextFunction): vo
   // by default, so `/sync/VoLuUm/...` would otherwise still hit the
   // underlying handlers and bypass the lockout.
   const path = req.path.toLowerCase();
+  if (path === "/sync/voluum/discovery-preview" && isVoluumDryRunEnabled()) {
+    next();
+    return;
+  }
 
   const isVoluumPath =
     path.startsWith("/sync/voluum") ||

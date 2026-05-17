@@ -38,11 +38,25 @@ export const OFFEROPS_AUTOMATION_V1_ENABLED = false as const;
  *
  * Set `ENABLE_VOLUUM=true` (or `1`) to restore prior behavior.
  */
-export function isVoluumEnabled(): boolean {
-  const v = process.env["ENABLE_VOLUUM"];
+function isTruthyEnv(name: string): boolean {
+  const v = process.env[name];
   if (!v) return false;
   const norm = v.trim().toLowerCase();
   return norm === "true" || norm === "1" || norm === "yes" || norm === "on";
+}
+
+export function isVoluumEnabled(): boolean {
+  return isTruthyEnv("ENABLE_VOLUUM");
+}
+
+/**
+ * Slice 1 — Voluum dry-run discovery preview.
+ *
+ * This flag enables only the inert discovery-preview safety shell. It must not
+ * unlock existing Voluum sync, mapping, workspace, or metadata mutation routes.
+ */
+export function isVoluumDryRunEnabled(): boolean {
+  return isTruthyEnv("ENABLE_VOLUUM_DRY_RUN");
 }
 
 /** Voluum-only event types short-circuited by `emit()` when Voluum is off. */
