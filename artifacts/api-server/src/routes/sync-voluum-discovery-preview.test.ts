@@ -9,6 +9,9 @@ import {
   employeesTable,
   employeeWorkspaceAssignmentsTable,
   eventsTable,
+  performanceTable,
+  testingBatchesTable,
+  todoTasksTable,
   workspacesTable,
 } from "@workspace/db";
 
@@ -17,8 +20,12 @@ let baseUrl: string;
 let createdWorkspaceIds: number[] = [];
 let createdEmployeeIds: number[] = [];
 
+const VOLUUM_AUTH_URL = "https://api.voluum.com/auth/access/session";
 const originalEnableVoluum = process.env["ENABLE_VOLUUM"];
 const originalEnableVoluumDryRun = process.env["ENABLE_VOLUUM_DRY_RUN"];
+const originalFetch = globalThis.fetch;
+let voluumFetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+let voluumFetchMock: ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => Promise<Response>) | null = null;
 
 before(async () => {
   server = app.listen(0);
@@ -39,10 +46,24 @@ beforeEach(() => {
   delete process.env["ENABLE_VOLUUM_DRY_RUN"];
   createdWorkspaceIds = [];
   createdEmployeeIds = [];
+  voluumFetchCalls = [];
+  voluumFetchMock = null;
+  globalThis.fetch = async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.startsWith("https://api.voluum.com")) {
+      voluumFetchCalls.push({ url, init });
+      if (!voluumFetchMock) {
+        throw new Error(`Unexpected Voluum request in test: ${url}`);
+      }
+      return voluumFetchMock(input, init);
+    }
+    return originalFetch(input, init);
+  };
 });
 
 afterEach(async () => {
   restoreEnv();
+  globalThis.fetch = originalFetch;
 
   for (const id of [...createdWorkspaceIds].reverse()) {
     await db.delete(employeeWorkspaceAssignmentsTable).where(eq(employeeWorkspaceAssignmentsTable.workspaceId, id));
@@ -136,12 +157,62 @@ async function seedWorkspaceAccess(role: "admin" | "employee" = "employee") {
   return { workspaceId, employeeId };
 }
 
+async function setWorkspaceVoluumCredentials(workspaceId: number, credentials: {
+  accessId?: string | null;
+  accessKey?: string | null;
+  apiBaseUrl?: string | null;
+  voluumWorkspaceId?: string | null;
+}): Promise<void> {
+  await db
+    .update(workspacesTable)
+    .set({
+      voluumAccessId: credentials.accessId ?? null,
+      voluumAccessKey: credentials.accessKey ?? null,
+      voluumApiBaseUrl: credentials.apiBaseUrl ?? null,
+      voluumWorkspaceId: credentials.voluumWorkspaceId ?? null,
+    })
+    .where(eq(workspacesTable.id, workspaceId));
+}
+
 async function eventCount(workspaceId: number): Promise<number> {
   const [row] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(eventsTable)
     .where(eq(eventsTable.workspaceId, workspaceId));
   return row?.count ?? 0;
+}
+
+async function writeCounts(workspaceId: number): Promise<{ batches: number; tasks: number; performance: number }> {
+  const [batches] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(testingBatchesTable)
+    .where(eq(testingBatchesTable.workspaceId, workspaceId));
+  const [tasks] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(todoTasksTable)
+    .where(eq(todoTasksTable.workspaceId, workspaceId));
+  const [performance] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(performanceTable)
+    .innerJoin(testingBatchesTable, eq(performanceTable.batchId, testingBatchesTable.id))
+    .where(eq(testingBatchesTable.workspaceId, workspaceId));
+
+  return {
+    batches: batches?.count ?? 0,
+    tasks: tasks?.count ?? 0,
+    performance: performance?.count ?? 0,
+  };
+}
+
+function mockVoluumAuth(response: Response): void {
+  voluumFetchMock = async () => response;
+}
+
+function assertOnlyVoluumAuthWasCalled(): void {
+  assert.deepEqual(voluumFetchCalls.map((call) => call.url), [VOLUUM_AUTH_URL]);
+  for (const call of voluumFetchCalls) {
+    assert.equal(call.init?.method, "POST");
+  }
 }
 
 describe("Voluum discovery preview dry-run route", { concurrency: false }, () => {
@@ -160,7 +231,7 @@ describe("Voluum discovery preview dry-run route", { concurrency: false }, () =>
     assert.equal(dryRunDisabled.json.error, "voluum_dry_run_disabled");
   });
 
-  test("can be enabled while ENABLE_VOLUUM=false", async () => {
+  test("can be enabled while ENABLE_VOLUUM=false and reports missing credentials safely", async () => {
     process.env["ENABLE_VOLUUM"] = "false";
     process.env["ENABLE_VOLUUM_DRY_RUN"] = "true";
     const { workspaceId, employeeId } = await seedWorkspaceAccess();
@@ -172,14 +243,99 @@ describe("Voluum discovery preview dry-run route", { concurrency: false }, () =>
       mode: "dry_run",
       workspaceId,
       enabled: true,
+      credentials: {
+        valid: false,
+        code: "VOLUUM_CREDENTIALS_MISSING",
+      },
       sideEffects: {
-        voluumCalls: false,
+        metadataFetches: false,
         dbWrites: false,
         events: false,
         tasks: false,
         batches: false,
       },
     });
+    assert.equal(voluumFetchCalls.length, 0);
+  });
+
+  test("returns safe auth failure for invalid credentials", async () => {
+    process.env["ENABLE_VOLUUM"] = "false";
+    process.env["ENABLE_VOLUUM_DRY_RUN"] = "true";
+    const { workspaceId, employeeId } = await seedWorkspaceAccess();
+    await setWorkspaceVoluumCredentials(workspaceId, {
+      accessId: "invalid-access-id",
+      accessKey: "invalid-access-key",
+      voluumWorkspaceId: "workspace-1",
+    });
+    mockVoluumAuth(new Response(JSON.stringify({
+      error: "invalid invalid-access-key raw-provider-secret-token",
+    }), {
+      status: 401,
+      headers: { "www-authenticate": "Bearer raw-provider-secret-token" },
+    }));
+
+    const { response, json } = await request("POST", "/sync/voluum/discovery-preview", employeeId, { workspaceId });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(json.credentials, {
+      valid: false,
+      code: "VOLUUM_AUTH_FAILED",
+    });
+    assertOnlyVoluumAuthWasCalled();
+  });
+
+  test("returns credentials.valid true for valid mocked credentials", async () => {
+    process.env["ENABLE_VOLUUM"] = "false";
+    process.env["ENABLE_VOLUUM_DRY_RUN"] = "true";
+    const { workspaceId, employeeId } = await seedWorkspaceAccess();
+    await setWorkspaceVoluumCredentials(workspaceId, {
+      accessId: "valid-access-id",
+      accessKey: "valid-access-key",
+      voluumWorkspaceId: "workspace-1",
+    });
+    mockVoluumAuth(new Response(JSON.stringify({ token: "voluum-session-token" }), { status: 200 }));
+
+    const { response, json } = await request("POST", "/sync/voluum/discovery-preview", employeeId, { workspaceId });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(json.credentials, { valid: true });
+    assert.deepEqual(json.sideEffects, {
+      metadataFetches: false,
+      dbWrites: false,
+      events: false,
+      tasks: false,
+      batches: false,
+    });
+    assertOnlyVoluumAuthWasCalled();
+  });
+
+  test("response does not include secrets, tokens, headers, or raw provider errors", async () => {
+    process.env["ENABLE_VOLUUM"] = "false";
+    process.env["ENABLE_VOLUUM_DRY_RUN"] = "true";
+    const { workspaceId, employeeId } = await seedWorkspaceAccess();
+    await setWorkspaceVoluumCredentials(workspaceId, {
+      accessId: "secret-access-id",
+      accessKey: "secret-access-key",
+      voluumWorkspaceId: "workspace-1",
+    });
+    mockVoluumAuth(new Response(JSON.stringify({
+      error: "raw provider error includes secret-access-key and leaked-provider-token",
+    }), {
+      status: 403,
+      headers: { "x-provider-token": "leaked-provider-token" },
+    }));
+
+    const { response, json } = await request("POST", "/sync/voluum/discovery-preview", employeeId, { workspaceId });
+    const serialized = JSON.stringify(json);
+
+    assert.equal(response.status, 200);
+    assert.equal(serialized.includes("secret-access-id"), false);
+    assert.equal(serialized.includes("secret-access-key"), false);
+    assert.equal(serialized.includes("leaked-provider-token"), false);
+    assert.equal(serialized.includes("raw provider error"), false);
+    assert.equal(serialized.includes("www-authenticate"), false);
+    assert.equal(serialized.includes("authorization"), false);
+    assertOnlyVoluumAuthWasCalled();
   });
 
   test("does not unlock existing mutating Voluum routes", async () => {
@@ -212,6 +368,12 @@ describe("Voluum discovery preview dry-run route", { concurrency: false }, () =>
     process.env["ENABLE_VOLUUM"] = "false";
     process.env["ENABLE_VOLUUM_DRY_RUN"] = "true";
     const { workspaceId, employeeId } = await seedWorkspaceAccess();
+    await setWorkspaceVoluumCredentials(workspaceId, {
+      accessId: "valid-access-id",
+      accessKey: "valid-access-key",
+      voluumWorkspaceId: "workspace-1",
+    });
+    mockVoluumAuth(new Response(JSON.stringify({ token: "voluum-session-token" }), { status: 200 }));
     const beforeCount = await eventCount(workspaceId);
 
     const { response } = await request("POST", "/sync/voluum/discovery-preview", employeeId, { workspaceId });
@@ -219,5 +381,26 @@ describe("Voluum discovery preview dry-run route", { concurrency: false }, () =>
 
     assert.equal(response.status, 200);
     assert.equal(afterCount, beforeCount);
+    assertOnlyVoluumAuthWasCalled();
+  });
+
+  test("does not create batches, tasks, or performance rows", async () => {
+    process.env["ENABLE_VOLUUM"] = "false";
+    process.env["ENABLE_VOLUUM_DRY_RUN"] = "true";
+    const { workspaceId, employeeId } = await seedWorkspaceAccess();
+    await setWorkspaceVoluumCredentials(workspaceId, {
+      accessId: "valid-access-id",
+      accessKey: "valid-access-key",
+      voluumWorkspaceId: "workspace-1",
+    });
+    mockVoluumAuth(new Response(JSON.stringify({ token: "voluum-session-token" }), { status: 200 }));
+    const beforeCounts = await writeCounts(workspaceId);
+
+    const { response } = await request("POST", "/sync/voluum/discovery-preview", employeeId, { workspaceId });
+    const afterCounts = await writeCounts(workspaceId);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(afterCounts, beforeCounts);
+    assertOnlyVoluumAuthWasCalled();
   });
 });

@@ -128,6 +128,41 @@ async function getVoluumToken(accessId: string, accessKey: string): Promise<stri
   return data.token;
 }
 
+type VoluumCredentialValidation =
+  | { valid: true }
+  | { valid: false; code: "VOLUUM_AUTH_FAILED" };
+
+async function validateVoluumCredentialsOnly(accessId: string, accessKey: string): Promise<VoluumCredentialValidation> {
+  try {
+    logger.info({ url: VOLUUM_AUTH_URL, method: "POST" }, "Voluum dry-run auth validation request");
+
+    const res = await fetch(VOLUUM_AUTH_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Accept": "application/json",
+      },
+      body: JSON.stringify({ accessId, accessKey }),
+    });
+
+    logger.info({ url: VOLUUM_AUTH_URL, status: res.status }, "Voluum dry-run auth validation response");
+
+    if (!res.ok) {
+      return { valid: false, code: "VOLUUM_AUTH_FAILED" };
+    }
+
+    const data = await res.json().catch(() => null) as { token?: unknown } | null;
+    if (typeof data?.token !== "string" || data.token.trim().length === 0) {
+      return { valid: false, code: "VOLUUM_AUTH_FAILED" };
+    }
+
+    return { valid: true };
+  } catch {
+    logger.warn({ url: VOLUUM_AUTH_URL }, "Voluum dry-run auth validation failed");
+    return { valid: false, code: "VOLUUM_AUTH_FAILED" };
+  }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SyncLog = any;
 
@@ -1305,9 +1340,8 @@ async function shouldIncludeArchived(req: import("express").Request): Promise<bo
 // dedupe-key index.
 export { checkClickThresholds } from "./sync/click-threshold.ts";
 
-// POST /sync/voluum/discovery-preview — inert dry-run safety shell.
-// This route intentionally performs no Voluum calls, emits no events, and
-// creates no tasks/batches. It only proves the caller can access workspaceId.
+// POST /sync/voluum/discovery-preview — credential-only dry-run preview.
+// This route authenticates only; it emits no events and creates no tasks/batches.
 router.post("/sync/voluum/discovery-preview", async (req, res): Promise<void> => {
   if (!isVoluumDryRunEnabled()) {
     res.status(410).json({
@@ -1320,12 +1354,25 @@ router.post("/sync/voluum/discovery-preview", async (req, res): Promise<void> =>
   const workspaceId = await requireWorkspaceFromBody(req, res);
   if (workspaceId === null) return;
 
+  const [ws] = await db.select().from(workspacesTable).where(eq(workspacesTable.id, workspaceId));
+  if (!ws) {
+    res.status(404).json({ error: "Workspace not found" });
+    return;
+  }
+
+  const accessId = ws.voluumAccessId?.trim() ?? "";
+  const accessKey = ws.voluumAccessKey?.trim() ?? "";
+  const credentials = accessId && accessKey
+    ? await validateVoluumCredentialsOnly(accessId, accessKey)
+    : { valid: false as const, code: "VOLUUM_CREDENTIALS_MISSING" as const };
+
   res.json({
     mode: "dry_run",
     workspaceId,
     enabled: true,
+    credentials,
     sideEffects: {
-      voluumCalls: false,
+      metadataFetches: false,
       dbWrites: false,
       events: false,
       tasks: false,
