@@ -339,9 +339,9 @@ export default function Reports() {
     for (const t of tasks) {
       const row = map.get(t.employeeId);
       if (!row) continue;
-      // Phase 2: FIND_WINNERS is the post-test scale-prep task; DONE is
+      // Phase 2: find_winners is the post-test scale-prep task; DONE is
       // the only completed terminal state.
-      if (t.taskType === "FIND_WINNERS") row.scaleTasksCreated++;
+      if (t.taskType === "find_winners" || t.taskType === "FIND_WINNERS") row.scaleTasksCreated++;
       if (t.status === "DONE") row.tasksCompleted++;
     }
     return [...map.values()].map(r => ({
@@ -366,7 +366,7 @@ export default function Reports() {
     const totalLosers  = offers.filter(o => o.status === "loser").length;
     const openTasks  = tasks.filter(t => t.status === "TODO" || t.status === "IN_PROGRESS").length;
     const doneTasks  = tasks.filter(t => t.status === "DONE").length;
-    const scaleTasks = tasks.filter(t => t.taskType === "FIND_WINNERS").length;
+    const scaleTasks = tasks.filter(t => t.taskType === "find_winners" || t.taskType === "FIND_WINNERS").length;
 
     const totalSpend = batchRows.reduce((a, b) => a + b.spend, 0);
     const totalRevenue = batchRows.reduce((a, b) => a + b.revenue, 0);

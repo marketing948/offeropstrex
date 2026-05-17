@@ -5,15 +5,18 @@ import type { Server } from "node:http";
 import { and, asc, eq, sql } from "drizzle-orm";
 import app from "../app.ts";
 import {
+  affiliateNetworksTable,
   batchTrafficSourceRunsTable,
   campaignsTable,
   db,
   employeesTable,
   employeeWorkspaceAssignmentsTable,
   eventsTable,
+  geosTable,
   goalsTable,
   testingBatchesTable,
   todoTasksTable,
+  workerAffiliateNetworksTable,
   workspacesTable,
   workspaceTrafficSourcesTable,
 } from "@workspace/db";
@@ -180,33 +183,74 @@ async function seedCampaignOpsBase() {
 }
 
 describe("route scoped invariants", { concurrency: false }, () => {
-  test("manual batch creation initializes traffic-source workflow memory", async () => {
-    const workspaceId = await createWorkspace("batch-memory");
+  test("manual batch creation requires batchTag", async () => {
+    const workspaceId = await createWorkspace("batch-tag-required");
     const employeeId = await createEmployee();
     await assign(employeeId, workspaceId);
-
-    const [firstSource] = await db
+    const [source] = await db
       .insert(workspaceTrafficSourcesTable)
-      .values({ workspaceId, name: `First Source ${Date.now()}`, position: 1, isActive: true })
+      .values({ workspaceId, name: `Required Source ${Date.now()}`, position: 1, isActive: true })
       .returning({ id: workspaceTrafficSourcesTable.id });
-    const [secondSource] = await db
-      .insert(workspaceTrafficSourcesTable)
-      .values({ workspaceId, name: `Second Source ${Date.now()}`, position: 2, isActive: true })
-      .returning({ id: workspaceTrafficSourcesTable.id });
-    await db
-      .insert(workspaceTrafficSourcesTable)
-      .values({ workspaceId, name: `Inactive Source ${Date.now()}`, position: 3, isActive: false });
 
     const created = await request("POST", "/testing-batches", employeeId, {
       workspaceId,
       employeeId,
-      batchName: `Memory Batch ${Date.now()}`,
+      batchName: `Missing Tag Batch ${Date.now()}`,
       affiliateNetwork: "Network",
       geo: "DE",
-      batchTag: `memory_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
+      trafficSourceId: source.id,
+    });
+
+    assert.equal(created.response.status, 400);
+    assert.match(String(created.json.error), /batchTag/);
+  });
+
+  test("manual batch creation initializes traffic-source workflow memory", async () => {
+    const workspaceId = await createWorkspace("batch-memory");
+    const employeeId = await createEmployee();
+    await assign(employeeId, workspaceId);
+    const [network] = await db
+      .insert(affiliateNetworksTable)
+      .values({ workspaceId, name: `Network ${Date.now()}`, isActive: true })
+      .returning({ id: affiliateNetworksTable.id, name: affiliateNetworksTable.name });
+    await db.insert(workerAffiliateNetworksTable).values({
+      workspaceId,
+      employeeId,
+      affiliateNetworkId: network.id,
+    });
+    const [geo] = await db
+      .insert(geosTable)
+      .values({ workspaceId, code: `G${Math.floor(Math.random() * 90 + 10)}`, name: "Geo", isActive: true })
+      .returning({ id: geosTable.id, code: geosTable.code });
+
+    const [firstSource] = await db
+      .insert(workspaceTrafficSourcesTable)
+      .values({ workspaceId, name: `First Source ${Date.now()}`, position: 1, isActive: true })
+      .returning({ id: workspaceTrafficSourcesTable.id, name: workspaceTrafficSourcesTable.name });
+    const [secondSource] = await db
+      .insert(workspaceTrafficSourcesTable)
+      .values({ workspaceId, name: `Second Source ${Date.now()}`, position: 2, isActive: true })
+      .returning({ id: workspaceTrafficSourcesTable.id, name: workspaceTrafficSourcesTable.name });
+    await db
+      .insert(workspaceTrafficSourcesTable)
+      .values({ workspaceId, name: `Inactive Source ${Date.now()}`, position: 3, isActive: false });
+
+    const batchTag = `memory_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+    const created = await request("POST", "/testing-batches", employeeId, {
+      workspaceId,
+      assignedWorkerId: employeeId,
+      batchName: `Memory Batch ${Date.now()}`,
+      affiliateNetworkId: network.id,
+      geoId: geo.id,
+      trafficSourceId: secondSource.id,
+      batchTag,
     });
     assert.equal(created.response.status, 201);
-    assert.equal(created.json.currentWorkspaceTrafficSourceId, firstSource.id);
+    assert.equal(created.json.batchTag, batchTag);
+    assert.equal(created.json.affiliateNetwork, network.name);
+    assert.equal(created.json.geo, geo.code);
+    assert.equal(created.json.trafficSource, secondSource.name);
+    assert.equal(created.json.currentWorkspaceTrafficSourceId, secondSource.id);
     assert.equal(created.json.averageVisitsThresholdPerOffer, 25000);
     assert.deepEqual(created.json.optimizationCriteria, {});
     assert.equal(created.json.optimizationRunStatus, "not_ready");
@@ -223,18 +267,20 @@ describe("route scoped invariants", { concurrency: false }, () => {
 
     assert.equal(runs.length, 2);
     assert.equal(runs[0].trafficSourceId, firstSource.id);
-    assert.equal(runs[0].status, "active");
-    assert.equal(runs[0].iosStatus, "active");
-    assert.equal(runs[0].androidStatus, "active");
-    assert.ok(runs[0].startedAt);
+    assert.equal(runs[0].status, "pending");
+    assert.equal(runs[0].iosStatus, "pending");
+    assert.equal(runs[0].androidStatus, "pending");
+    assert.equal(runs[0].startedAt, null);
     assert.equal(runs[1].trafficSourceId, secondSource.id);
-    assert.equal(runs[1].status, "pending");
-    assert.equal(runs[1].iosStatus, "pending");
-    assert.equal(runs[1].androidStatus, "pending");
-    assert.equal(runs[1].startedAt, null);
+    assert.equal(runs[1].status, "active");
+    assert.equal(runs[1].iosStatus, "active");
+    assert.equal(runs[1].androidStatus, "active");
+    assert.ok(runs[1].startedAt);
 
     const [batch] = await db
       .select({
+        batchTag: testingBatchesTable.batchTag,
+        trafficSource: testingBatchesTable.trafficSource,
         currentWorkspaceTrafficSourceId: testingBatchesTable.currentWorkspaceTrafficSourceId,
         averageVisitsThresholdPerOffer: testingBatchesTable.averageVisitsThresholdPerOffer,
         optimizationRunStatus: testingBatchesTable.optimizationRunStatus,
@@ -242,10 +288,27 @@ describe("route scoped invariants", { concurrency: false }, () => {
       })
       .from(testingBatchesTable)
       .where(eq(testingBatchesTable.id, created.json.id));
-    assert.equal(batch.currentWorkspaceTrafficSourceId, firstSource.id);
+    assert.equal(batch.batchTag, batchTag);
+    assert.equal(batch.trafficSource, secondSource.name);
+    assert.equal(batch.currentWorkspaceTrafficSourceId, secondSource.id);
     assert.equal(batch.averageVisitsThresholdPerOffer, 25000);
     assert.equal(batch.optimizationRunStatus, "not_ready");
     assert.equal(batch.scalingExportStatus, "not_exported");
+
+    const tasks = await db
+      .select()
+      .from(todoTasksTable)
+      .where(eq(todoTasksTable.relatedBatchId, created.json.id));
+    assert.equal(tasks.length, 2);
+    assert.deepEqual(tasks.map((task) => task.taskType).sort(), [
+      "create_voluum_campaign_android",
+      "create_voluum_campaign_ios",
+    ]);
+    assert.deepEqual(tasks.map((task) => task.title).sort(), [
+      `Create Voluum campaign for ${batchTag} Android`,
+      `Create Voluum campaign for ${batchTag} iOS`,
+    ]);
+    assert.ok(tasks.every((task) => task.trafficSourceId === secondSource.id));
   });
 
   test("per-user workspace activation is isolated", async () => {

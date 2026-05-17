@@ -252,13 +252,13 @@ export default function OpsQueue() {
 
     // Tasks
     const now = new Date();
-    // Phase 2 enums: status DONE replaces "completed"; FIND_WINNERS
-    // replaces the legacy "move_to_main" scale-prep task.
+    // Phase 2 enums: status DONE replaces "completed"; find_winners
+    // is the canonical CampaignOps scale-prep task.
     const overdueTasks = allTasks.filter(t =>
       t.status !== "DONE" && t.dueDate && new Date(t.dueDate) < now
     );
     const pendingScale = allTasks.filter(t =>
-      t.status !== "DONE" && t.taskType === "FIND_WINNERS"
+      t.status !== "DONE" && (t.taskType === "find_winners" || t.taskType === "FIND_WINNERS")
     );
 
     // Winners unscaled
@@ -372,8 +372,8 @@ export default function OpsQueue() {
   // ── Action items ──
   // Phase 10a: spec-canonical ordering (Bible §10):
   //   1. Overdue tasks (flashing).
-  //   2. Open CREATE_*_TRACKER_CAMPAIGN tasks.
-  //   3. Open FIND_WINNERS / PAUSE_TRAFFIC_SOURCE_CAMPAIGNS tasks
+  //   2. Open create_voluum_campaign_* tasks.
+  //   3. Open find_winners / PAUSE_TRAFFIC_SOURCE_CAMPAIGNS tasks
   //      ready to close.
   //   4. Click-cap-reached batches awaiting optimization start.
   //   5. Other secondary signals (near cap, unscaled winners, stuck).
@@ -411,14 +411,21 @@ export default function OpsQueue() {
       });
     }
 
-    // 2. Open CREATE_*_TRACKER_CAMPAIGN tasks — block the whole pipeline.
+    // 2. Open create_voluum_campaign_* tasks — block the whole pipeline.
     const trackerTasks = allTasks.filter(t =>
       t.status !== "DONE" &&
-      (t.taskType === "CREATE_IOS_TRACKER_CAMPAIGN" || t.taskType === "CREATE_ANDROID_TRACKER_CAMPAIGN")
+      (
+        t.taskType === "create_voluum_campaign_ios" ||
+        t.taskType === "create_voluum_campaign_android" ||
+        t.taskType === "CREATE_IOS_TRACKER_CAMPAIGN" ||
+        t.taskType === "CREATE_ANDROID_TRACKER_CAMPAIGN"
+      )
     );
     for (const t of trackerTasks) {
       if (items.find(i => i.id === `task-${t.id}`)) continue;
-      const platform = t.taskType === "CREATE_IOS_TRACKER_CAMPAIGN" ? "iOS" : "Android";
+      const platform = t.taskType === "create_voluum_campaign_ios" || t.taskType === "CREATE_IOS_TRACKER_CAMPAIGN"
+        ? "iOS"
+        : "Android";
       items.push({
         id: `task-${t.id}`, priority: "high", sortKey: 2,
         title: `Create ${platform} Tracker Campaign`,
@@ -428,10 +435,14 @@ export default function OpsQueue() {
       });
     }
 
-    // 3. FIND_WINNERS / PAUSE_TRAFFIC_SOURCE_CAMPAIGNS tasks ready to close.
+    // 3. find_winners / PAUSE_TRAFFIC_SOURCE_CAMPAIGNS tasks ready to close.
     const closeReadyTasks = allTasks.filter(t =>
       t.status !== "DONE" &&
-      (t.taskType === "FIND_WINNERS" || t.taskType === "PAUSE_TRAFFIC_SOURCE_CAMPAIGNS")
+      (
+        t.taskType === "find_winners" ||
+        t.taskType === "FIND_WINNERS" ||
+        t.taskType === "PAUSE_TRAFFIC_SOURCE_CAMPAIGNS"
+      )
     );
     for (const t of closeReadyTasks) {
       if (items.find(i => i.id === `task-${t.id}`)) continue;

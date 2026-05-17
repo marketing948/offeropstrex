@@ -197,6 +197,15 @@ router.post("/testing-batches", async (req, res): Promise<void> => {
   }
   const employeeId: number = rawEmployeeId;
 
+  if (!body.batchTag || body.batchTag.trim().length === 0) {
+    res.status(400).json({ error: "batchTag is required" });
+    return;
+  }
+  if (body.trafficSourceId == null || !Number.isInteger(body.trafficSourceId) || body.trafficSourceId <= 0) {
+    res.status(400).json({ error: "trafficSourceId is required" });
+    return;
+  }
+
   // Look up the new lookups so we can also populate the legacy NOT NULL
   // text columns (affiliate_network / geo / traffic_source) from a
   // single source of truth. If the caller used the legacy text
@@ -244,27 +253,27 @@ router.post("/testing-batches", async (req, res): Promise<void> => {
     geoText = row.code;
   }
   if (body.trafficSourceId != null) {
-    const [row] = await db.select({ name: workspaceTrafficSourcesTable.name, workspaceId: workspaceTrafficSourcesTable.workspaceId })
+    const [row] = await db.select({
+      name: workspaceTrafficSourcesTable.name,
+      workspaceId: workspaceTrafficSourcesTable.workspaceId,
+      isActive: workspaceTrafficSourcesTable.isActive,
+    })
       .from(workspaceTrafficSourcesTable).where(eq(workspaceTrafficSourcesTable.id, body.trafficSourceId));
     if (!row || row.workspaceId !== wsId) {
       res.status(400).json({ error: "trafficSourceId not found in this workspace" });
       return;
     }
+    if (!row.isActive) {
+      res.status(400).json({ error: "trafficSourceId is not active" });
+      return;
+    }
     trafficSourceText = row.name;
   }
 
-  // CampaignOps redesign — traffic source is no longer required at the
-  // batch level. The new flow picks the traffic source per Campaign in
-  // the create_voluum_campaign_* task. Default the legacy NOT NULL
-  // text column to a sentinel so the existing schema stays valid.
-  if (!trafficSourceText) {
-    trafficSourceText = "(per-campaign)";
-  }
-
-  if (!body.batchName || !affiliateNetworkText || !geoText) {
+  if (!body.batchName || !affiliateNetworkText || !geoText || !trafficSourceText) {
     res.status(400).json({
       error:
-        "batchName plus a network and GEO are required " +
+        "batchName plus a network, GEO, and traffic source are required " +
         "(supply *_id fields or the legacy text fields).",
     });
     return;
@@ -324,7 +333,7 @@ router.post("/testing-batches", async (req, res): Promise<void> => {
     daysThreshold: body.daysThreshold ?? null,
     testStartDate: body.testStartDate ?? null,
     testEndDate: body.testEndDate ?? null,
-    batchTag: body.batchTag ?? null,
+    batchTag: body.batchTag,
     vertical: body.vertical ?? null,
   };
 
@@ -351,23 +360,26 @@ router.post("/testing-batches", async (req, res): Promise<void> => {
       .values({
         ...insertValues,
         workspaceId: wsId,
-        currentWorkspaceTrafficSourceId: trafficSourceRuns[0]?.id ?? null,
+        currentWorkspaceTrafficSourceId: body.trafficSourceId,
       })
       .returning();
 
     if (trafficSourceRuns.length > 0) {
       const now = new Date();
       await tx.insert(batchTrafficSourceRunsTable).values(
-        trafficSourceRuns.map((source, index) => ({
-          workspaceId: wsId,
-          batchId: inserted.id,
-          trafficSourceId: source.id,
-          position: source.position,
-          status: index === 0 ? "active" as const : "pending" as const,
-          iosStatus: index === 0 ? "active" as const : "pending" as const,
-          androidStatus: index === 0 ? "active" as const : "pending" as const,
-          startedAt: index === 0 ? now : null,
-        })),
+        trafficSourceRuns.map((source) => {
+          const isSelectedSource = source.id === body.trafficSourceId;
+          return {
+            workspaceId: wsId,
+            batchId: inserted.id,
+            trafficSourceId: source.id,
+            position: source.position,
+            status: isSelectedSource ? "active" as const : "pending" as const,
+            iosStatus: isSelectedSource ? "active" as const : "pending" as const,
+            androidStatus: isSelectedSource ? "active" as const : "pending" as const,
+            startedAt: isSelectedSource ? now : null,
+          };
+        }),
       );
     }
 

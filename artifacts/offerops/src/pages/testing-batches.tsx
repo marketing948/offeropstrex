@@ -6,12 +6,14 @@ import {
   useListVoluumMappings,
   useListAffiliateNetworks,
   useListGeos,
+  useListWorkspaceTrafficSources,
   useListEmployees,
   useListTodoTasks,
   getListTestingBatchesQueryKey,
   getListVoluumMappingsQueryKey,
   getListAffiliateNetworksQueryKey,
   getListGeosQueryKey,
+  getListWorkspaceTrafficSourcesQueryKey,
   getListEmployeesQueryKey,
   getListTodoTasksQueryKey,
   CreateTestingBatchBodyStatus,
@@ -89,8 +91,10 @@ function autoName(network: string, geo: string, count: string): string {
 // ────────────────────────────────────────────────────────────────
 
 interface CreateBatchForm {
+  batchTag: string;
   affiliateNetworkId: string;
   geoId: string;
+  trafficSourceId: string;
   numberOfOffers: string;
   testRound: string;
   assignedWorkerId: string;
@@ -112,8 +116,10 @@ const todayIso = () => new Date().toISOString().slice(0, 10);
 
 function makeEmptyForm(currentEmployeeId: number | undefined): CreateBatchForm {
   return {
+    batchTag: "",
     affiliateNetworkId: "",
     geoId: "",
+    trafficSourceId: "",
     numberOfOffers: "250",
     testRound: "1",
     assignedWorkerId: currentEmployeeId ? String(currentEmployeeId) : "",
@@ -175,6 +181,10 @@ function CreateBatchModal({ open, onClose }: { open: boolean; onClose: () => voi
     lookupParams,
     wsQueryOpts(activeWorkspaceId, getListGeosQueryKey(lookupParams), { enabled }),
   );
+  const { data: trafficSources = [], isLoading: tsLoading } = useListWorkspaceTrafficSources(
+    lookupParams,
+    wsQueryOpts(activeWorkspaceId, getListWorkspaceTrafficSourcesQueryKey(lookupParams), { enabled }),
+  );
   const empParams = activeWorkspaceId ? { workspace_id: activeWorkspaceId } : undefined;
   const { data: employees = [] } = useListEmployees(
     empParams,
@@ -203,8 +213,10 @@ function CreateBatchModal({ open, onClose }: { open: boolean; onClose: () => voi
 
   const canSubmit = !!(
     activeWorkspaceId &&
+    form.batchTag.trim() &&
     form.affiliateNetworkId &&
     form.geoId &&
+    form.trafficSourceId &&
     form.assignedWorkerId &&
     batchName
   );
@@ -224,8 +236,10 @@ function CreateBatchModal({ open, onClose }: { open: boolean; onClose: () => voi
       data: {
         workspaceId: activeWorkspaceId,
         batchName,
+        batchTag: form.batchTag.trim(),
         affiliateNetworkId: Number(form.affiliateNetworkId),
         geoId: Number(form.geoId),
+        trafficSourceId: Number(form.trafficSourceId),
         assignedWorkerId: Number(form.assignedWorkerId),
         numberOfOffers: form.numberOfOffers ? Number(form.numberOfOffers) : null,
         testRound: form.testRound ? Number(form.testRound) : null,
@@ -269,6 +283,17 @@ function CreateBatchModal({ open, onClose }: { open: boolean; onClose: () => voi
         )}
 
         <div className="space-y-4 mt-1">
+          <div>
+            <Label htmlFor="batchTag" className="text-xs font-medium">Batch Tag *</Label>
+            <Input
+              id="batchTag"
+              placeholder="sl_de_batch1"
+              className="mt-1 h-9 font-mono"
+              value={form.batchTag}
+              onChange={e => setField("batchTag", e.target.value)}
+            />
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs font-medium">Affiliate Network *</Label>
@@ -300,8 +325,18 @@ function CreateBatchModal({ open, onClose }: { open: boolean; onClose: () => voi
             </div>
           </div>
 
-          <div className="rounded-md border border-muted bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
-            Traffic source is now picked per Voluum campaign — the engine will spawn one create_voluum_campaign task per platform, and a new task for each next traffic source after a campaign is tested.
+          <div>
+            <Label className="text-xs font-medium">Traffic Source *</Label>
+            <Select value={form.trafficSourceId} onValueChange={v => setField("trafficSourceId", v)}>
+              <SelectTrigger className="mt-1 h-9">
+                <SelectValue placeholder={tsLoading ? "Loading…" : "Select source…"} />
+              </SelectTrigger>
+              <SelectContent>
+                {trafficSources.filter(s => s.isActive !== false).map(s => (
+                  <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -418,13 +453,13 @@ export default function TestingBatches() {
   const mappedBatchIds = new Set((mappings ?? []).map(m => m.batchId));
 
   // Phase 9 (was Phase-3 fan-out): per-batch tracker-campaign progress.
-  // Counts the auto-emitted CREATE_IOS_TRACKER_CAMPAIGN +
-  // CREATE_ANDROID_TRACKER_CAMPAIGN tasks for each batch, treating DONE
+  // Counts the auto-emitted create_voluum_campaign_ios +
+  // create_voluum_campaign_android tasks for each batch, treating DONE
   // as the completion state (was legacy "completed" pre-Phase-2). We
   // fetch ios + android in parallel rather than ALL tasks to keep the
   // payload small, and sum them client-side.
-  const iosTasksParams = { workspace_id: wsId ?? 0, task_type: "CREATE_IOS_TRACKER_CAMPAIGN" as const };
-  const andTasksParams = { workspace_id: wsId ?? 0, task_type: "CREATE_ANDROID_TRACKER_CAMPAIGN" as const };
+  const iosTasksParams = { workspace_id: wsId ?? 0, task_type: "create_voluum_campaign_ios" as const };
+  const andTasksParams = { workspace_id: wsId ?? 0, task_type: "create_voluum_campaign_android" as const };
   const { data: iosTasks } = useListTodoTasks(
     iosTasksParams,
     wsQueryOpts(wsId, getListTodoTasksQueryKey(iosTasksParams)),
@@ -548,7 +583,7 @@ export default function TestingBatches() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <p className="text-sm font-semibold text-foreground truncate">{batch.batchName}</p>
-                      {VOLUUM_UI_ENABLED && batch.batchTag && (
+                      {batch.batchTag && (
                         <span
                           title={`Voluum tag: ${batch.batchTag}`}
                           className="flex-shrink-0 text-[10px] font-mono font-semibold uppercase px-1.5 py-0.5 rounded bg-muted text-muted-foreground"

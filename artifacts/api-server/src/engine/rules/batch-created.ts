@@ -23,6 +23,7 @@ export async function handleBatchCreated(
       id: testingBatchesTable.id,
       employeeId: testingBatchesTable.employeeId,
       batchName: testingBatchesTable.batchName,
+      batchTag: testingBatchesTable.batchTag,
       currentWorkspaceTrafficSourceId: testingBatchesTable.currentWorkspaceTrafficSourceId,
     })
     .from(testingBatchesTable)
@@ -54,7 +55,8 @@ export async function handleBatchCreated(
     .limit(1);
   if (existing.length > 0) return [];
 
-  const batchName = batch.batchName ?? `Batch #${batch.id}`;
+  const taskBatchTag = batch.batchTag ?? payload.tag;
+  const batchName = taskBatchTag || batch.batchName || `Batch #${batch.id}`;
   return [
     {
       type: "CreateTask",
@@ -62,10 +64,10 @@ export async function handleBatchCreated(
       data: {
         employeeId: batch.employeeId,
         relatedBatchId: batch.id,
-        title: `Create Voluum campaign (iOS) for ${batchName}`,
+        title: `Create Voluum campaign for ${taskBatchTag} iOS`,
         taskType: "create_voluum_campaign_ios",
         priority: "high",
-          trafficSourceId: batch.currentWorkspaceTrafficSourceId,
+        trafficSourceId: batch.currentWorkspaceTrafficSourceId,
       },
     },
     {
@@ -74,10 +76,10 @@ export async function handleBatchCreated(
       data: {
         employeeId: batch.employeeId,
         relatedBatchId: batch.id,
-        title: `Create Voluum campaign (Android) for ${batchName}`,
+        title: `Create Voluum campaign for ${taskBatchTag} Android`,
         taskType: "create_voluum_campaign_android",
         priority: "high",
-          trafficSourceId: batch.currentWorkspaceTrafficSourceId,
+        trafficSourceId: batch.currentWorkspaceTrafficSourceId,
       },
     },
     {

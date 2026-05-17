@@ -117,7 +117,9 @@ beforeEach(() => {
 async function insertBatch(opts?: {
   status?: "NEW_BATCH" | "WAITING_FOR_TRACKER_CAMPAIGNS" | "LIVE_TESTS";
   currentTrafficSourceId?: number | null;
+  batchTag?: string;
 }): Promise<number> {
+  const batchTag = opts?.batchTag ?? `MB_DE_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   const [b] = await db
     .insert(testingBatchesTable)
     .values({
@@ -127,9 +129,10 @@ async function insertBatch(opts?: {
       affiliateNetwork: "MyBookie",
       geo: "DE",
       trafficSource: "Source A",
-      batchTag: `MB_DE_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
+      batchTag,
       status: opts?.status ?? "NEW_BATCH",
       currentTrafficSourceId: opts?.currentTrafficSourceId ?? null,
+      currentWorkspaceTrafficSourceId: workspaceTrafficSourceAId,
     })
     .returning({ id: testingBatchesTable.id });
   return b.id;
@@ -150,14 +153,15 @@ describe("rules: BatchCreated (Pivot Phase 4)", () => {
   // create_voluum_campaign_ios + create_voluum_campaign_android tasks for the
   // assigned worker. Idempotent via dedupe key `batch_created:<id>`.
   test("seeds create_voluum_campaign_ios + create_voluum_campaign_android tasks for assigned worker", async () => {
-    const batchId = await insertBatch();
+    const batchTag = `MB_DE_BATCH01_${Date.now()}`;
+    const batchId = await insertBatch({ batchTag });
 
     const result = await emit({
       type: "BatchCreated",
       workspaceId,
       payload: {
         batchId,
-        tag: "MB_DE_BATCH01",
+        tag: batchTag,
         affiliateNetworkName: "MyBookie",
         geo: "DE",
       },
@@ -177,7 +181,12 @@ describe("rules: BatchCreated (Pivot Phase 4)", () => {
       assert.equal(t.employeeId, employeeId);
       assert.equal(t.workspaceId, workspaceId);
       assert.equal(t.status, "TODO");
+      assert.equal(t.trafficSourceId, workspaceTrafficSourceAId);
     }
+    assert.deepEqual(tasks.map((task) => task.title).sort(), [
+      `Create Voluum campaign for ${batchTag} Android`,
+      `Create Voluum campaign for ${batchTag} iOS`,
+    ]);
 
     // Idempotency: re-emit with same dedupe key is a no-op.
     const second = await emit({

@@ -1385,7 +1385,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS]
+            enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS, create_voluum_campaign_ios, create_voluum_campaign_android, take_campaign_live, find_winners, all_traffic_sources_tested]
         - name: workspace_id
           in: query
           schema:
@@ -2865,13 +2865,13 @@ components:
         workspaceId:
           type: ["integer", "null"]
         batchTag:
-          type: ["string", "null"]
+          type: string
         affiliateNetworkId:
           type: ["integer", "null"]
         geoId:
           type: ["integer", "null"]
         trafficSourceId:
-          type: ["integer", "null"]
+          type: integer
         assignedWorkerId:
           type: ["integer", "null"]
         testRound:
@@ -2882,6 +2882,8 @@ components:
           type: ["integer", "null"]
       required:
         - batchName
+        - batchTag
+        - trafficSourceId
 
     UpdateTestingBatchBody:
       type: object
@@ -3131,7 +3133,7 @@ components:
           type: ["string", "null"]
         taskType:
           type: string
-          enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, GO_LIVE_TRAFFIC_SOURCE_CAMPAIGN, MOVE_WINNERS_TO_SCALED_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS, CREATE_IOS_CAMPAIGN, CREATE_ANDROID_CAMPAIGN, GO_LIVE, OPTIMIZATION_FOLLOWUP]
+          enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, GO_LIVE_TRAFFIC_SOURCE_CAMPAIGN, MOVE_WINNERS_TO_SCALED_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS, CREATE_IOS_CAMPAIGN, CREATE_ANDROID_CAMPAIGN, GO_LIVE, OPTIMIZATION_FOLLOWUP, create_voluum_campaign_ios, create_voluum_campaign_android, take_campaign_live, find_winners, all_traffic_sources_tested]
         priority:
           type: string
           enum: [low, medium, high]
@@ -3174,7 +3176,7 @@ components:
           type: ["string", "null"]
         taskType:
           type: string
-          enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, GO_LIVE_TRAFFIC_SOURCE_CAMPAIGN, MOVE_WINNERS_TO_SCALED_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS, CREATE_IOS_CAMPAIGN, CREATE_ANDROID_CAMPAIGN, GO_LIVE, OPTIMIZATION_FOLLOWUP]
+          enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, GO_LIVE_TRAFFIC_SOURCE_CAMPAIGN, MOVE_WINNERS_TO_SCALED_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS, CREATE_IOS_CAMPAIGN, CREATE_ANDROID_CAMPAIGN, GO_LIVE, OPTIMIZATION_FOLLOWUP, create_voluum_campaign_ios, create_voluum_campaign_android, take_campaign_live, find_winners, all_traffic_sources_tested]
         priority:
           type: string
           enum: [low, medium, high]
@@ -3204,7 +3206,7 @@ components:
           type: ["string", "null"]
         taskType:
           type: string
-          enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, GO_LIVE_TRAFFIC_SOURCE_CAMPAIGN, MOVE_WINNERS_TO_SCALED_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS, CREATE_IOS_CAMPAIGN, CREATE_ANDROID_CAMPAIGN, GO_LIVE, OPTIMIZATION_FOLLOWUP]
+          enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, GO_LIVE_TRAFFIC_SOURCE_CAMPAIGN, MOVE_WINNERS_TO_SCALED_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS, CREATE_IOS_CAMPAIGN, CREATE_ANDROID_CAMPAIGN, GO_LIVE, OPTIMIZATION_FOLLOWUP, create_voluum_campaign_ios, create_voluum_campaign_android, take_campaign_live, find_winners, all_traffic_sources_tested]
         priority:
           type: string
           enum: [low, medium, high]

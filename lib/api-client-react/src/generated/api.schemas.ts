@@ -379,14 +379,12 @@ export interface CreateTestingBatchBody {
   daysThreshold?: number | null;
   /** @nullable */
   workspaceId?: number | null;
-  /** @nullable */
-  batchTag?: string | null;
+  batchTag: string;
   /** @nullable */
   affiliateNetworkId?: number | null;
   /** @nullable */
   geoId?: number | null;
-  /** @nullable */
-  trafficSourceId?: number | null;
+  trafficSourceId: number;
   /** @nullable */
   assignedWorkerId?: number | null;
   /** @nullable */
@@ -657,6 +655,11 @@ export const TodoTaskTaskType = {
   CREATE_ANDROID_CAMPAIGN: "CREATE_ANDROID_CAMPAIGN",
   GO_LIVE: "GO_LIVE",
   OPTIMIZATION_FOLLOWUP: "OPTIMIZATION_FOLLOWUP",
+  create_voluum_campaign_ios: "create_voluum_campaign_ios",
+  create_voluum_campaign_android: "create_voluum_campaign_android",
+  take_campaign_live: "take_campaign_live",
+  find_winners: "find_winners",
+  all_traffic_sources_tested: "all_traffic_sources_tested",
 } as const;
 
 export type TodoTaskPriority =
@@ -718,6 +721,11 @@ export const CreateTodoTaskBodyTaskType = {
   CREATE_ANDROID_CAMPAIGN: "CREATE_ANDROID_CAMPAIGN",
   GO_LIVE: "GO_LIVE",
   OPTIMIZATION_FOLLOWUP: "OPTIMIZATION_FOLLOWUP",
+  create_voluum_campaign_ios: "create_voluum_campaign_ios",
+  create_voluum_campaign_android: "create_voluum_campaign_android",
+  take_campaign_live: "take_campaign_live",
+  find_winners: "find_winners",
+  all_traffic_sources_tested: "all_traffic_sources_tested",
 } as const;
 
 export type CreateTodoTaskBodyPriority =
@@ -773,6 +781,11 @@ export const UpdateTodoTaskBodyTaskType = {
   CREATE_ANDROID_CAMPAIGN: "CREATE_ANDROID_CAMPAIGN",
   GO_LIVE: "GO_LIVE",
   OPTIMIZATION_FOLLOWUP: "OPTIMIZATION_FOLLOWUP",
+  create_voluum_campaign_ios: "create_voluum_campaign_ios",
+  create_voluum_campaign_android: "create_voluum_campaign_android",
+  take_campaign_live: "take_campaign_live",
+  find_winners: "find_winners",
+  all_traffic_sources_tested: "all_traffic_sources_tested",
 } as const;
 
 export type UpdateTodoTaskBodyPriority =
@@ -1593,6 +1606,11 @@ export const ListTodoTasksTaskType = {
   CREATE_ANDROID_TRACKER_CAMPAIGN: "CREATE_ANDROID_TRACKER_CAMPAIGN",
   FIND_WINNERS: "FIND_WINNERS",
   PAUSE_TRAFFIC_SOURCE_CAMPAIGNS: "PAUSE_TRAFFIC_SOURCE_CAMPAIGNS",
+  create_voluum_campaign_ios: "create_voluum_campaign_ios",
+  create_voluum_campaign_android: "create_voluum_campaign_android",
+  take_campaign_live: "take_campaign_live",
+  find_winners: "find_winners",
+  all_traffic_sources_tested: "all_traffic_sources_tested",
 } as const;
 
 export type ListSuspiciousBatchesParams = {

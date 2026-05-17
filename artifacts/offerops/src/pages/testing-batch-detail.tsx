@@ -363,14 +363,14 @@ export default function TestingBatchDetail() {
   );
 
   // Phase 9 (was Phase-3 fan-out): tracker-campaign tasks for THIS
-  // batch. After Phase 2 the engine emits one task per device
-  // (CREATE_IOS_TRACKER_CAMPAIGN + CREATE_ANDROID_TRACKER_CAMPAIGN)
+  // batch. Manual Alpha emits one lowercase create_voluum_campaign task
+  // per device.
   // for the batch's CURRENT traffic source — never the legacy
   // create_test_campaign type. We fetch both and merge so the existing
   // detail-page panels can keep treating them as a single "test
   // campaign tasks" set without an API change.
-  const iosBatchTasksParams = { workspace_id: activeWorkspaceId ?? 0, task_type: "CREATE_IOS_TRACKER_CAMPAIGN" as const };
-  const andBatchTasksParams = { workspace_id: activeWorkspaceId ?? 0, task_type: "CREATE_ANDROID_TRACKER_CAMPAIGN" as const };
+  const iosBatchTasksParams = { workspace_id: activeWorkspaceId ?? 0, task_type: "create_voluum_campaign_ios" as const };
+  const andBatchTasksParams = { workspace_id: activeWorkspaceId ?? 0, task_type: "create_voluum_campaign_android" as const };
   const { data: iosBatchTasks = [] } = useListTodoTasks(
     iosBatchTasksParams,
     wsQueryOpts(activeWorkspaceId, getListTodoTasksQueryKey(iosBatchTasksParams)),
@@ -480,10 +480,10 @@ export default function TestingBatchDetail() {
         relatedBatchId: batch.id,
         title: `Move winners from ${batch.batchName} to Scale Campaign`,
         description: `Winners (${allWinners.length}): ${winnerNames}\n\nBatch: ${batch.batchName} | Network: ${batch.affiliateNetwork} | GEO: ${batch.geo} | Source: ${batch.trafficSource}${campaignMapping ? ` | Campaign: ${campaignMapping.campaignName}` : ""}`,
-        // Phase 2: FIND_WINNERS replaces the legacy "move_to_main"
+        // CampaignOps: find_winners is the canonical post-test task.
         // scale-prep task. Status enum is now TODO/IN_PROGRESS/BLOCKED/
         // DONE — TODO is the new "open".
-        taskType: "FIND_WINNERS",
+        taskType: "find_winners",
         priority: "high",
         status: "TODO",
       },
