@@ -12,6 +12,8 @@ import {
   performanceTable,
   testingBatchesTable,
   todoTasksTable,
+  voluumAffiliateNetworksTable,
+  voluumTrafficSourcesTable,
   workspacesTable,
 } from "@workspace/db";
 
@@ -208,11 +210,71 @@ function mockVoluumAuth(response: Response): void {
   voluumFetchMock = async () => response;
 }
 
+function mockVoluumDiscoveryMetadata(options: {
+  auth?: Response;
+  trafficSources?: Response;
+  affiliateNetworks?: Response;
+} = {}): void {
+  voluumFetchMock = async (input) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const pathname = new URL(url).pathname;
+
+    if (pathname === "/auth/access/session") {
+      return options.auth ?? new Response(JSON.stringify({ token: "voluum-session-token" }), { status: 200 });
+    }
+    if (pathname === "/traffic-source") {
+      return options.trafficSources ?? new Response(JSON.stringify({ trafficSources: [] }), { status: 200 });
+    }
+    if (pathname === "/affiliate-network") {
+      return options.affiliateNetworks ?? new Response(JSON.stringify({ affiliateNetworks: [] }), { status: 200 });
+    }
+
+    throw new Error(`Unexpected Voluum request in test: ${url}`);
+  };
+}
+
 function assertOnlyVoluumAuthWasCalled(): void {
   assert.deepEqual(voluumFetchCalls.map((call) => call.url), [VOLUUM_AUTH_URL]);
   for (const call of voluumFetchCalls) {
     assert.equal(call.init?.method, "POST");
   }
+}
+
+function assertNoForbiddenVoluumEndpointsWereCalled(): void {
+  for (const call of voluumFetchCalls) {
+    const pathname = new URL(call.url).pathname;
+    assert.notEqual(pathname, "/offer");
+    assert.notEqual(pathname, "/campaign");
+    assert.notEqual(pathname, "/report");
+  }
+}
+
+function assertOnlyVoluumAuthAndMetadataWereCalled(): void {
+  assert.deepEqual(voluumFetchCalls.map((call) => new URL(call.url).pathname), [
+    "/auth/access/session",
+    "/traffic-source",
+    "/affiliate-network",
+  ]);
+  assert.equal(voluumFetchCalls[0]?.init?.method, "POST");
+  assert.equal(voluumFetchCalls[1]?.init?.method, undefined);
+  assert.equal(voluumFetchCalls[2]?.init?.method, undefined);
+  assertNoForbiddenVoluumEndpointsWereCalled();
+}
+
+async function voluumMetadataCounts(workspaceId: number): Promise<{ trafficSources: number; affiliateNetworks: number }> {
+  const [trafficSources] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(voluumTrafficSourcesTable)
+    .where(eq(voluumTrafficSourcesTable.workspaceId, workspaceId));
+  const [affiliateNetworks] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(voluumAffiliateNetworksTable)
+    .where(eq(voluumAffiliateNetworksTable.workspaceId, workspaceId));
+
+  return {
+    trafficSources: trafficSources?.count ?? 0,
+    affiliateNetworks: affiliateNetworks?.count ?? 0,
+  };
 }
 
 describe("Voluum discovery preview dry-run route", { concurrency: false }, () => {
@@ -246,6 +308,12 @@ describe("Voluum discovery preview dry-run route", { concurrency: false }, () =>
       credentials: {
         valid: false,
         code: "VOLUUM_CREDENTIALS_MISSING",
+      },
+      trafficSources: [],
+      affiliateNetworks: [],
+      summary: {
+        trafficSourcesFound: 0,
+        affiliateNetworksFound: 0,
       },
       sideEffects: {
         metadataFetches: false,
@@ -281,10 +349,17 @@ describe("Voluum discovery preview dry-run route", { concurrency: false }, () =>
       valid: false,
       code: "VOLUUM_AUTH_FAILED",
     });
+    assert.deepEqual(json.trafficSources, []);
+    assert.deepEqual(json.affiliateNetworks, []);
+    assert.deepEqual(json.summary, {
+      trafficSourcesFound: 0,
+      affiliateNetworksFound: 0,
+    });
+    assert.equal(json.sideEffects.metadataFetches, false);
     assertOnlyVoluumAuthWasCalled();
   });
 
-  test("returns credentials.valid true for valid mocked credentials", async () => {
+  test("returns normalized traffic source and affiliate network previews for valid mocked credentials", async () => {
     process.env["ENABLE_VOLUUM"] = "false";
     process.env["ENABLE_VOLUUM_DRY_RUN"] = "true";
     const { workspaceId, employeeId } = await seedWorkspaceAccess();
@@ -293,20 +368,85 @@ describe("Voluum discovery preview dry-run route", { concurrency: false }, () =>
       accessKey: "valid-access-key",
       voluumWorkspaceId: "workspace-1",
     });
-    mockVoluumAuth(new Response(JSON.stringify({ token: "voluum-session-token" }), { status: 200 }));
+    mockVoluumDiscoveryMetadata({
+      trafficSources: new Response(JSON.stringify({
+        trafficSources: [
+          {
+            id: "ts-1",
+            name: "Meta Source",
+            status: "ACTIVE",
+            active: true,
+            workspaceId: "workspace-1",
+            secret: "raw-source-secret",
+          },
+          {
+            trafficSourceId: "ts-2",
+            trafficSourceName: { name: "Secondary Source" },
+            enabled: "false",
+            workspace: { id: "workspace-1" },
+            extraPayload: { nested: "not returned" },
+          },
+        ],
+      }), { status: 200 }),
+      affiliateNetworks: new Response(JSON.stringify({
+        affiliateNetworks: [
+          {
+            id: "an-1",
+            name: "Meta Network",
+            status: "ACTIVE",
+            archived: false,
+            workspace_id: "workspace-1",
+            accessKey: "raw-network-secret",
+          },
+        ],
+      }), { status: 200 }),
+    });
 
     const { response, json } = await request("POST", "/sync/voluum/discovery-preview", employeeId, { workspaceId });
 
     assert.equal(response.status, 200);
     assert.deepEqual(json.credentials, { valid: true });
+    assert.deepEqual(json.trafficSources, [
+      {
+        id: "ts-1",
+        name: "Meta Source",
+        status: "ACTIVE",
+        active: true,
+        archived: null,
+      },
+      {
+        id: "ts-2",
+        name: "Secondary Source",
+        status: null,
+        active: false,
+        archived: null,
+      },
+    ]);
+    assert.deepEqual(json.affiliateNetworks, [
+      {
+        id: "an-1",
+        name: "Meta Network",
+        status: "ACTIVE",
+        active: null,
+        archived: false,
+      },
+    ]);
+    assert.deepEqual(json.summary, {
+      trafficSourcesFound: 2,
+      affiliateNetworksFound: 1,
+    });
     assert.deepEqual(json.sideEffects, {
-      metadataFetches: false,
+      metadataFetches: true,
       dbWrites: false,
       events: false,
       tasks: false,
       batches: false,
     });
-    assertOnlyVoluumAuthWasCalled();
+    const serialized = JSON.stringify(json);
+    assert.equal(serialized.includes("raw-source-secret"), false);
+    assert.equal(serialized.includes("raw-network-secret"), false);
+    assert.equal(serialized.includes("extraPayload"), false);
+    assertOnlyVoluumAuthAndMetadataWereCalled();
   });
 
   test("response does not include secrets, tokens, headers, or raw provider errors", async () => {
@@ -336,6 +476,41 @@ describe("Voluum discovery preview dry-run route", { concurrency: false }, () =>
     assert.equal(serialized.includes("www-authenticate"), false);
     assert.equal(serialized.includes("authorization"), false);
     assertOnlyVoluumAuthWasCalled();
+  });
+
+  test("does not leak raw provider errors when metadata fetch fails", async () => {
+    process.env["ENABLE_VOLUUM"] = "false";
+    process.env["ENABLE_VOLUUM_DRY_RUN"] = "true";
+    const { workspaceId, employeeId } = await seedWorkspaceAccess();
+    await setWorkspaceVoluumCredentials(workspaceId, {
+      accessId: "valid-access-id",
+      accessKey: "valid-access-key",
+      voluumWorkspaceId: "workspace-1",
+    });
+    mockVoluumDiscoveryMetadata({
+      trafficSources: new Response("provider failure contains valid-access-key leaked-provider-token", {
+        status: 500,
+        headers: { "x-provider-token": "leaked-provider-token" },
+      }),
+      affiliateNetworks: new Response(JSON.stringify({ affiliateNetworks: [] }), { status: 200 }),
+    });
+
+    const { response, json } = await request("POST", "/sync/voluum/discovery-preview", employeeId, { workspaceId });
+    const serialized = JSON.stringify(json);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(json.credentials, { valid: true });
+    assert.deepEqual(json.trafficSources, []);
+    assert.deepEqual(json.affiliateNetworks, []);
+    assert.deepEqual(json.summary, {
+      trafficSourcesFound: 0,
+      affiliateNetworksFound: 0,
+    });
+    assert.deepEqual(json.warnings, ["VOLUUM_TRAFFIC_SOURCES_FETCH_FAILED"]);
+    assert.equal(serialized.includes("valid-access-key"), false);
+    assert.equal(serialized.includes("leaked-provider-token"), false);
+    assert.equal(serialized.includes("provider failure"), false);
+    assertOnlyVoluumAuthAndMetadataWereCalled();
   });
 
   test("does not unlock existing mutating Voluum routes", async () => {
@@ -373,7 +548,7 @@ describe("Voluum discovery preview dry-run route", { concurrency: false }, () =>
       accessKey: "valid-access-key",
       voluumWorkspaceId: "workspace-1",
     });
-    mockVoluumAuth(new Response(JSON.stringify({ token: "voluum-session-token" }), { status: 200 }));
+    mockVoluumDiscoveryMetadata();
     const beforeCount = await eventCount(workspaceId);
 
     const { response } = await request("POST", "/sync/voluum/discovery-preview", employeeId, { workspaceId });
@@ -381,10 +556,10 @@ describe("Voluum discovery preview dry-run route", { concurrency: false }, () =>
 
     assert.equal(response.status, 200);
     assert.equal(afterCount, beforeCount);
-    assertOnlyVoluumAuthWasCalled();
+    assertOnlyVoluumAuthAndMetadataWereCalled();
   });
 
-  test("does not create batches, tasks, or performance rows", async () => {
+  test("does not write metadata, batches, tasks, or performance rows", async () => {
     process.env["ENABLE_VOLUUM"] = "false";
     process.env["ENABLE_VOLUUM_DRY_RUN"] = "true";
     const { workspaceId, employeeId } = await seedWorkspaceAccess();
@@ -393,14 +568,37 @@ describe("Voluum discovery preview dry-run route", { concurrency: false }, () =>
       accessKey: "valid-access-key",
       voluumWorkspaceId: "workspace-1",
     });
-    mockVoluumAuth(new Response(JSON.stringify({ token: "voluum-session-token" }), { status: 200 }));
+    mockVoluumDiscoveryMetadata({
+      trafficSources: new Response(JSON.stringify({ trafficSources: [{ id: "ts-1", name: "Meta Source" }] }), { status: 200 }),
+      affiliateNetworks: new Response(JSON.stringify({ affiliateNetworks: [{ id: "an-1", name: "Meta Network" }] }), { status: 200 }),
+    });
     const beforeCounts = await writeCounts(workspaceId);
+    const beforeMetadataCounts = await voluumMetadataCounts(workspaceId);
 
     const { response } = await request("POST", "/sync/voluum/discovery-preview", employeeId, { workspaceId });
     const afterCounts = await writeCounts(workspaceId);
+    const afterMetadataCounts = await voluumMetadataCounts(workspaceId);
 
     assert.equal(response.status, 200);
     assert.deepEqual(afterCounts, beforeCounts);
-    assertOnlyVoluumAuthWasCalled();
+    assert.deepEqual(afterMetadataCounts, beforeMetadataCounts);
+    assertOnlyVoluumAuthAndMetadataWereCalled();
+  });
+
+  test("does not call offers, campaigns, or report endpoints", async () => {
+    process.env["ENABLE_VOLUUM"] = "false";
+    process.env["ENABLE_VOLUUM_DRY_RUN"] = "true";
+    const { workspaceId, employeeId } = await seedWorkspaceAccess();
+    await setWorkspaceVoluumCredentials(workspaceId, {
+      accessId: "valid-access-id",
+      accessKey: "valid-access-key",
+      voluumWorkspaceId: "workspace-1",
+    });
+    mockVoluumDiscoveryMetadata();
+
+    const { response } = await request("POST", "/sync/voluum/discovery-preview", employeeId, { workspaceId });
+
+    assert.equal(response.status, 200);
+    assertOnlyVoluumAuthAndMetadataWereCalled();
   });
 });

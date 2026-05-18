@@ -128,11 +128,19 @@ async function getVoluumToken(accessId: string, accessKey: string): Promise<stri
   return data.token;
 }
 
-type VoluumCredentialValidation =
-  | { valid: true }
-  | { valid: false; code: "VOLUUM_AUTH_FAILED" };
+type VoluumDryRunAuthResult =
+  | { credentials: { valid: true }; token: string }
+  | { credentials: { valid: false; code: "VOLUUM_AUTH_FAILED" }; token: null };
 
-async function validateVoluumCredentialsOnly(accessId: string, accessKey: string): Promise<VoluumCredentialValidation> {
+type VoluumMetadataPreviewItem = {
+  id: string;
+  name: string;
+  status: string | null;
+  active: boolean | null;
+  archived: boolean | null;
+};
+
+async function validateVoluumCredentialsForDryRun(accessId: string, accessKey: string): Promise<VoluumDryRunAuthResult> {
   try {
     logger.info({ url: VOLUUM_AUTH_URL, method: "POST" }, "Voluum dry-run auth validation request");
 
@@ -148,19 +156,116 @@ async function validateVoluumCredentialsOnly(accessId: string, accessKey: string
     logger.info({ url: VOLUUM_AUTH_URL, status: res.status }, "Voluum dry-run auth validation response");
 
     if (!res.ok) {
-      return { valid: false, code: "VOLUUM_AUTH_FAILED" };
+      return { credentials: { valid: false, code: "VOLUUM_AUTH_FAILED" }, token: null };
     }
 
     const data = await res.json().catch(() => null) as { token?: unknown } | null;
     if (typeof data?.token !== "string" || data.token.trim().length === 0) {
-      return { valid: false, code: "VOLUUM_AUTH_FAILED" };
+      return { credentials: { valid: false, code: "VOLUUM_AUTH_FAILED" }, token: null };
     }
 
-    return { valid: true };
+    return { credentials: { valid: true }, token: data.token };
   } catch {
     logger.warn({ url: VOLUUM_AUTH_URL }, "Voluum dry-run auth validation failed");
-    return { valid: false, code: "VOLUUM_AUTH_FAILED" };
+    return { credentials: { valid: false, code: "VOLUUM_AUTH_FAILED" }, token: null };
   }
+}
+
+function normalizeBooleanField(raw: unknown): boolean | null {
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw === "string") {
+    const normalized = raw.trim().toLowerCase();
+    if (["true", "active", "enabled", "yes", "1"].includes(normalized)) return true;
+    if (["false", "inactive", "disabled", "no", "0"].includes(normalized)) return false;
+  }
+  if (typeof raw === "number") {
+    if (raw === 1) return true;
+    if (raw === 0) return false;
+  }
+  return null;
+}
+
+function normalizeStatusField(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function extractVoluumPreviewItems(data: unknown, collectionKey: "trafficSources" | "affiliateNetworks"): unknown[] {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== "object") return [];
+
+  const obj = data as Record<string, unknown>;
+  const candidate = obj.payload ?? obj.rows ?? obj.elements ?? obj[collectionKey];
+  return Array.isArray(candidate) ? candidate : [];
+}
+
+function normalizeVoluumMetadataPreviewItem(raw: unknown, idKey: string, nameKey: string): VoluumMetadataPreviewItem | null {
+  if (!raw || typeof raw !== "object") return null;
+
+  const item = raw as Record<string, unknown>;
+  const idRaw = item.id ?? item[idKey];
+  const name = normalizeNameField(item.name ?? item[nameKey]);
+  const id = typeof idRaw === "string" || typeof idRaw === "number" ? String(idRaw).trim() : "";
+  if (!id || !name) return null;
+
+  return {
+    id,
+    name,
+    status: normalizeStatusField(item.status),
+    active: normalizeBooleanField(item.active ?? item.isActive ?? item.enabled),
+    archived: normalizeBooleanField(item.archived ?? item.isArchived ?? item.deleted),
+  };
+}
+
+async function fetchVoluumMetadataPreview(
+  token: string,
+  apiBaseUrl: string,
+  options: {
+    endpoint: "traffic-source" | "affiliate-network";
+    collectionKey: "trafficSources" | "affiliateNetworks";
+    idKey: "trafficSourceId" | "affiliateNetworkId";
+    nameKey: "trafficSourceName" | "affiliateNetworkName";
+    voluumWorkspaceId?: string | null;
+    log: SyncLog;
+  },
+): Promise<VoluumMetadataPreviewItem[]> {
+  const voluumWorkspaceId = options.voluumWorkspaceId?.trim() || null;
+  const params = new URLSearchParams();
+  if (voluumWorkspaceId) params.set("workspaceId", voluumWorkspaceId);
+  const qs = params.size ? "?" + params.toString() : "";
+  const baseUrl = apiBaseUrl.replace(/\/+$/, "");
+  const url = `${baseUrl}/${options.endpoint}${qs}`;
+
+  options.log.info({ url, method: "GET", voluumWorkspaceId }, "[VoluumDryRun] metadata request");
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: { "cwauth-token": token, "Accept": "application/json" },
+    });
+  } catch {
+    options.log.warn({ url }, "[VoluumDryRun] metadata network failure");
+    throw new Error("VOLUUM_METADATA_FETCH_FAILED");
+  }
+
+  options.log.info({ url, status: response.status }, "[VoluumDryRun] metadata response");
+
+  if (!response.ok) {
+    await response.text().catch(() => "");
+    throw new Error("VOLUUM_METADATA_FETCH_FAILED");
+  }
+
+  const data = await response.json().catch(() => null);
+  if (data === null) {
+    throw new Error("VOLUUM_METADATA_FETCH_FAILED");
+  }
+
+  const rawItems = extractVoluumPreviewItems(data, options.collectionKey);
+  const items = filterRawByWorkspace(rawItems as Array<Record<string, unknown>>, voluumWorkspaceId, options.log, options.endpoint);
+  return items
+    .map((item) => normalizeVoluumMetadataPreviewItem(item, options.idKey, options.nameKey))
+    .filter((item): item is VoluumMetadataPreviewItem => item !== null);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1340,8 +1445,9 @@ async function shouldIncludeArchived(req: import("express").Request): Promise<bo
 // dedupe-key index.
 export { checkClickThresholds } from "./sync/click-threshold.ts";
 
-// POST /sync/voluum/discovery-preview — credential-only dry-run preview.
-// This route authenticates only; it emits no events and creates no tasks/batches.
+// POST /sync/voluum/discovery-preview — read-only dry-run metadata preview.
+// This route authenticates, fetches traffic sources and affiliate networks only,
+// and emits no events or creates tasks/batches.
 router.post("/sync/voluum/discovery-preview", async (req, res): Promise<void> => {
   if (!isVoluumDryRunEnabled()) {
     res.status(410).json({
@@ -1362,17 +1468,68 @@ router.post("/sync/voluum/discovery-preview", async (req, res): Promise<void> =>
 
   const accessId = ws.voluumAccessId?.trim() ?? "";
   const accessKey = ws.voluumAccessKey?.trim() ?? "";
-  const credentials = accessId && accessKey
-    ? await validateVoluumCredentialsOnly(accessId, accessKey)
-    : { valid: false as const, code: "VOLUUM_CREDENTIALS_MISSING" as const };
+  const apiBaseUrl = ws.voluumApiBaseUrl?.trim() || DEFAULT_VOLUUM_BASE_URL;
+  const voluumWorkspaceId = ws.voluumWorkspaceId?.trim() || null;
+  const authResult = accessId && accessKey
+    ? await validateVoluumCredentialsForDryRun(accessId, accessKey)
+    : {
+      credentials: { valid: false as const, code: "VOLUUM_CREDENTIALS_MISSING" as const },
+      token: null,
+    };
+
+  let trafficSources: VoluumMetadataPreviewItem[] = [];
+  let affiliateNetworks: VoluumMetadataPreviewItem[] = [];
+  const warnings: string[] = [];
+  const metadataFetches = authResult.token !== null;
+
+  if (authResult.token !== null) {
+    const previewLog = req.log.child({ workspaceId, voluumWorkspaceId });
+    const [trafficSourcesResult, affiliateNetworksResult] = await Promise.allSettled([
+      fetchVoluumMetadataPreview(authResult.token, apiBaseUrl, {
+        endpoint: "traffic-source",
+        collectionKey: "trafficSources",
+        idKey: "trafficSourceId",
+        nameKey: "trafficSourceName",
+        voluumWorkspaceId,
+        log: previewLog,
+      }),
+      fetchVoluumMetadataPreview(authResult.token, apiBaseUrl, {
+        endpoint: "affiliate-network",
+        collectionKey: "affiliateNetworks",
+        idKey: "affiliateNetworkId",
+        nameKey: "affiliateNetworkName",
+        voluumWorkspaceId,
+        log: previewLog,
+      }),
+    ]);
+
+    if (trafficSourcesResult.status === "fulfilled") {
+      trafficSources = trafficSourcesResult.value;
+    } else {
+      warnings.push("VOLUUM_TRAFFIC_SOURCES_FETCH_FAILED");
+    }
+
+    if (affiliateNetworksResult.status === "fulfilled") {
+      affiliateNetworks = affiliateNetworksResult.value;
+    } else {
+      warnings.push("VOLUUM_AFFILIATE_NETWORKS_FETCH_FAILED");
+    }
+  }
 
   res.json({
     mode: "dry_run",
     workspaceId,
     enabled: true,
-    credentials,
+    credentials: authResult.credentials,
+    trafficSources,
+    affiliateNetworks,
+    summary: {
+      trafficSourcesFound: trafficSources.length,
+      affiliateNetworksFound: affiliateNetworks.length,
+    },
+    ...(warnings.length > 0 ? { warnings } : {}),
     sideEffects: {
-      metadataFetches: false,
+      metadataFetches,
       dbWrites: false,
       events: false,
       tasks: false,
