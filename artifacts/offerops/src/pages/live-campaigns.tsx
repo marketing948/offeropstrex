@@ -1,12 +1,12 @@
 // CampaignOps redesign — Live Campaigns page.
 //
-// Lists every Campaign in the workspace with rich filtering. The page
+// Lists live Campaigns in the workspace with rich filtering. The page
 // is the operator's view of which iOS / Android creatives are running
 // against which traffic sources, when each went live, and the current
 // per-Campaign performance numbers (populated by the find_winners
 // task completion flow).
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { authedJson } from "@/lib/api-fetch";
@@ -44,7 +44,14 @@ type Campaign = {
   trafficSourceName: string | null;
 };
 
-type TrafficSource = { id: number; name: string };
+type LiveCampaignsResponse = {
+  items: Campaign[];
+  pagination: {
+    limit: number;
+    offset: number;
+    total: number;
+  };
+};
 
 const STATUS_COLORS: Record<Campaign["status"], { dot: string; bg: string; text: string }> = {
   draft:           { dot: "bg-slate-400",  bg: "bg-slate-100 dark:bg-slate-900/40", text: "text-slate-700 dark:text-slate-300" },
@@ -82,43 +89,127 @@ function fmtDate(iso: string | null): string {
   return new Date(iso).toLocaleDateString();
 }
 
+function toNextDate(value: string): string {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
 export default function LiveCampaigns() {
   const { activeWorkspaceId } = useWorkspace();
   const [statusFilter, setStatusFilter] = useState<string>("live");
   const [platformFilter, setPlatformFilter] = useState<string>("all");
   const [trafficSourceFilter, setTrafficSourceFilter] = useState<string>("all");
+  const [geoFilter, setGeoFilter] = useState<string>("all");
+  const [networkFilter, setNetworkFilter] = useState<string>("all");
+  const [batchFilter, setBatchFilter] = useState<string>("all");
+  const [liveDateFilter, setLiveDateFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [offset, setOffset] = useState(0);
+  const pageSize = 50;
 
   useEffect(() => {
+    setStatusFilter("live");
+    setPlatformFilter("all");
     setTrafficSourceFilter("all");
+    setGeoFilter("all");
+    setNetworkFilter("all");
+    setBatchFilter("all");
+    setLiveDateFilter("");
+    setSearch("");
+    setOffset(0);
   }, [activeWorkspaceId]);
 
-  const { data: trafficSources = [] } = useQuery<TrafficSource[]>({
-    queryKey: ["workspace-traffic-sources", activeWorkspaceId],
+  useEffect(() => {
+    setOffset(0);
+  }, [statusFilter, platformFilter, trafficSourceFilter, geoFilter, networkFilter, batchFilter, liveDateFilter, search]);
+
+  const optionParams = new URLSearchParams();
+  if (activeWorkspaceId) optionParams.set("workspace_id", String(activeWorkspaceId));
+  optionParams.set("status", statusFilter);
+  optionParams.set("limit", "200");
+
+  const { data: optionResponse, isError: isOptionsError, error: optionsError } = useQuery<LiveCampaignsResponse>({
+    queryKey: ["live-campaign-filter-options", activeWorkspaceId, statusFilter],
     enabled: !!activeWorkspaceId,
-    queryFn: () => authedJson(`/api/admin/workspace-traffic-sources?workspace_id=${activeWorkspaceId}`),
+    queryFn: () => authedJson(`/api/live-campaigns?${optionParams.toString()}`),
   });
+  const optionCampaigns = optionResponse?.items ?? [];
 
   const params = new URLSearchParams();
   if (activeWorkspaceId) params.set("workspace_id", String(activeWorkspaceId));
-  if (statusFilter !== "all") params.set("status", statusFilter);
+  params.set("status", statusFilter);
+  params.set("limit", String(pageSize));
+  params.set("offset", String(offset));
   if (platformFilter !== "all") params.set("platform", platformFilter);
   if (trafficSourceFilter !== "all") params.set("traffic_source_id", trafficSourceFilter);
+  if (geoFilter !== "all") params.set("geo", geoFilter);
+  if (networkFilter !== "all") params.set("affiliate_network", networkFilter);
+  if (batchFilter !== "all") params.set("batch_id", batchFilter);
+  if (liveDateFilter) {
+    params.set("date_from", liveDateFilter);
+    params.set("date_to", toNextDate(liveDateFilter));
+  }
 
-  const { data: campaigns = [], isLoading } = useQuery<Campaign[]>({
-    queryKey: ["live-campaigns", activeWorkspaceId, statusFilter, platformFilter, trafficSourceFilter],
+  const { data: response, isLoading, isError, error } = useQuery<LiveCampaignsResponse>({
+    queryKey: [
+      "live-campaigns",
+      activeWorkspaceId,
+      statusFilter,
+      platformFilter,
+      trafficSourceFilter,
+      geoFilter,
+      networkFilter,
+      batchFilter,
+      liveDateFilter,
+      offset,
+    ],
     enabled: !!activeWorkspaceId,
-    queryFn: () => authedJson(`/api/campaigns?${params.toString()}`),
+    queryFn: () => authedJson(`/api/live-campaigns?${params.toString()}`),
   });
+  const campaigns = response?.items ?? [];
+  const pagination = response?.pagination;
+  const errorMessage = error instanceof Error ? error.message : "Unable to load live campaigns.";
+
+  const trafficSourceOptions = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          optionCampaigns
+            .filter((c) => c.trafficSourceId != null && c.trafficSourceName)
+            .map((c) => [String(c.trafficSourceId), c.trafficSourceName as string]),
+        ).entries(),
+      ).sort((a, b) => a[1].localeCompare(b[1])),
+    [optionCampaigns],
+  );
+  const geoOptions = useMemo(
+    () => Array.from(new Set(optionCampaigns.map((c) => c.batchGeo).filter((value): value is string => Boolean(value)))).sort(),
+    [optionCampaigns],
+  );
+  const networkOptions = useMemo(
+    () => Array.from(new Set(optionCampaigns.map((c) => c.batchAffiliateNetwork).filter((value): value is string => Boolean(value)))).sort(),
+    [optionCampaigns],
+  );
+  const batchOptions = useMemo(
+    () => Array.from(new Map(optionCampaigns.map((c) => [String(c.batchId), c.batchName ?? `Batch #${c.batchId}`])).entries()).sort((a, b) => a[1].localeCompare(b[1])),
+    [optionCampaigns],
+  );
 
   const q = search.trim().toLowerCase();
-  const filtered = q
-    ? campaigns.filter((c) =>
+  const filtered = campaigns.filter((c) => {
+    if (!q) return true;
+    return (
         [c.campaignName, c.batchName, c.voluumCampaignName, c.trafficSourceName, c.employeeName]
           .filter(Boolean)
-          .some((s) => s!.toLowerCase().includes(q)),
-      )
-    : campaigns;
+          .some((s) => s!.toLowerCase().includes(q))
+    );
+  });
+  const total = pagination?.total ?? 0;
+  const pageStart = total === 0 ? 0 : offset + 1;
+  const pageEnd = Math.min(offset + pageSize, total);
+  const canGoPrevious = offset > 0;
+  const canGoNext = offset + pageSize < total;
+  const optionsErrorMessage = optionsError instanceof Error ? optionsError.message : "Some filter options could not be loaded.";
 
   return (
     <div className="space-y-6">
@@ -126,19 +217,17 @@ export default function LiveCampaigns() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Live Campaigns</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Every Voluum campaign in the workflow — filter by status, platform, traffic source.
+            Campaigns become live here only after the matching take-campaign-live task is completed.
           </p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
         <div>
           <label className="text-xs font-medium text-muted-foreground">Status</label>
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All statuses</SelectItem>
-              <SelectItem value="voluum_created">Voluum created</SelectItem>
               <SelectItem value="live">Live</SelectItem>
               <SelectItem value="tested">Tested</SelectItem>
               <SelectItem value="closed">Closed</SelectItem>
@@ -162,8 +251,8 @@ export default function LiveCampaigns() {
             <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All</SelectItem>
-              {trafficSources.map((t) => (
-                <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
+              {trafficSourceOptions.map(([id, name]) => (
+                <SelectItem key={id} value={id}>{name}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -172,7 +261,53 @@ export default function LiveCampaigns() {
           <label className="text-xs font-medium text-muted-foreground">Search</label>
           <Input className="mt-1 h-9" placeholder="Name, batch, worker…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">Affiliate Network</label>
+          <Select value={networkFilter} onValueChange={setNetworkFilter}>
+            <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All networks</SelectItem>
+              {networkOptions.map((network) => (
+                <SelectItem key={network} value={network}>{network}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">GEO</label>
+          <Select value={geoFilter} onValueChange={setGeoFilter}>
+            <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All GEOs</SelectItem>
+              {geoOptions.map((geo) => (
+                <SelectItem key={geo} value={geo}>{geo}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">Batch</label>
+          <Select value={batchFilter} onValueChange={setBatchFilter}>
+            <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All batches</SelectItem>
+              {batchOptions.map(([id, label]) => (
+                <SelectItem key={id} value={id}>{label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">Date went live</label>
+          <Input className="mt-1 h-9" type="date" value={liveDateFilter} onChange={(e) => setLiveDateFilter(e.target.value)} />
+        </div>
       </div>
+
+      {isOptionsError && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {optionsErrorMessage}
+        </div>
+      )}
 
       <div className="rounded-md border border-border bg-card/50 overflow-x-auto">
         <Table>
@@ -181,6 +316,7 @@ export default function LiveCampaigns() {
               <TableHead>Campaign</TableHead>
               <TableHead>Platform</TableHead>
               <TableHead>Traffic source</TableHead>
+              <TableHead>Network / GEO</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Live since</TableHead>
               <TableHead className="text-right">Spend</TableHead>
@@ -192,9 +328,11 @@ export default function LiveCampaigns() {
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={10} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>
+              <TableRow><TableCell colSpan={11} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>
+            ) : isError ? (
+              <TableRow><TableCell colSpan={11} className="text-center py-8 text-destructive">{errorMessage}</TableCell></TableRow>
             ) : filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={10} className="text-center py-8 text-muted-foreground">No campaigns match these filters.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={11} className="text-center py-8 text-muted-foreground">No campaigns match these filters.</TableCell></TableRow>
             ) : (
               filtered.map((c) => (
                 <TableRow key={c.id}>
@@ -205,6 +343,10 @@ export default function LiveCampaigns() {
                   </TableCell>
                   <TableCell><Badge variant="outline" className="uppercase text-[10px]">{c.platform}</Badge></TableCell>
                   <TableCell>{c.trafficSourceName ?? "—"}</TableCell>
+                  <TableCell className="text-xs">
+                    <div>{c.batchAffiliateNetwork ?? "—"}</div>
+                    <div className="text-muted-foreground">{c.batchGeo ?? "—"}</div>
+                  </TableCell>
                   <TableCell><StatusBadge status={c.status} /></TableCell>
                   <TableCell className="text-xs">{fmtDate(c.liveStartedAt)}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtMoney(c.cost)}</TableCell>
@@ -217,6 +359,31 @@ export default function LiveCampaigns() {
             )}
           </TableBody>
         </Table>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+        <div>
+          {isLoading ? "Loading live campaigns…" : `Showing ${pageStart}-${pageEnd} of ${total} campaigns`}
+          {q && filtered.length !== campaigns.length ? ` (${filtered.length} match search on this page)` : ""}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="rounded-md border border-border px-3 py-1.5 disabled:opacity-50"
+            disabled={!canGoPrevious}
+            onClick={() => setOffset((current) => Math.max(0, current - pageSize))}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            className="rounded-md border border-border px-3 py-1.5 disabled:opacity-50"
+            disabled={!canGoNext}
+            onClick={() => setOffset((current) => current + pageSize)}
+          >
+            Next
+          </button>
+        </div>
       </div>
     </div>
   );

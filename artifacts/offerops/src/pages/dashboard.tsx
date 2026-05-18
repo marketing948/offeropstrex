@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   useGetAdminDashboardSummary,
   useGetBatchStatusBreakdown,
@@ -14,6 +15,7 @@ import {
 import type { DashboardBreakdownRow } from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useWorkspace } from "@/lib/workspace-context";
+import { authedJson } from "@/lib/api-fetch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -39,6 +41,26 @@ import {
 } from "lucide-react";
 import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip } from "recharts";
 
+type LiveCampaignSummaryRow = {
+  id: number;
+  campaignName: string;
+  platform: "ios" | "android";
+  liveStartedAt: string | null;
+  batchName: string | null;
+  batchGeo: string | null;
+  employeeName: string | null;
+  trafficSourceName: string | null;
+};
+
+type LiveCampaignsResponse = {
+  items: LiveCampaignSummaryRow[];
+  pagination: {
+    limit: number;
+    offset: number;
+    total: number;
+  };
+};
+
 export default function Dashboard() {
   const { activeWorkspaceId } = useWorkspace();
   const wsParams = { workspace_id: activeWorkspaceId ?? 0 };
@@ -48,6 +70,37 @@ export default function Dashboard() {
   const { data: statusBreakdown, isLoading: isLoadingStatus } = useGetBatchStatusBreakdown(wsParams, wsQueryOpts(activeWorkspaceId, getGetBatchStatusBreakdownQueryKey(wsParams)));
   const { data: goalProgress, isLoading: isLoadingGoals } = useGetGoalProgress(goalParams, wsQueryOpts(activeWorkspaceId, getGetGoalProgressQueryKey(goalParams)));
   const { data: breakdowns, isLoading: isLoadingBreakdowns } = useGetDashboardBreakdowns(wsParams, wsQueryOpts(activeWorkspaceId, getGetDashboardBreakdownsQueryKey(wsParams)));
+  const { data: liveCampaignsResponse, isLoading: isLoadingLiveCampaigns, isError: isLiveCampaignsError, error: liveCampaignsError } = useQuery<LiveCampaignsResponse>({
+    queryKey: ["dashboard-live-campaigns", activeWorkspaceId],
+    enabled: !!activeWorkspaceId,
+    queryFn: () => authedJson(`/api/live-campaigns?workspace_id=${activeWorkspaceId}&status=live&limit=50`),
+  });
+  const liveCampaigns = liveCampaignsResponse?.items ?? [];
+  const liveCampaignsErrorMessage = liveCampaignsError instanceof Error ? liveCampaignsError.message : "Unable to load live campaigns.";
+
+  const liveStats = useMemo(() => {
+    const byTrafficSource = new Map<string, number>();
+    const byGeo = new Map<string, number>();
+    const byWorker = new Map<string, number>();
+    for (const campaign of liveCampaigns) {
+      byTrafficSource.set(campaign.trafficSourceName ?? "Unassigned", (byTrafficSource.get(campaign.trafficSourceName ?? "Unassigned") ?? 0) + 1);
+      byGeo.set(campaign.batchGeo ?? "Unknown", (byGeo.get(campaign.batchGeo ?? "Unknown") ?? 0) + 1);
+      byWorker.set(campaign.employeeName ?? "Unassigned", (byWorker.get(campaign.employeeName ?? "Unassigned") ?? 0) + 1);
+    }
+    const top = (map: Map<string, number>) =>
+      Array.from(map.entries())
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 4);
+    const recent = [...liveCampaigns]
+      .sort((a, b) => (b.liveStartedAt ?? "").localeCompare(a.liveStartedAt ?? ""))
+      .slice(0, 5);
+    return {
+      byTrafficSource: top(byTrafficSource),
+      byGeo: top(byGeo),
+      byWorker: top(byWorker),
+      recent,
+    };
+  }, [liveCampaigns]);
 
   return (
     <div className="space-y-6">
@@ -81,6 +134,40 @@ export default function Dashboard() {
         <KpiCard title="Campaigns — Testing" value={summary?.campaignsTesting} icon={Flame} isLoading={isLoadingSummary} dot="bg-blue-500" />
         <KpiCard title="Campaigns — Tested" value={summary?.campaignsTested} icon={CheckCircle2} isLoading={isLoadingSummary} dot="bg-amber-500" />
         <KpiCard title="Campaigns — Closed" value={summary?.campaignsClosedTotal} icon={Pause} isLoading={isLoadingSummary} dot="bg-gray-400" />
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <MiniListCard title="Live by Traffic Source" rows={liveStats.byTrafficSource} isLoading={isLoadingLiveCampaigns} error={isLiveCampaignsError ? liveCampaignsErrorMessage : null} icon={Network} />
+        <MiniListCard title="Live by GEO" rows={liveStats.byGeo} isLoading={isLoadingLiveCampaigns} error={isLiveCampaignsError ? liveCampaignsErrorMessage : null} icon={Globe2} />
+        <MiniListCard title="Live by Worker" rows={liveStats.byWorker} isLoading={isLoadingLiveCampaigns} error={isLiveCampaignsError ? liveCampaignsErrorMessage : null} icon={Users} />
+        <Card className="bg-card/50 backdrop-blur border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Radio size={16} className="text-primary" />
+              Recently Launched
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {isLoadingLiveCampaigns ? (
+              <Skeleton className="h-20 w-full bg-muted/50" />
+            ) : isLiveCampaignsError ? (
+              <div className="text-xs text-destructive">{liveCampaignsErrorMessage}</div>
+            ) : liveStats.recent.length === 0 ? (
+              <div className="text-xs text-muted-foreground">No live campaigns yet.</div>
+            ) : (
+              <div className="space-y-2">
+                {liveStats.recent.map((campaign) => (
+                  <div key={campaign.id} className="text-xs">
+                    <div className="font-medium truncate">{campaign.campaignName}</div>
+                    <div className="text-muted-foreground">
+                      {campaign.platform.toUpperCase()} · {campaign.trafficSourceName ?? "Unassigned"} · {campaign.liveStartedAt ? new Date(campaign.liveStartedAt).toLocaleDateString() : "No date"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
@@ -231,6 +318,49 @@ function KpiCard({ title, value, icon: Icon, isLoading, dot }: { title: string, 
           <Skeleton className="h-8 w-24 bg-muted/50" />
         ) : (
           <div className="text-2xl font-bold">{value !== undefined ? value : "-"}</div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function MiniListCard({
+  title,
+  rows,
+  isLoading,
+  error,
+  icon: Icon,
+}: {
+  title: string;
+  rows: Array<[string, number]>;
+  isLoading: boolean;
+  error: string | null;
+  icon: any;
+}) {
+  return (
+    <Card className="bg-card/50 backdrop-blur border-border">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <Icon size={16} className="text-primary" />
+          {title}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-20 w-full bg-muted/50" />
+        ) : error ? (
+          <div className="text-xs text-destructive">{error}</div>
+        ) : rows.length === 0 ? (
+          <div className="text-xs text-muted-foreground">No live campaigns yet.</div>
+        ) : (
+          <div className="space-y-2">
+            {rows.map(([label, count]) => (
+              <div key={label} className="flex items-center justify-between gap-3 text-xs">
+                <span className="truncate text-muted-foreground">{label}</span>
+                <span className="font-semibold">{count}</span>
+              </div>
+            ))}
+          </div>
         )}
       </CardContent>
     </Card>
