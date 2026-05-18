@@ -23,6 +23,7 @@ import geosRouter from "./geos";
 import campaignsRouter from "./campaigns";
 import batchResultsRouter from "./batch-results";
 import workerAffiliateNetworksRouter from "./worker-affiliate-networks";
+import operationalEventsRouter from "./operational-events";
 
 const router: IRouter = Router();
 
@@ -85,5 +86,6 @@ router.use(geosRouter);
 router.use(campaignsRouter);
 router.use(batchResultsRouter);
 router.use(workerAffiliateNetworksRouter);
+router.use(operationalEventsRouter);
 
 export default router;

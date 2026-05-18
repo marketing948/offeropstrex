@@ -19,6 +19,7 @@ export * from "./employee-workspace-assignments";
 export * from "./tracker-campaigns";
 export * from "./workspace-traffic-sources";
 export * from "./events";
+export * from "./operational-events";
 // Pivot Phase 2 (Task #25) — manual workflow foundations:
 export * from "./affiliate-networks";
 export * from "./geos";

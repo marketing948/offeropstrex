@@ -1,0 +1,272 @@
+import { after, afterEach, before, beforeEach, describe, test } from "node:test";
+import assert from "node:assert/strict";
+import type { AddressInfo } from "node:net";
+import type { Server } from "node:http";
+import { eq, sql } from "drizzle-orm";
+import app from "../app.ts";
+import {
+  db,
+  employeeWorkspaceAssignmentsTable,
+  employeesTable,
+  eventsTable,
+  operationalEventsTable,
+  workspacesTable,
+} from "@workspace/db";
+import { recordOperationalEvent } from "../lib/operational-events.ts";
+
+let server: Server;
+let baseUrl: string;
+let createdWorkspaceIds: number[] = [];
+let createdEmployeeIds: number[] = [];
+
+before(async () => {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS operational_events (
+      id serial PRIMARY KEY,
+      workspace_id integer NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      entity_type text NOT NULL,
+      entity_id text NOT NULL,
+      event_type text NOT NULL,
+      actor_type text NOT NULL DEFAULT 'system',
+      actor_id text,
+      source text NOT NULL,
+      payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS operational_events_workspace_created_at_idx
+      ON operational_events (workspace_id, created_at, id)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS operational_events_workspace_entity_idx
+      ON operational_events (workspace_id, entity_type, entity_id, created_at)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS operational_events_workspace_event_type_idx
+      ON operational_events (workspace_id, event_type, created_at)
+  `);
+
+  server = app.listen(0);
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const address = server.address() as AddressInfo;
+  baseUrl = `http://127.0.0.1:${address.port}/api`;
+});
+
+after(async () => {
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
+});
+
+beforeEach(() => {
+  createdWorkspaceIds = [];
+  createdEmployeeIds = [];
+});
+
+afterEach(async () => {
+  for (const id of [...createdWorkspaceIds].reverse()) {
+    await db.delete(workspacesTable).where(eq(workspacesTable.id, id));
+  }
+  for (const id of [...createdEmployeeIds].reverse()) {
+    await db.delete(employeesTable).where(eq(employeesTable.id, id));
+  }
+});
+
+function authToken(employeeId: number): string {
+  return Buffer.from(`${employeeId}:operational-events-test:offerops_secret`).toString("base64");
+}
+
+async function request(path: string, employeeId: number) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    headers: { authorization: `Bearer ${authToken(employeeId)}` },
+  });
+  const text = await response.text();
+  let json: any = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = text;
+  }
+  return { response, json };
+}
+
+async function createWorkspace(name: string): Promise<number> {
+  const [workspace] = await db
+    .insert(workspacesTable)
+    .values({
+      name: `${name}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+      isActive: false,
+    })
+    .returning({ id: workspacesTable.id });
+  createdWorkspaceIds.push(workspace.id);
+  return workspace.id;
+}
+
+async function createEmployee(role: "admin" | "employee" = "employee"): Promise<number> {
+  const [employee] = await db
+    .insert(employeesTable)
+    .values({
+      name: `Audit Tester ${Date.now()}`,
+      email: `audit-${Date.now()}-${Math.floor(Math.random() * 1e9)}@example.com`,
+      passwordHash: "x",
+      role,
+    })
+    .returning({ id: employeesTable.id });
+  createdEmployeeIds.push(employee.id);
+  return employee.id;
+}
+
+async function assign(employeeId: number, workspaceId: number): Promise<void> {
+  await db
+    .insert(employeeWorkspaceAssignmentsTable)
+    .values({ employeeId, workspaceId, role: "employee" })
+    .onConflictDoNothing();
+}
+
+describe("operational events timeline", { concurrency: false }, () => {
+  test("records append-only operational events with workspace_id", async () => {
+    const workspaceId = await createWorkspace("audit-foundation");
+    const employeeId = await createEmployee();
+    await assign(employeeId, workspaceId);
+
+    const event = await recordOperationalEvent({
+      workspaceId,
+      entityType: "task",
+      entityId: 123,
+      eventType: "TASK_COMPLETED",
+      actorType: "employee",
+      actorId: employeeId,
+      source: "routes-test",
+      payloadJson: { field: "value" },
+    });
+
+    assert.equal(event.workspaceId, workspaceId);
+    assert.equal(event.entityType, "task");
+    assert.equal(event.entityId, "123");
+    assert.equal(event.eventType, "TASK_COMPLETED");
+    assert.deepEqual(event.payloadJson, { field: "value" });
+  });
+
+  test("returns server-authorized timeline filtered by workspace, entity, event type, and date", async () => {
+    const workspaceId = await createWorkspace("audit-filter");
+    const employeeId = await createEmployee();
+    await assign(employeeId, workspaceId);
+    const createdAt = new Date("2026-05-18T00:00:00.000Z");
+
+    await recordOperationalEvent({
+      workspaceId,
+      entityType: "task",
+      entityId: "task-1",
+      eventType: "TASK_CREATED",
+      source: "routes-test",
+      createdAt: new Date("2026-05-17T00:00:00.000Z"),
+    });
+    await recordOperationalEvent({
+      workspaceId,
+      entityType: "task",
+      entityId: "task-1",
+      eventType: "TASK_COMPLETED",
+      source: "routes-test",
+      createdAt,
+      payloadJson: { result: "done" },
+    });
+
+    const params = new URLSearchParams({
+      workspace_id: String(workspaceId),
+      entity_type: "task",
+      entity_id: "task-1",
+      event_type: "TASK_COMPLETED",
+      date_from: "2026-05-18T00:00:00.000Z",
+      date_to: "2026-05-19T00:00:00.000Z",
+    });
+    const { response, json } = await request(`/operational-events?${params.toString()}`, employeeId);
+
+    assert.equal(response.status, 200);
+    assert.equal(json.pagination.total, 1);
+    assert.equal(json.items.length, 1);
+    assert.equal(json.items[0].workspaceId, workspaceId);
+    assert.equal(json.items[0].entityType, "task");
+    assert.equal(json.items[0].entityId, "task-1");
+    assert.equal(json.items[0].eventType, "TASK_COMPLETED");
+    assert.deepEqual(json.items[0].payloadJson, { result: "done" });
+    assert.equal(json.items[0].createdAt, createdAt.toISOString());
+  });
+
+  test("does not expose another workspace timeline", async () => {
+    const workspaceA = await createWorkspace("audit-a");
+    const workspaceB = await createWorkspace("audit-b");
+    const employeeId = await createEmployee();
+    await assign(employeeId, workspaceA);
+
+    await recordOperationalEvent({
+      workspaceId: workspaceB,
+      entityType: "batch",
+      entityId: "b-1",
+      eventType: "BATCH_CREATED",
+      source: "routes-test",
+    });
+
+    const { response, json } = await request(`/operational-events?workspace_id=${workspaceB}`, employeeId);
+
+    assert.equal(response.status, 403);
+    assert.equal(json.error, "Access denied: not a member of this workspace");
+  });
+
+  test("read route does not mutate workflow engine events", async () => {
+    const workspaceId = await createWorkspace("audit-readonly");
+    const employeeId = await createEmployee();
+    await assign(employeeId, workspaceId);
+    await recordOperationalEvent({
+      workspaceId,
+      entityType: "sync",
+      entityId: "preview",
+      eventType: "SYNC_PREVIEW_RUN",
+      source: "routes-test",
+    });
+    const before = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(eventsTable)
+      .where(eq(eventsTable.workspaceId, workspaceId));
+
+    const { response } = await request(`/operational-events?workspace_id=${workspaceId}`, employeeId);
+
+    const after = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(eventsTable)
+      .where(eq(eventsTable.workspaceId, workspaceId));
+    assert.equal(response.status, 200);
+    assert.equal(after[0]?.count ?? 0, before[0]?.count ?? 0);
+  });
+
+  test("rejects requests without server-authorized workspace_id", async () => {
+    const employeeId = await createEmployee();
+
+    const { response, json } = await request("/operational-events", employeeId);
+
+    assert.equal(response.status, 400);
+    assert.equal(json.error, "workspace_id query parameter is required");
+  });
+
+  test("does not expose mutation routes for operational events", async () => {
+    const workspaceId = await createWorkspace("audit-no-mutation");
+    const employeeId = await createEmployee();
+    await assign(employeeId, workspaceId);
+
+    const response = await fetch(`${baseUrl}/operational-events`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${authToken(employeeId)}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ workspaceId }),
+    });
+
+    assert.equal(response.status, 404);
+    const rows = await db
+      .select({ id: operationalEventsTable.id })
+      .from(operationalEventsTable)
+      .where(eq(operationalEventsTable.workspaceId, workspaceId));
+    assert.equal(rows.length, 0);
+  });
+});
