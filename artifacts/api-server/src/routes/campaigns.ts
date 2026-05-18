@@ -12,8 +12,8 @@
 // OPTIMIZATION_FOLLOWUP tasks) flow through emit() →
 // CampaignStatusChanged → rule → executor.
 
-import { Router, type IRouter } from "express";
-import { and, eq, inArray } from "drizzle-orm";
+import { Router, type IRouter, type Response } from "express";
+import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import {
   db,
   campaignsTable,
@@ -22,13 +22,15 @@ import {
   employeesTable,
 } from "@workspace/db";
 import { z } from "zod/v4";
-import { requireWorkspaceAccess } from "../lib/workspace-access";
+import { checkWorkspaceAccess, requireWorkspaceAccess } from "../lib/workspace-access";
 import { emit } from "../engine/event-bus";
 
 const router: IRouter = Router();
 
 const VALID_STATUSES = ["draft", "ready", "voluum_created", "live", "tested", "closed"] as const;
 type CampaignStatus = (typeof VALID_STATUSES)[number];
+const LIVE_CAMPAIGN_STATUSES = ["live", "tested", "closed"] as const;
+type LiveCampaignStatus = (typeof LIVE_CAMPAIGN_STATUSES)[number];
 
 // Pivot Phase 4 (Task #27): Zod-validated request bodies. Phase 5 will
 // replace these with the generated `insertCampaignSchema` once the
@@ -56,6 +58,54 @@ function serialize(row: typeof campaignsTable.$inferSelect) {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+function parsePositiveIntegerQuery(
+  raw: unknown,
+  name: string,
+  res: Response,
+): number | null {
+  if (raw == null || raw === "") return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    res.status(400).json({ error: `${name} must be a positive integer` });
+    return null;
+  }
+  return n;
+}
+
+function parseDateQuery(raw: unknown, name: string, res: Response): Date | null {
+  if (raw == null || raw === "") return null;
+  if (typeof raw !== "string") {
+    res.status(400).json({ error: `${name} must be a date string` });
+    return null;
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    res.status(400).json({ error: `${name} must be a valid date` });
+    return null;
+  }
+  return date;
+}
+
+function parseLimit(raw: unknown, res: Response): number | null {
+  if (raw == null || raw === "") return 50;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    res.status(400).json({ error: "limit must be a positive integer" });
+    return null;
+  }
+  return Math.min(n, 200);
+}
+
+function parseOffset(raw: unknown, res: Response): number | null {
+  if (raw == null || raw === "") return 0;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    res.status(400).json({ error: "offset must be a non-negative integer" });
+    return null;
+  }
+  return n;
 }
 
 router.post("/campaigns", async (req, res): Promise<void> => {
@@ -219,6 +269,145 @@ router.patch("/campaigns/:id", async (req, res): Promise<void> => {
   }
 
   res.json(serialize(row));
+});
+
+router.get("/live-campaigns", async (req, res): Promise<void> => {
+  const wsId = Number(req.query["workspace_id"]);
+  if (!Number.isInteger(wsId) || wsId <= 0) {
+    res.status(400).json({ error: "workspace_id is required" });
+    return;
+  }
+
+  const access = await checkWorkspaceAccess(req, wsId);
+  if (!access.allowed) {
+    res.status(access.status).json({ error: access.reason });
+    return;
+  }
+
+  const statusRaw = req.query["status"];
+  const status = statusRaw == null || statusRaw === "" ? "live" : statusRaw;
+  if (typeof status !== "string" || !LIVE_CAMPAIGN_STATUSES.includes(status as LiveCampaignStatus)) {
+    res.status(400).json({ error: "Invalid status" });
+    return;
+  }
+
+  const platformRaw = req.query["platform"];
+  if (platformRaw != null && platformRaw !== "" && platformRaw !== "ios" && platformRaw !== "android") {
+    res.status(400).json({ error: "Invalid platform" });
+    return;
+  }
+
+  const trafficSourceId = parsePositiveIntegerQuery(req.query["traffic_source_id"], "traffic_source_id", res);
+  if (res.headersSent) return;
+  const batchId = parsePositiveIntegerQuery(req.query["batch_id"], "batch_id", res);
+  if (res.headersSent) return;
+  const employeeId = parsePositiveIntegerQuery(req.query["employee_id"], "employee_id", res);
+  if (res.headersSent) return;
+  const workerId = parsePositiveIntegerQuery(req.query["worker_id"], "worker_id", res);
+  if (res.headersSent) return;
+  if (employeeId !== null && workerId !== null && employeeId !== workerId) {
+    res.status(400).json({ error: "employee_id and worker_id must match when both are provided" });
+    return;
+  }
+  const requestedWorkerId = employeeId ?? workerId;
+
+  const dateFrom = parseDateQuery(req.query["date_from"], "date_from", res);
+  if (res.headersSent) return;
+  const dateTo = parseDateQuery(req.query["date_to"], "date_to", res);
+  if (res.headersSent) return;
+  const limit = parseLimit(req.query["limit"], res);
+  if (limit === null) return;
+  const offset = parseOffset(req.query["offset"], res);
+  if (offset === null) return;
+
+  const conditions = [
+    eq(campaignsTable.workspaceId, wsId),
+    eq(testingBatchesTable.workspaceId, wsId),
+    eq(campaignsTable.status, status as LiveCampaignStatus),
+  ];
+
+  if (platformRaw === "ios" || platformRaw === "android") {
+    conditions.push(eq(campaignsTable.platform, platformRaw));
+  }
+  if (trafficSourceId !== null) conditions.push(eq(campaignsTable.trafficSourceId, trafficSourceId));
+  if (batchId !== null) conditions.push(eq(campaignsTable.batchId, batchId));
+  if (req.query["geo"] != null && req.query["geo"] !== "") {
+    conditions.push(eq(testingBatchesTable.geo, String(req.query["geo"])));
+  }
+  if (req.query["affiliate_network"] != null && req.query["affiliate_network"] !== "") {
+    conditions.push(eq(testingBatchesTable.affiliateNetwork, String(req.query["affiliate_network"])));
+  }
+  if (dateFrom !== null) conditions.push(gte(campaignsTable.liveStartedAt, dateFrom));
+  if (dateTo !== null) conditions.push(lte(campaignsTable.liveStartedAt, dateTo));
+
+  if (access.employee.role === "admin") {
+    if (requestedWorkerId !== null) conditions.push(eq(testingBatchesTable.employeeId, requestedWorkerId));
+  } else {
+    conditions.push(eq(testingBatchesTable.employeeId, access.employee.id));
+    if (requestedWorkerId !== null) conditions.push(eq(testingBatchesTable.employeeId, requestedWorkerId));
+  }
+
+  const where = and(...conditions);
+  const [totalRow] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(campaignsTable)
+    .innerJoin(
+      testingBatchesTable,
+      and(
+        eq(campaignsTable.batchId, testingBatchesTable.id),
+        eq(testingBatchesTable.workspaceId, wsId),
+      ),
+    )
+    .where(where);
+
+  const rows = await db
+    .select({
+      campaign: campaignsTable,
+      batchName: testingBatchesTable.batchName,
+      batchGeo: testingBatchesTable.geo,
+      batchAffiliateNetwork: testingBatchesTable.affiliateNetwork,
+      employeeName: employeesTable.name,
+      trafficSourceName: workspaceTrafficSourcesTable.name,
+    })
+    .from(campaignsTable)
+    .innerJoin(
+      testingBatchesTable,
+      and(
+        eq(campaignsTable.batchId, testingBatchesTable.id),
+        eq(testingBatchesTable.workspaceId, wsId),
+      ),
+    )
+    .leftJoin(
+      employeesTable,
+      eq(testingBatchesTable.employeeId, employeesTable.id),
+    )
+    .leftJoin(
+      workspaceTrafficSourcesTable,
+      and(
+        eq(campaignsTable.trafficSourceId, workspaceTrafficSourcesTable.id),
+        eq(workspaceTrafficSourcesTable.workspaceId, wsId),
+      ),
+    )
+    .where(where)
+    .orderBy(sql`${campaignsTable.liveStartedAt} desc nulls last`, desc(campaignsTable.id))
+    .limit(limit)
+    .offset(offset);
+
+  res.json({
+    items: rows.map((row) => ({
+      ...serialize(row.campaign),
+      batchName: row.batchName,
+      batchGeo: row.batchGeo,
+      batchAffiliateNetwork: row.batchAffiliateNetwork,
+      employeeName: row.employeeName,
+      trafficSourceName: row.trafficSourceName,
+    })),
+    pagination: {
+      limit,
+      offset,
+      total: Number(totalRow?.total ?? 0),
+    },
+  });
 });
 
 router.get("/campaigns", async (req, res): Promise<void> => {

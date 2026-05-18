@@ -182,6 +182,70 @@ async function seedCampaignOpsBase() {
   };
 }
 
+async function createLiveCampaignSeed(options?: {
+  workspaceName?: string;
+  workerName?: string;
+  workerRole?: "admin" | "employee";
+  batchName?: string;
+  affiliateNetwork?: string;
+  geo?: string;
+  sourceName?: string;
+}) {
+  const workspaceId = await createWorkspace(options?.workspaceName ?? "live-campaigns");
+  const workerId = await createEmployee(options?.workerRole ?? "employee");
+  await assign(workerId, workspaceId);
+
+  const [source] = await db
+    .insert(workspaceTrafficSourcesTable)
+    .values({
+      workspaceId,
+      name: `${options?.sourceName ?? "Live Source"} ${Date.now()} ${Math.floor(Math.random() * 1e6)}`,
+      position: 1,
+      isActive: true,
+    })
+    .returning({ id: workspaceTrafficSourcesTable.id, name: workspaceTrafficSourcesTable.name });
+
+  const [batch] = await db
+    .insert(testingBatchesTable)
+    .values({
+      workspaceId,
+      employeeId: workerId,
+      batchName: `${options?.batchName ?? "Live Batch"} ${Date.now()} ${Math.floor(Math.random() * 1e6)}`,
+      affiliateNetwork: options?.affiliateNetwork ?? "Network",
+      geo: options?.geo ?? "DE",
+      trafficSource: source.name,
+      batchTag: `LC_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
+    })
+    .returning({ id: testingBatchesTable.id });
+
+  return { workspaceId, workerId, sourceId: source.id, sourceName: source.name, batchId: batch.id };
+}
+
+async function insertCampaign(seed: {
+  workspaceId: number;
+  workerId?: number;
+  batchId: number;
+  sourceId: number | null;
+  status: "voluum_created" | "live" | "tested" | "closed";
+  platform?: "ios" | "android";
+  name?: string;
+  liveStartedAt?: Date | null;
+}) {
+  const [campaign] = await db
+    .insert(campaignsTable)
+    .values({
+      workspaceId: seed.workspaceId,
+      batchId: seed.batchId,
+      platform: seed.platform ?? "ios",
+      campaignName: seed.name ?? `${seed.status} campaign ${Date.now()} ${Math.floor(Math.random() * 1e6)}`,
+      trafficSourceId: seed.sourceId,
+      status: seed.status,
+      liveStartedAt: seed.liveStartedAt ?? new Date(),
+    })
+    .returning({ id: campaignsTable.id });
+  return campaign.id;
+}
+
 describe("route scoped invariants", { concurrency: false }, () => {
   test("manual batch creation requires batchTag", async () => {
     const workspaceId = await createWorkspace("batch-tag-required");
@@ -1527,5 +1591,202 @@ describe("route scoped invariants", { concurrency: false }, () => {
         ),
       );
     assert.equal(nextTask.status, "TODO");
+  });
+
+  test("live campaigns route filters status and paginates", async () => {
+    const seed = await createLiveCampaignSeed({ affiliateNetwork: "Network A", geo: "DE" });
+    const adminId = await createEmployee("admin");
+    await assign(adminId, seed.workspaceId);
+    const dates = [
+      new Date("2026-01-04T00:00:00.000Z"),
+      new Date("2026-01-03T00:00:00.000Z"),
+      new Date("2026-01-02T00:00:00.000Z"),
+      new Date("2026-01-01T00:00:00.000Z"),
+    ];
+    const newestLiveId = await insertCampaign({
+      workspaceId: seed.workspaceId,
+      batchId: seed.batchId,
+      sourceId: seed.sourceId,
+      status: "live",
+      platform: "ios",
+      name: "newest live",
+      liveStartedAt: dates[0],
+    });
+    const olderLiveId = await insertCampaign({
+      workspaceId: seed.workspaceId,
+      batchId: seed.batchId,
+      sourceId: null,
+      status: "live",
+      platform: "android",
+      name: "older live",
+      liveStartedAt: dates[1],
+    });
+    const testedId = await insertCampaign({
+      workspaceId: seed.workspaceId,
+      batchId: seed.batchId,
+      sourceId: null,
+      status: "tested",
+      platform: "ios",
+      name: "tested campaign",
+      liveStartedAt: dates[2],
+    });
+    const closedId = await insertCampaign({
+      workspaceId: seed.workspaceId,
+      batchId: seed.batchId,
+      sourceId: null,
+      status: "closed",
+      platform: "android",
+      name: "closed campaign",
+      liveStartedAt: dates[3],
+    });
+
+    const defaults = await request("GET", `/live-campaigns?workspace_id=${seed.workspaceId}`, adminId);
+    assert.equal(defaults.response.status, 200);
+    assert.deepEqual(defaults.json.items.map((item: any) => item.id), [newestLiveId, olderLiveId]);
+    assert.equal(defaults.json.pagination.total, 2);
+    assert.equal(defaults.json.pagination.limit, 50);
+    assert.equal(defaults.json.items[0].batchGeo, "DE");
+    assert.equal(defaults.json.items[0].batchAffiliateNetwork, "Network A");
+    assert.equal(defaults.json.items[0].trafficSourceName, seed.sourceName);
+    assert.ok(defaults.json.items[0].employeeName);
+
+    const tested = await request("GET", `/live-campaigns?workspace_id=${seed.workspaceId}&status=tested`, adminId);
+    assert.equal(tested.response.status, 200);
+    assert.deepEqual(tested.json.items.map((item: any) => item.id), [testedId]);
+
+    const closed = await request("GET", `/live-campaigns?workspace_id=${seed.workspaceId}&status=closed`, adminId);
+    assert.equal(closed.response.status, 200);
+    assert.deepEqual(closed.json.items.map((item: any) => item.id), [closedId]);
+
+    const invalid = await request("GET", `/live-campaigns?workspace_id=${seed.workspaceId}&status=ready`, adminId);
+    assert.equal(invalid.response.status, 400);
+
+    const paged = await request("GET", `/live-campaigns?workspace_id=${seed.workspaceId}&limit=1&offset=1`, adminId);
+    assert.equal(paged.response.status, 200);
+    assert.deepEqual(paged.json.items.map((item: any) => item.id), [olderLiveId]);
+    assert.deepEqual(paged.json.pagination, { limit: 1, offset: 1, total: 2 });
+
+    const capped = await request("GET", `/live-campaigns?workspace_id=${seed.workspaceId}&limit=500`, adminId);
+    assert.equal(capped.response.status, 200);
+    assert.equal(capped.json.pagination.limit, 200);
+  });
+
+  test("live campaigns route enforces admin and worker scopes", async () => {
+    const first = await createLiveCampaignSeed({ workspaceName: "live-scope", batchName: "first worker" });
+    const secondWorkerId = await createEmployee();
+    await assign(secondWorkerId, first.workspaceId);
+    const [secondBatch] = await db
+      .insert(testingBatchesTable)
+      .values({
+        workspaceId: first.workspaceId,
+        employeeId: secondWorkerId,
+        batchName: `Second Worker ${Date.now()}`,
+        affiliateNetwork: "Network",
+        geo: "US",
+        trafficSource: first.sourceName,
+        batchTag: `LC2_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
+      })
+      .returning({ id: testingBatchesTable.id });
+    const adminId = await createEmployee("admin");
+    await assign(adminId, first.workspaceId);
+
+    const firstCampaignId = await insertCampaign({
+      workspaceId: first.workspaceId,
+      batchId: first.batchId,
+      sourceId: first.sourceId,
+      status: "live",
+      name: "first worker campaign",
+      liveStartedAt: new Date("2026-02-02T00:00:00.000Z"),
+    });
+    const secondCampaignId = await insertCampaign({
+      workspaceId: first.workspaceId,
+      batchId: secondBatch.id,
+      sourceId: first.sourceId,
+      status: "live",
+      name: "second worker campaign",
+      liveStartedAt: new Date("2026-02-01T00:00:00.000Z"),
+    });
+
+    const adminAll = await request("GET", `/live-campaigns?workspace_id=${first.workspaceId}`, adminId);
+    assert.equal(adminAll.response.status, 200);
+    assert.deepEqual(adminAll.json.items.map((item: any) => item.id), [firstCampaignId, secondCampaignId]);
+
+    const adminFiltered = await request(
+      "GET",
+      `/live-campaigns?workspace_id=${first.workspaceId}&employee_id=${secondWorkerId}`,
+      adminId,
+    );
+    assert.equal(adminFiltered.response.status, 200);
+    assert.deepEqual(adminFiltered.json.items.map((item: any) => item.id), [secondCampaignId]);
+
+    const workerOwn = await request("GET", `/live-campaigns?workspace_id=${first.workspaceId}`, first.workerId);
+    assert.equal(workerOwn.response.status, 200);
+    assert.deepEqual(workerOwn.json.items.map((item: any) => item.id), [firstCampaignId]);
+
+    const workerEscape = await request(
+      "GET",
+      `/live-campaigns?workspace_id=${first.workspaceId}&employee_id=${secondWorkerId}`,
+      first.workerId,
+    );
+    assert.equal(workerEscape.response.status, 200);
+    assert.deepEqual(workerEscape.json.items, []);
+  });
+
+  test("live campaigns route prevents cross-workspace leakage and side effects", async () => {
+    const own = await createLiveCampaignSeed({ workspaceName: "live-own" });
+    const foreign = await createLiveCampaignSeed({ workspaceName: "live-foreign" });
+    const adminId = await createEmployee("admin");
+    await assign(adminId, own.workspaceId);
+    const ownCampaignId = await insertCampaign({
+      workspaceId: own.workspaceId,
+      batchId: own.batchId,
+      sourceId: own.sourceId,
+      status: "live",
+      name: "own campaign",
+      liveStartedAt: new Date("2026-03-01T00:00:00.000Z"),
+    });
+    await insertCampaign({
+      workspaceId: foreign.workspaceId,
+      batchId: foreign.batchId,
+      sourceId: foreign.sourceId,
+      status: "live",
+      name: "foreign campaign",
+      liveStartedAt: new Date("2026-03-02T00:00:00.000Z"),
+    });
+    const [beforeCampaigns] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(campaignsTable)
+      .where(eq(campaignsTable.workspaceId, own.workspaceId));
+    const [beforeTasks] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(todoTasksTable)
+      .where(eq(todoTasksTable.workspaceId, own.workspaceId));
+    const [beforeEvents] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(eventsTable)
+      .where(eq(eventsTable.workspaceId, own.workspaceId));
+
+    const blocked = await request("GET", `/live-campaigns?workspace_id=${foreign.workspaceId}`, adminId);
+    assert.equal(blocked.response.status, 403);
+
+    const ownRead = await request("GET", `/live-campaigns?workspace_id=${own.workspaceId}`, adminId);
+    assert.equal(ownRead.response.status, 200);
+    assert.deepEqual(ownRead.json.items.map((item: any) => item.id), [ownCampaignId]);
+
+    const [afterCampaigns] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(campaignsTable)
+      .where(eq(campaignsTable.workspaceId, own.workspaceId));
+    const [afterTasks] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(todoTasksTable)
+      .where(eq(todoTasksTable.workspaceId, own.workspaceId));
+    const [afterEvents] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(eventsTable)
+      .where(eq(eventsTable.workspaceId, own.workspaceId));
+    assert.equal(afterCampaigns.count, beforeCampaigns.count);
+    assert.equal(afterTasks.count, beforeTasks.count);
+    assert.equal(afterEvents.count, beforeEvents.count);
   });
 });
