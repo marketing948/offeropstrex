@@ -14,7 +14,7 @@ import {
   voluumOffersTable,
   workspaceTrafficSourcesTable,
 } from "@workspace/db";
-import { and, asc, eq, gt, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, ne, sql } from "drizzle-orm";
 import { emitWithinTx } from "./event-bus.ts";
 import type { Action, BatchStatus, Tx } from "./types.ts";
 import { assertNever } from "./types.ts";
@@ -264,6 +264,192 @@ export async function activateNextTrafficSourceRun(
       trafficSourceId: todoTasksTable.trafficSourceId,
     });
   await recordTaskCreatedOperationalEvents(tx, createdCampaignTasks);
+}
+
+const OPEN_TASK_STATUSES_FOR_RECOVERY = ["TODO", "IN_PROGRESS"] as const;
+
+export type RecreateCreateTasksResult = {
+  runId: number;
+  trafficSourceId: number;
+  createdTasks: Array<{ id: number; taskType: string }>;
+  idempotent: boolean;
+};
+
+async function hasOpenCreateVoluumTask(
+  tx: Tx,
+  workspaceId: number,
+  batchId: number,
+  taskType: "create_voluum_campaign_ios" | "create_voluum_campaign_android",
+): Promise<boolean> {
+  const [row] = await tx
+    .select({ id: todoTasksTable.id })
+    .from(todoTasksTable)
+    .where(
+      and(
+        eq(todoTasksTable.workspaceId, workspaceId),
+        eq(todoTasksTable.relatedBatchId, batchId),
+        eq(todoTasksTable.taskType, taskType),
+        inArray(todoTasksTable.status, [...OPEN_TASK_STATUSES_FOR_RECOVERY]),
+      ),
+    )
+    .limit(1);
+  return row != null;
+}
+
+/**
+ * Slice 8A — recreate missing create_voluum_campaign_* tasks for the active run only.
+ * Does not advance progression or duplicate open tasks.
+ */
+export async function recreateMissingCreateVoluumCampaignTasks(
+  workspaceId: number,
+  batchId: number,
+  tx: Tx,
+): Promise<RecreateCreateTasksResult> {
+  const [activeRun] = await tx
+    .select({
+      id: batchTrafficSourceRunsTable.id,
+      trafficSourceId: batchTrafficSourceRunsTable.trafficSourceId,
+      iosCampaignId: batchTrafficSourceRunsTable.iosCampaignId,
+      androidCampaignId: batchTrafficSourceRunsTable.androidCampaignId,
+    })
+    .from(batchTrafficSourceRunsTable)
+    .where(
+      and(
+        eq(batchTrafficSourceRunsTable.workspaceId, workspaceId),
+        eq(batchTrafficSourceRunsTable.batchId, batchId),
+        eq(batchTrafficSourceRunsTable.status, "active"),
+      ),
+    )
+    .orderBy(desc(batchTrafficSourceRunsTable.position))
+    .limit(1);
+
+  if (!activeRun) {
+    throw new Error("No active traffic source run for this batch");
+  }
+
+  const [batch] = await tx
+    .select({
+      employeeId: testingBatchesTable.employeeId,
+      batchName: testingBatchesTable.batchName,
+    })
+    .from(testingBatchesTable)
+    .where(
+      and(
+        eq(testingBatchesTable.id, batchId),
+        eq(testingBatchesTable.workspaceId, workspaceId),
+      ),
+    )
+    .limit(1);
+  if (!batch?.employeeId) {
+    throw new Error("Batch has no assigned worker");
+  }
+
+  const [source] = await tx
+    .select({ name: workspaceTrafficSourcesTable.name })
+    .from(workspaceTrafficSourcesTable)
+    .where(
+      and(
+        eq(workspaceTrafficSourcesTable.id, activeRun.trafficSourceId),
+        eq(workspaceTrafficSourcesTable.workspaceId, workspaceId),
+      ),
+    )
+    .limit(1);
+  const sourceName = source?.name ?? `traffic source #${activeRun.trafficSourceId}`;
+  const batchName = batch.batchName ?? `Batch #${batchId}`;
+
+  const beforeIds = new Set(
+    (
+      await tx
+        .select({ id: todoTasksTable.id })
+        .from(todoTasksTable)
+        .where(
+          and(
+            eq(todoTasksTable.workspaceId, workspaceId),
+            eq(todoTasksTable.relatedBatchId, batchId),
+            inArray(todoTasksTable.taskType, [
+              "create_voluum_campaign_ios",
+              "create_voluum_campaign_android",
+            ]),
+            inArray(todoTasksTable.status, [...OPEN_TASK_STATUSES_FOR_RECOVERY]),
+          ),
+        )
+    ).map((r) => r.id),
+  );
+
+  const toCreate: Array<Extract<Action, { type: "CreateTask" }>> = [];
+
+  if (
+    activeRun.iosCampaignId == null &&
+    !(await hasOpenCreateVoluumTask(tx, workspaceId, batchId, "create_voluum_campaign_ios"))
+  ) {
+    toCreate.push({
+      type: "CreateTask",
+      workspaceId,
+      data: {
+        employeeId: batch.employeeId,
+        relatedBatchId: batchId,
+        title: `Create Voluum campaign (iOS) for ${batchName} on ${sourceName}`,
+        taskType: "create_voluum_campaign_ios",
+        priority: "high",
+        trafficSourceId: activeRun.trafficSourceId,
+      },
+    });
+  }
+
+  if (
+    activeRun.androidCampaignId == null &&
+    !(await hasOpenCreateVoluumTask(tx, workspaceId, batchId, "create_voluum_campaign_android"))
+  ) {
+    toCreate.push({
+      type: "CreateTask",
+      workspaceId,
+      data: {
+        employeeId: batch.employeeId,
+        relatedBatchId: batchId,
+        title: `Create Voluum campaign (Android) for ${batchName} on ${sourceName}`,
+        taskType: "create_voluum_campaign_android",
+        priority: "high",
+        trafficSourceId: activeRun.trafficSourceId,
+      },
+    });
+  }
+
+  if (toCreate.length === 0) {
+    return {
+      runId: activeRun.id,
+      trafficSourceId: activeRun.trafficSourceId,
+      createdTasks: [],
+      idempotent: true,
+    };
+  }
+
+  await applyActions(toCreate, tx);
+
+  const afterRows = await tx
+    .select({ id: todoTasksTable.id, taskType: todoTasksTable.taskType })
+    .from(todoTasksTable)
+    .where(
+      and(
+        eq(todoTasksTable.workspaceId, workspaceId),
+        eq(todoTasksTable.relatedBatchId, batchId),
+        inArray(todoTasksTable.taskType, [
+          "create_voluum_campaign_ios",
+          "create_voluum_campaign_android",
+        ]),
+        inArray(todoTasksTable.status, [...OPEN_TASK_STATUSES_FOR_RECOVERY]),
+      ),
+    );
+
+  const createdTasks = afterRows
+    .filter((row) => !beforeIds.has(row.id))
+    .map((row) => ({ id: row.id, taskType: row.taskType }));
+
+  return {
+    runId: activeRun.id,
+    trafficSourceId: activeRun.trafficSourceId,
+    createdTasks,
+    idempotent: createdTasks.length === 0,
+  };
 }
 
 /**
