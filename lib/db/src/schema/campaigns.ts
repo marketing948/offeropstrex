@@ -2,6 +2,7 @@ import { pgTable, text, serial, timestamp, integer, numeric, pgEnum } from "driz
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { workspacesTable } from "./workspaces";
+import { employeesTable } from "./employees";
 import { testingBatchesTable } from "./testing-batches";
 import { workspaceTrafficSourcesTable } from "./workspace-traffic-sources";
 import { affiliateNetworksTable } from "./affiliate-networks";
@@ -32,6 +33,13 @@ export const campaignPurposeEnum = pgEnum("campaign_purpose", [
   "testing",
   "working",
   "scaling",
+]);
+
+export const campaignManualCloseReasonEnum = pgEnum("campaign_manual_close_reason", [
+  "opened_by_mistake",
+  "no_traffic_dead_campaign",
+  "technical_issue",
+  "winners_found",
 ]);
 
 export const campaignsTable = pgTable("campaigns", {
@@ -66,6 +74,13 @@ export const campaignsTable = pgTable("campaigns", {
   conversions: integer("conversions"),
   roi: numeric("roi"),
   notes: text("notes"),
+  closeSource: text("close_source"),
+  manualCloseReason: campaignManualCloseReasonEnum("manual_close_reason"),
+  manualCloseNote: text("manual_close_note"),
+  manualClosedAt: timestamp("manual_closed_at", { withTimezone: true }),
+  manualClosedByEmployeeId: integer("manual_closed_by_employee_id").references(() => employeesTable.id, {
+    onDelete: "set null",
+  }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (_t) => ({
