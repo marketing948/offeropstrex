@@ -12,6 +12,7 @@ import {
   Wrench,
   TrendingUp,
   ListChecks,
+  ClipboardList,
   type LucideIcon,
 } from "lucide-react";
 
@@ -83,6 +84,17 @@ const ACTIVE: Record<string, TaskTypeVisual> = {
     iconFg: "text-slate-700 dark:text-slate-300",
     badgeBg: "bg-slate-100 dark:bg-slate-800/60",
     badgeFg: "text-slate-800 dark:text-slate-200",
+    isLegacy: false,
+  },
+  MANUAL: {
+    icon: ClipboardList,
+    label: "Manual",
+    subtext: "Ops reminder — complete when done",
+    accentBar: "bg-indigo-500",
+    iconBg: "bg-indigo-100 dark:bg-indigo-900/40",
+    iconFg: "text-indigo-700 dark:text-indigo-300",
+    badgeBg: "bg-indigo-100 dark:bg-indigo-900/40",
+    badgeFg: "text-indigo-800 dark:text-indigo-200",
     isLegacy: false,
   },
 };

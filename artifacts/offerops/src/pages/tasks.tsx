@@ -1,28 +1,40 @@
-// Phase 9b — Tasks page rebuilt around the Bible §8 task taxonomy.
-//
-// Pivot Phase 5 (Task #28): Clicking a task row opens a per-task-type
-// detail drawer (TaskDetailDrawer) with the right form for the task —
-// campaign creation, go-live confirmation, results entry, etc. The
-// drawer mutates the underlying domain row and then marks the task
-// DONE; the engine handles all downstream effects.
-//
-// Task #40: Each task type now has a distinct visual identity (icon,
-// accent color, label) sourced from `lib/task-type-visuals.ts`. A
-// per-type filter chip row sits above the table, and empty states
-// render the active filter's icon faded out.
+/**
+ * Worker View Phase 1 — "Today's work" at /tasks.
+ * Assigned open tasks (CampaignOps + MANUAL) with filters and completion flows.
+ */
 
 import { useMemo, useState } from "react";
-import { useListTodoTasks, useUpdateTodoTask, TodoTaskStatus, type TodoTask } from "@workspace/api-client-react";
+import {
+  useListTodoTasks,
+  useUpdateTodoTask,
+  useListWorkspaceTrafficSources,
+  getListTodoTasksQueryKey,
+  getListWorkspaceTrafficSourcesQueryKey,
+  type TodoTask,
+  type TodoTaskStatus,
+} from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useWorkspace } from "@/lib/workspace-context";
-import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useQueryClient } from "@tanstack/react-query";
-import { getListTodoTasksQueryKey } from "@workspace/api-client-react";
-import { TaskDetailDrawer } from "@/components/task-detail-drawer";
-import { ACTIVE_TASK_TYPES, getTaskTypeVisual } from "@/lib/task-type-visuals";
 import { useAuth } from "@/lib/auth";
+import { useQueryClient } from "@tanstack/react-query";
+import { TaskDetailDrawer } from "@/components/task-detail-drawer";
+import { getTaskTypeVisual } from "@/lib/task-type-visuals";
+import {
+  compareWorkerTasks,
+  formatDueDate,
+  isCampaignOpsTask,
+  isManualTask,
+  isOpenWorkerTask,
+  isOverdueTask,
+  matchesWorkerFilter,
+  platformLabel,
+  taskInstructions,
+  type WorkerTaskFilter,
+} from "@/lib/worker-tasks";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { CalendarClock, CheckSquare, ChevronRight, PlayCircle } from "lucide-react";
 
 const STATUS_LABEL: Record<TodoTaskStatus, string> = {
   TODO: "To do",
@@ -31,135 +43,142 @@ const STATUS_LABEL: Record<TodoTaskStatus, string> = {
   DONE: "Done",
 };
 
-const STATUS_ORDER: Record<TodoTaskStatus, number> = {
-  TODO: 0,
-  IN_PROGRESS: 1,
-  BLOCKED: 2,
-  DONE: 3,
-};
-const PRIORITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
-const CAMPAIGN_OPS_TASK_TYPES = new Set([
-  "create_voluum_campaign_ios",
-  "create_voluum_campaign_android",
-  "take_campaign_live",
-  "find_winners",
-  "all_traffic_sources_tested",
-]);
+const FILTER_OPTIONS: { key: WorkerTaskFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "campaignops", label: "CampaignOps" },
+  { key: "manual", label: "Manual" },
+  { key: "overdue", label: "Overdue" },
+  { key: "blocked", label: "Blocked" },
+];
 
-type TypeFilter = "all" | string;
+function todayHeading(): string {
+  return new Date().toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+}
 
 export default function Tasks() {
   const { activeWorkspaceId } = useWorkspace();
   const { currentEmployee } = useAuth();
-  const isAdmin = currentEmployee?.role === "admin";
-  const taskParams = { workspace_id: activeWorkspaceId ?? 0 };
-  const { data: tasks, isLoading } = useListTodoTasks(
-    taskParams,
-    wsQueryOpts(activeWorkspaceId, getListTodoTasksQueryKey(taskParams)),
-  );
-  const updateTask = useUpdateTodoTask();
   const queryClient = useQueryClient();
-  const [selectedTask, setSelectedTask] = useState<TodoTask | null>(null);
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const employeeId = currentEmployee?.id;
 
-  const handleStatusChange = async (id: number, status: TodoTaskStatus) => {
-    if (status === "DONE" && !isAdmin) return;
-    await updateTask.mutateAsync({ id, data: { status } });
-    if (activeWorkspaceId) {
-      queryClient.invalidateQueries({ queryKey: getListTodoTasksQueryKey({ workspace_id: activeWorkspaceId }) });
-    }
+  const taskParams = {
+    workspace_id: activeWorkspaceId ?? 0,
+    ...(employeeId ? { employee_id: employeeId } : {}),
   };
 
-  const sorted = useMemo(() => {
-    const list = (tasks ?? [])
-      .slice()
-      .sort((a, b) => {
-        const sa = STATUS_ORDER[a.status as TodoTaskStatus] ?? 9;
-        const sb = STATUS_ORDER[b.status as TodoTaskStatus] ?? 9;
-        if (sa !== sb) return sa - sb;
-        const pa = PRIORITY_ORDER[a.priority] ?? 9;
-        const pb = PRIORITY_ORDER[b.priority] ?? 9;
-        return pa - pb;
-      });
-    if (typeFilter === "all") return list;
-    return list.filter((t) => (t.taskType as string) === typeFilter);
-  }, [tasks, typeFilter]);
+  const { data: tasks, isLoading } = useListTodoTasks(
+    taskParams,
+    wsQueryOpts(activeWorkspaceId, getListTodoTasksQueryKey(taskParams), {
+      staleTime: 20_000,
+    }),
+  );
 
-  // Counts per active task type for the filter chips.
-  const counts = useMemo(() => {
-    const c: Record<string, number> = {};
-    for (const t of tasks ?? []) {
-      if (t.status === "DONE") continue;
-      const k = t.taskType as string;
-      c[k] = (c[k] ?? 0) + 1;
-    }
-    return c;
-  }, [tasks]);
+  const tsParams = { workspace_id: activeWorkspaceId ?? 0 };
+  const { data: trafficSources = [] } = useListWorkspaceTrafficSources(
+    tsParams,
+    wsQueryOpts(activeWorkspaceId, getListWorkspaceTrafficSourcesQueryKey(tsParams)),
+  );
 
-  const totalOpen = useMemo(
-    () => (tasks ?? []).filter((t) => t.status !== "DONE").length,
+  const trafficSourceNames = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const ts of trafficSources) map.set(ts.id, ts.name);
+    return map;
+  }, [trafficSources]);
+
+  const updateTask = useUpdateTodoTask();
+  const [selectedTask, setSelectedTask] = useState<TodoTask | null>(null);
+  const [filter, setFilter] = useState<WorkerTaskFilter>("all");
+
+  const openTasks = useMemo(
+    () => (tasks ?? []).filter(isOpenWorkerTask),
     [tasks],
   );
 
-  const filterVisual = typeFilter === "all" ? null : getTaskTypeVisual(typeFilter);
+  const filtered = useMemo(() => {
+    return openTasks
+      .filter((t) => matchesWorkerFilter(t, filter))
+      .sort(compareWorkerTasks);
+  }, [openTasks, filter]);
+
+  const counts = useMemo(() => {
+    const c: Record<WorkerTaskFilter, number> = {
+      all: openTasks.length,
+      campaignops: openTasks.filter(isCampaignOpsTask).length,
+      manual: openTasks.filter(isManualTask).length,
+      overdue: openTasks.filter((t) => isOverdueTask(t)).length,
+      blocked: openTasks.filter((t) => t.status === "BLOCKED").length,
+    };
+    return c;
+  }, [openTasks]);
+
+  async function invalidateTasks() {
+    if (!activeWorkspaceId) return;
+    await queryClient.invalidateQueries({
+      queryKey: getListTodoTasksQueryKey({ workspace_id: activeWorkspaceId, employee_id: employeeId }),
+    });
+  }
+
+  async function markInProgress(task: TodoTask) {
+    if (task.status === "IN_PROGRESS") return;
+    await updateTask.mutateAsync({ id: task.id, data: { status: "IN_PROGRESS" } });
+    await invalidateTasks();
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold tracking-tight">Tasks</h1>
-      </div>
+    <div className="mx-auto max-w-3xl space-y-6 pb-8">
+      <header>
+        <div className="flex items-center gap-2 text-primary">
+          <CheckSquare className="h-5 w-5" />
+          <span className="text-xs font-semibold uppercase tracking-widest">Today&apos;s work</span>
+        </div>
+        <h1 className="mt-1 text-2xl font-black tracking-tight">My tasks</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{todayHeading()}</p>
+        {!isLoading && (
+          <p className="mt-2 text-sm font-medium text-foreground">
+            {openTasks.length === 0
+              ? "Nothing assigned right now."
+              : `${openTasks.length} open task${openTasks.length === 1 ? "" : "s"}`}
+            {counts.overdue > 0 && (
+              <span className="ml-2 text-red-600">· {counts.overdue} overdue</span>
+            )}
+          </p>
+        )}
+      </header>
 
-      {/* Per-type filter chips */}
       <div className="flex flex-wrap gap-2">
-        <FilterChip
-          label="All"
-          count={totalOpen}
-          active={typeFilter === "all"}
-          onClick={() => setTypeFilter("all")}
-        />
-        {ACTIVE_TASK_TYPES.map(({ key, visual }) => {
-          const Icon = visual.icon;
-          const active = typeFilter === key;
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setTypeFilter(key)}
-              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-                active
-                  ? "border-foreground/20 bg-foreground/5"
-                  : "border-border hover:bg-muted/40"
-              }`}
-            >
-              <span className={`flex h-5 w-5 items-center justify-center rounded-full ${visual.iconBg}`}>
-                <Icon className={`h-3 w-3 ${visual.iconFg}`} />
-              </span>
-              <span>{visual.label}</span>
-              {counts[key] != null && counts[key] > 0 && (
-                <span className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${visual.badgeBg} ${visual.badgeFg}`}>
-                  {counts[key]}
-                </span>
-              )}
-            </button>
-          );
-        })}
+        {FILTER_OPTIONS.map(({ key, label }) => (
+          <FilterChip
+            key={key}
+            label={label}
+            count={counts[key]}
+            active={filter === key}
+            onClick={() => setFilter(key)}
+          />
+        ))}
       </div>
 
       {isLoading ? (
-        <div className="rounded-md border border-border bg-card/50 py-12 text-center text-muted-foreground">
-          Loading tasks…
+        <div className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-36 w-full rounded-xl" />
+          ))}
         </div>
-      ) : sorted.length === 0 ? (
-        <EmptyState filterVisual={filterVisual} />
+      ) : filtered.length === 0 ? (
+        <EmptyState filter={filter} />
       ) : (
-        <div className="space-y-2">
-          {sorted.map((task) => (
-            <TaskRow
+        <div className="space-y-3">
+          {filtered.map((task) => (
+            <WorkerTaskCard
               key={task.id}
               task={task}
-              isAdmin={isAdmin}
+              trafficSourceNames={trafficSourceNames}
               onOpen={() => setSelectedTask(task)}
-              onStatusChange={(s) => handleStatusChange(task.id, s)}
+              onStart={() => markInProgress(task)}
+              starting={updateTask.isPending}
             />
           ))}
         </div>
@@ -194,135 +213,185 @@ function FilterChip({
       }`}
     >
       <span>{label}</span>
-      <span className="ml-0.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
-        {count}
-      </span>
+      {count > 0 && (
+        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-muted-foreground">
+          {count}
+        </span>
+      )}
     </button>
   );
 }
 
-function TaskRow({
+function WorkerTaskCard({
   task,
-  isAdmin,
+  trafficSourceNames,
   onOpen,
-  onStatusChange,
+  onStart,
+  starting,
 }: {
   task: TodoTask;
-  isAdmin: boolean;
+  trafficSourceNames: Map<number, string>;
   onOpen: () => void;
-  onStatusChange: (s: TodoTaskStatus) => void;
+  onStart: () => void;
+  starting: boolean;
 }) {
   const visual = getTaskTypeVisual(task.taskType as string);
   const Icon = visual.icon;
-  const isDone = task.status === "DONE";
-  const isCampaignOpsTask = CAMPAIGN_OPS_TASK_TYPES.has(task.taskType as string);
-  const canDirectComplete = isAdmin && !isCampaignOpsTask;
-  const flashing = (task as { flashing?: boolean }).flashing;
-  const statusOptions = Object.values(TodoTaskStatus).filter(
-    (s) => canDirectComplete || s !== "DONE" || task.status === "DONE",
-  );
+  const overdue = isOverdueTask(task);
+  const dueLabel = formatDueDate(task.dueDate);
+  const platform = platformLabel(task);
+  const trafficSourceId = (task as { trafficSourceId?: number | null }).trafficSourceId;
+  const trafficSourceName =
+    task.trafficSourceName ??
+    (trafficSourceId != null ? trafficSourceNames.get(trafficSourceId) : null);
+  const instructions = taskInstructions(task);
+  const canStart = task.status === "TODO";
+  const isBlocked = task.status === "BLOCKED";
+  const blockedReason = (task as { blockedReason?: string | null }).blockedReason;
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      className={`group relative flex cursor-pointer items-stretch overflow-hidden rounded-md border border-border bg-card/50 transition hover:bg-muted/30 ${
-        isDone ? "opacity-60" : ""
-      } ${flashing && !isDone ? "animate-pulse bg-amber-50/50 dark:bg-amber-950/20" : ""}`}
+    <article
+      className={`overflow-hidden rounded-xl border bg-card shadow-sm transition hover:shadow-md ${
+        isBlocked
+          ? "border-amber-300/80 bg-amber-50/30 dark:bg-amber-950/10"
+          : overdue
+            ? "border-red-300/70 ring-1 ring-red-200/50"
+            : "border-border"
+      }`}
     >
-      {/* Accent stripe */}
-      <div className={`w-1 shrink-0 ${visual.accentBar}`} aria-hidden />
+      <div className={`h-1 ${visual.accentBar}`} />
+      <div className="p-4">
+        <div className="flex items-start gap-3">
+          <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${visual.iconBg}`}>
+            <Icon className={`h-5 w-5 ${visual.iconFg}`} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className={`text-[10px] font-semibold ${visual.badgeBg} ${visual.badgeFg} border-0`}>
+                {visual.label}
+              </Badge>
+              <Badge
+                variant={
+                  task.priority === "high"
+                    ? "destructive"
+                    : task.priority === "medium"
+                      ? "default"
+                      : "secondary"
+                }
+                className="text-[10px] capitalize"
+              >
+                {task.priority}
+              </Badge>
+              <StatusPill status={task.status} />
+              {isManualTask(task) && (
+                <Badge variant="secondary" className="text-[10px]">
+                  Manual
+                </Badge>
+              )}
+              {isCampaignOpsTask(task) && (
+                <Badge variant="secondary" className="text-[10px]">
+                  CampaignOps
+                </Badge>
+              )}
+            </div>
 
-      {/* Icon chip */}
-      <div className="flex items-center pl-3 pr-1">
-        <span className={`flex h-9 w-9 items-center justify-center rounded-md ${visual.iconBg}`}>
-          <Icon className={`h-4 w-4 ${visual.iconFg}`} />
-        </span>
-      </div>
+            <h2 className="mt-2 text-base font-semibold leading-snug text-foreground">{task.title}</h2>
 
-      {/* Body */}
-      <div className="flex flex-1 items-center gap-3 px-3 py-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${visual.badgeBg} ${visual.badgeFg}`}>
-              {visual.label}
-            </span>
-            {visual.isLegacy && (
-              <span className="inline-flex items-center rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                Legacy
-              </span>
+            <p className="mt-1.5 text-sm text-muted-foreground line-clamp-2">{instructions}</p>
+
+            <dl className="mt-3 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+              {task.batchName && (
+                <div>
+                  <dt className="inline font-medium text-foreground/80">Batch: </dt>
+                  <dd className="inline">{task.batchName}</dd>
+                </div>
+              )}
+              {platform && (
+                <div>
+                  <dt className="inline font-medium text-foreground/80">Platform: </dt>
+                  <dd className="inline">{platform}</dd>
+                </div>
+              )}
+              {trafficSourceName && (
+                <div className="sm:col-span-2">
+                  <dt className="inline font-medium text-foreground/80">Traffic source: </dt>
+                  <dd className="inline">{trafficSourceName}</dd>
+                </div>
+              )}
+              {dueLabel && (
+                <div className={overdue ? "text-red-600 sm:col-span-2" : "sm:col-span-2"}>
+                  <dt className="inline font-medium">
+                    <CalendarClock className="mr-0.5 inline h-3 w-3" />
+                    Due:{" "}
+                  </dt>
+                  <dd className="inline font-medium">{dueLabel}</dd>
+                  {overdue && <span className="ml-1 font-semibold">(overdue)</span>}
+                </div>
+              )}
+            </dl>
+
+            {isBlocked && blockedReason && (
+              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+                Blocked: {blockedReason}
+              </p>
             )}
-            <Badge
-              variant={
-                task.priority === "high"
-                  ? "destructive"
-                  : task.priority === "medium"
-                  ? "default"
-                  : "secondary"
-              }
-              className="text-[10px]"
-            >
-              {task.priority}
-            </Badge>
-          </div>
-          <div className={`mt-1 text-sm font-medium ${isDone ? "line-through text-muted-foreground" : ""}`}>
-            {task.title}
-          </div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-            <span>{visual.subtext}</span>
-            {task.batchName && <span>· Batch: {task.batchName}</span>}
-            {task.employeeName && <span>· {task.employeeName}</span>}
           </div>
         </div>
 
-        <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-2">
-          <Select value={task.status} onValueChange={(val) => onStatusChange(val as TodoTaskStatus)}>
-            <SelectTrigger className="h-8 w-[130px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {statusOptions.map((s) => (
-                <SelectItem key={s} value={s}>
-                  {STATUS_LABEL[s] ?? s}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {canDirectComplete && (
-            <Checkbox
-              checked={isDone}
-              onCheckedChange={(checked) => onStatusChange(checked ? "DONE" : "TODO")}
-              aria-label="Admin override: mark task done"
-            />
+        <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-border/60 pt-3">
+          {canStart && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={starting}
+              onClick={(e) => {
+                e.stopPropagation();
+                void onStart();
+              }}
+            >
+              <PlayCircle className="h-3.5 w-3.5" />
+              Start
+            </Button>
           )}
+          <Button type="button" size="sm" className="gap-1.5" onClick={onOpen}>
+            {task.status === "IN_PROGRESS" ? "Continue" : "Open"}
+            <ChevronRight className="h-3.5 w-3.5" />
+          </Button>
         </div>
       </div>
-    </div>
+    </article>
   );
 }
 
-function EmptyState({ filterVisual }: { filterVisual: ReturnType<typeof getTaskTypeVisual> | null }) {
-  if (!filterVisual) {
-    return (
-      <div className="rounded-md border border-dashed border-border bg-card/30 py-12 text-center text-sm text-muted-foreground">
-        No tasks found.
-      </div>
-    );
-  }
-  const Icon = filterVisual.icon;
+function StatusPill({ status }: { status: TodoTaskStatus }) {
+  const styles =
+    status === "IN_PROGRESS"
+      ? "bg-blue-50 text-blue-800 border-blue-200"
+      : status === "BLOCKED"
+        ? "bg-amber-50 text-amber-900 border-amber-200"
+        : "bg-slate-50 text-slate-700 border-slate-200";
   return (
-    <div className="rounded-md border border-dashed border-border bg-card/30 py-12 text-center">
-      <span className={`mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full ${filterVisual.iconBg} opacity-60`}>
-        <Icon className={`h-6 w-6 ${filterVisual.iconFg}`} />
-      </span>
-      <p className="text-sm text-muted-foreground">No {filterVisual.label.toLowerCase()} right now.</p>
+    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${styles}`}>
+      {STATUS_LABEL[status]}
+    </span>
+  );
+}
+
+function EmptyState({ filter }: { filter: WorkerTaskFilter }) {
+  const messages: Record<WorkerTaskFilter, string> = {
+    all: "You have no open tasks assigned. Check back later or ask your lead for work.",
+    campaignops: "No open CampaignOps tasks right now.",
+    manual: "No manual reminders assigned.",
+    overdue: "Nothing overdue — nice work.",
+    blocked: "No blocked tasks.",
+  };
+  return (
+    <div className="rounded-xl border border-dashed border-border bg-muted/20 px-6 py-14 text-center">
+      <CheckSquare className="mx-auto mb-3 h-10 w-10 text-muted-foreground/35" />
+      <p className="text-sm font-medium text-foreground">All clear</p>
+      <p className="mt-1 text-sm text-muted-foreground">{messages[filter]}</p>
     </div>
   );
 }

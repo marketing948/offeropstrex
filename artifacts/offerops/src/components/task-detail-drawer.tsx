@@ -166,6 +166,8 @@ export function TaskDetailDrawer({
             <ResultsForm task={task} onDone={markDone} onCancel={onClose} />
           ) : task.taskType === "MOVE_WINNERS_TO_SCALED_CAMPAIGN" ? (
             <MoveWinnersForm onDone={markDone} onCancel={onClose} />
+          ) : (task.taskType as string) === "MANUAL" ? (
+            <ManualTaskForm task={task} onCompleted={() => { invalidate(); onClose(); }} />
           ) : (
             <GenericForm onDone={markDone} onCancel={onClose} />
           )}
@@ -692,6 +694,42 @@ function AllTrafficSourcesTestedForm({ task, onCompleted }: { task: TodoTask; on
       </p>
       <div className="flex justify-end gap-2 pt-2">
         <Button size="sm" onClick={submit} disabled={pending}>{pending ? "Saving…" : "Acknowledge"}</Button>
+      </div>
+    </div>
+  );
+}
+
+function ManualTaskForm({
+  task,
+  onCompleted,
+}: {
+  task: TodoTask;
+  onCompleted: () => void;
+}) {
+  const complete = useCompleteTask();
+  const [pending, setPending] = useState(false);
+
+  async function submit() {
+    setPending(true);
+    const ok = await complete(task.id, {});
+    setPending(false);
+    if (ok) onCompleted();
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Mark this reminder complete when you have finished the work. This does not trigger CampaignOps automation.
+      </p>
+      {task.description?.trim() && (
+        <div className="rounded-md border bg-muted/30 p-3 text-sm whitespace-pre-wrap">
+          {task.description}
+        </div>
+      )}
+      <div className="flex justify-end gap-2 pt-2">
+        <Button size="sm" onClick={submit} disabled={pending}>
+          {pending ? "Completing…" : "Mark complete"}
+        </Button>
       </div>
     </div>
   );
