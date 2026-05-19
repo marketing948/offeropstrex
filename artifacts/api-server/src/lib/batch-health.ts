@@ -61,6 +61,32 @@ export type BatchHealthFlags = {
   openTaskCount: number;
 };
 
+export type BatchHealthRecommendationSeverity = "info" | "warning" | "critical";
+
+export type BatchHealthRecommendationCode =
+  | "NO_ACTIVE_RUN"
+  | "ACTIVE_RUN_MISSING_CREATE_TASKS"
+  | "WAITING_FOR_SIBLING_PLATFORM"
+  | "TERMINAL_RUN_NOT_ADVANCED"
+  | "RECENT_RECONCILIATION_VIOLATION"
+  | "HEALTHY";
+
+export type BatchHealthRecommendation = {
+  code: BatchHealthRecommendationCode;
+  severity: BatchHealthRecommendationSeverity;
+  message: string;
+  relatedRunId?: number;
+  relatedTaskIds?: number[];
+  relatedCampaignIds?: number[];
+  suggestedActionType?: string;
+};
+
+const SEVERITY_ORDER: Record<BatchHealthRecommendationSeverity, number> = {
+  critical: 0,
+  warning: 1,
+  info: 2,
+};
+
 function isPlatformTerminal(status: string): boolean {
   return TERMINAL_PLATFORM_STATUSES.has(status);
 }
@@ -124,6 +150,112 @@ export function deriveBatchHealthFlags(
     hasRecentReconciliationViolation,
     openTaskCount,
   };
+}
+
+function campaignIdsForRun(run: BatchHealthActiveRun): number[] {
+  return [run.iosCampaignId, run.androidCampaignId].filter(
+    (id): id is number => id != null,
+  );
+}
+
+function openCreateTaskIdsForRun(
+  openTasks: BatchHealthOpenTask[],
+  trafficSourceId: number,
+): number[] {
+  return openTasks
+    .filter(
+      (task) =>
+        task.trafficSourceId === trafficSourceId &&
+        (task.taskType === CREATE_VOLUUM_IOS ||
+          task.taskType === CREATE_VOLUUM_ANDROID),
+    )
+    .map((task) => task.id);
+}
+
+/** Read-only operator guidance derived from flags and batch context. */
+export function deriveBatchHealthRecommendations(
+  flags: BatchHealthFlags,
+  activeRun: BatchHealthActiveRun | null,
+  openTasks: BatchHealthOpenTask[],
+): BatchHealthRecommendation[] {
+  const recommendations: BatchHealthRecommendation[] = [];
+
+  if (flags.hasRecentReconciliationViolation) {
+    recommendations.push({
+      code: "RECENT_RECONCILIATION_VIOLATION",
+      severity: "warning",
+      message:
+        "A recent reconciliation pass reported violations affecting this batch.",
+      suggestedActionType: "review_reconciliation",
+    });
+  }
+
+  if (!flags.hasActiveRun) {
+    recommendations.push({
+      code: "NO_ACTIVE_RUN",
+      severity: "info",
+      message: "No traffic source run is currently active for this batch.",
+      suggestedActionType: "activate_traffic_source_run",
+    });
+  }
+
+  if (activeRun != null) {
+    const relatedCampaignIds = campaignIdsForRun(activeRun);
+    const campaignIdsField =
+      relatedCampaignIds.length > 0 ? relatedCampaignIds : undefined;
+
+    if (flags.activeRunFullyTerminalButNotAdvanced) {
+      recommendations.push({
+        code: "TERMINAL_RUN_NOT_ADVANCED",
+        severity: "critical",
+        message: `Active run for "${activeRun.trafficSourceName}" has both platforms terminal but the run has not advanced.`,
+        relatedRunId: activeRun.runId,
+        relatedCampaignIds: campaignIdsField,
+        suggestedActionType: "advance_traffic_source_run",
+      });
+    } else if (flags.activeRunPartiallyTerminal) {
+      const waitingPlatform = isPlatformTerminal(activeRun.iosStatus)
+        ? "android"
+        : "ios";
+      recommendations.push({
+        code: "WAITING_FOR_SIBLING_PLATFORM",
+        severity: "info",
+        message: `Waiting for the ${waitingPlatform} platform to finish on run "${activeRun.trafficSourceName}".`,
+        relatedRunId: activeRun.runId,
+        relatedCampaignIds: campaignIdsField,
+        suggestedActionType: "complete_platform_run",
+      });
+    }
+
+    if (flags.activeRunMissingCreateTasks) {
+      const relatedTaskIds = openCreateTaskIdsForRun(
+        openTasks,
+        activeRun.trafficSourceId,
+      );
+      recommendations.push({
+        code: "ACTIVE_RUN_MISSING_CREATE_TASKS",
+        severity: "warning",
+        message: `Active run for "${activeRun.trafficSourceName}" is missing open create Voluum campaign tasks for one or more platforms.`,
+        relatedRunId: activeRun.runId,
+        relatedTaskIds:
+          relatedTaskIds.length > 0 ? relatedTaskIds : undefined,
+        suggestedActionType: "seed_create_voluum_tasks",
+      });
+    }
+  }
+
+  if (recommendations.length === 0) {
+    recommendations.push({
+      code: "HEALTHY",
+      severity: "info",
+      message: "Batch operational health looks normal; no issues detected.",
+    });
+  }
+
+  recommendations.sort(
+    (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity],
+  );
+  return recommendations;
 }
 
 /** True when the event clearly belongs to this batch (workspace already scoped). */

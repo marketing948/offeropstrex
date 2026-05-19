@@ -179,13 +179,35 @@ async function seedBatchWithRuns() {
   };
 }
 
+type HealthRecommendation = {
+  code: string;
+  severity: string;
+  message: string;
+  relatedRunId?: number;
+  relatedTaskIds?: number[];
+  relatedCampaignIds?: number[];
+  suggestedActionType?: string;
+};
+
 type HealthBody = {
   batch: Record<string, unknown>;
   activeRun: Record<string, unknown> | null;
   openTasks: Array<Record<string, unknown>>;
   recentEvents: Array<Record<string, unknown>>;
   flags: Record<string, unknown>;
+  recommendations: HealthRecommendation[];
 };
+
+function recommendationCodes(body: HealthBody): string[] {
+  return body.recommendations.map((r) => r.code);
+}
+
+function findRecommendation(
+  body: HealthBody,
+  code: string,
+): HealthRecommendation | undefined {
+  return body.recommendations.find((r) => r.code === code);
+}
 
 describe("GET /admin/batches/:id/health", { concurrency: false }, () => {
   test("workspace member can fetch health for accessible batch", async () => {
@@ -207,6 +229,7 @@ describe("GET /admin/batches/:id/health", { concurrency: false }, () => {
     assert.ok(typeof body.batch.trafficSourceStep === "number");
     assert.ok(body.flags);
     assert.equal(typeof body.flags.hasActiveRun, "boolean");
+    assert.ok(Array.isArray(body.recommendations));
   });
 
   test("cross-workspace access is rejected", async () => {
@@ -534,5 +557,151 @@ describe("GET /admin/batches/:id/health", { concurrency: false }, () => {
     assert.ok(
       body.recentEvents.some((e) => e.eventType === "RECONCILIATION_VIOLATION"),
     );
+  });
+});
+
+describe("GET /admin/batches/:id/health recommendations", { concurrency: false }, () => {
+  test("healthy batch returns HEALTHY recommendation", async () => {
+    const seed = await seedBatchWithRuns();
+
+    const { response, json } = await request(
+      "GET",
+      `/admin/batches/${seed.batchId}/health`,
+      seed.employeeId,
+    );
+
+    assert.equal(response.status, 200);
+    const body = json as unknown as HealthBody;
+    assert.deepEqual(recommendationCodes(body), ["HEALTHY"]);
+    const healthy = findRecommendation(body, "HEALTHY")!;
+    assert.equal(healthy.severity, "info");
+    assert.ok(healthy.message.length > 0);
+    assert.equal(healthy.suggestedActionType, undefined);
+  });
+
+  test("missing create tasks returns ACTIVE_RUN_MISSING_CREATE_TASKS", async () => {
+    const seed = await seedBatchWithRuns();
+
+    await db
+      .delete(todoTasksTable)
+      .where(eq(todoTasksTable.relatedBatchId, seed.batchId));
+
+    const { response, json } = await request(
+      "GET",
+      `/admin/batches/${seed.batchId}/health`,
+      seed.employeeId,
+    );
+
+    assert.equal(response.status, 200);
+    const body = json as unknown as HealthBody;
+    const rec = findRecommendation(body, "ACTIVE_RUN_MISSING_CREATE_TASKS");
+    assert.ok(rec);
+    assert.equal(rec!.severity, "warning");
+    assert.equal(rec!.relatedRunId, seed.activeRun.id);
+    assert.equal(rec!.suggestedActionType, "seed_create_voluum_tasks");
+    assert.ok(!recommendationCodes(body).includes("HEALTHY"));
+  });
+
+  test("partially terminal run returns WAITING_FOR_SIBLING_PLATFORM", async () => {
+    const seed = await seedBatchWithRuns();
+
+    await db
+      .update(batchTrafficSourceRunsTable)
+      .set({ iosStatus: "completed", androidStatus: "active", status: "active" })
+      .where(eq(batchTrafficSourceRunsTable.id, seed.activeRun.id));
+
+    const { response, json } = await request(
+      "GET",
+      `/admin/batches/${seed.batchId}/health`,
+      seed.employeeId,
+    );
+
+    assert.equal(response.status, 200);
+    const body = json as unknown as HealthBody;
+    const rec = findRecommendation(body, "WAITING_FOR_SIBLING_PLATFORM");
+    assert.ok(rec);
+    assert.equal(rec!.severity, "info");
+    assert.equal(rec!.relatedRunId, seed.activeRun.id);
+    assert.equal(rec!.suggestedActionType, "complete_platform_run");
+    assert.match(rec!.message, /android/i);
+    assert.ok(!recommendationCodes(body).includes("HEALTHY"));
+  });
+
+  test("fully terminal active run returns TERMINAL_RUN_NOT_ADVANCED", async () => {
+    const seed = await seedBatchWithRuns();
+
+    await db
+      .update(batchTrafficSourceRunsTable)
+      .set({
+        iosStatus: "completed",
+        androidStatus: "failed",
+        status: "active",
+      })
+      .where(eq(batchTrafficSourceRunsTable.id, seed.activeRun.id));
+
+    const { response, json } = await request(
+      "GET",
+      `/admin/batches/${seed.batchId}/health`,
+      seed.employeeId,
+    );
+
+    assert.equal(response.status, 200);
+    const body = json as unknown as HealthBody;
+    const rec = findRecommendation(body, "TERMINAL_RUN_NOT_ADVANCED");
+    assert.ok(rec);
+    assert.equal(rec!.severity, "critical");
+    assert.equal(rec!.relatedRunId, seed.activeRun.id);
+    assert.equal(rec!.suggestedActionType, "advance_traffic_source_run");
+    assert.ok(!recommendationCodes(body).includes("HEALTHY"));
+  });
+
+  test("recent reconciliation violation returns RECENT_RECONCILIATION_VIOLATION", async () => {
+    const seed = await seedBatchWithRuns();
+
+    await recordOperationalEvent({
+      workspaceId: seed.workspaceId,
+      entityType: "workspace",
+      entityId: seed.workspaceId,
+      eventType: "RECONCILIATION_VIOLATION",
+      source: "test",
+      payloadJson: {
+        workspaceId: seed.workspaceId,
+        invariant: "invariant4",
+        violationCount: 1,
+        affectedBatchIds: [seed.batchId],
+        reconciliationPassAt: new Date().toISOString(),
+      },
+    });
+
+    const { response, json } = await request(
+      "GET",
+      `/admin/batches/${seed.batchId}/health`,
+      seed.employeeId,
+    );
+
+    assert.equal(response.status, 200);
+    const body = json as unknown as HealthBody;
+    const rec = findRecommendation(body, "RECENT_RECONCILIATION_VIOLATION");
+    assert.ok(rec);
+    assert.equal(rec!.severity, "warning");
+    assert.equal(rec!.suggestedActionType, "review_reconciliation");
+    assert.ok(!recommendationCodes(body).includes("HEALTHY"));
+  });
+
+  test("cross-workspace protection remains green", async () => {
+    const seed = await seedBatchWithRuns();
+    const otherWorkspaceId = await createWorkspace("batch-health-rec-other");
+    const outsiderId = await createEmployee();
+    await assign(outsiderId, otherWorkspaceId);
+
+    const { response, json } = await request(
+      "GET",
+      `/admin/batches/${seed.batchId}/health`,
+      outsiderId,
+    );
+
+    assert.equal(response.status, 403);
+    assert.match(String(json!.error), /Access denied/);
+    assert.equal(json!.recommendations, undefined);
   });
 });

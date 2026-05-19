@@ -18,6 +18,7 @@ import { requireWorkspaceAccess } from "../../lib/workspace-access";
 import {
   BATCH_HEALTH_EVENT_TYPES,
   deriveBatchHealthFlags,
+  deriveBatchHealthRecommendations,
   operationalEventReferencesBatch,
   type BatchHealthActiveRun,
   type BatchHealthOpenTask,
@@ -214,6 +215,11 @@ router.get("/admin/batches/:id/health", async (req, res): Promise<void> => {
   ]);
 
   const flags = deriveBatchHealthFlags(activeRun, openTasks, recentEvents);
+  const recommendations = deriveBatchHealthRecommendations(
+    flags,
+    activeRun,
+    openTasks,
+  );
 
   res.json({
     batch: {
@@ -228,6 +234,7 @@ router.get("/admin/batches/:id/health", async (req, res): Promise<void> => {
     openTasks,
     recentEvents,
     flags,
+    recommendations,
   });
 });
 
