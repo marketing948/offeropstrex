@@ -12,8 +12,10 @@ import {
   workspaceTrafficSourcesTable,
 } from "@workspace/db";
 import { emit } from "./event-bus.ts";
+import { activateNextTrafficSourceRun } from "./executor.ts";
 import { _resetRegistryForTests } from "./handlers.ts";
 import { _resetRulesGuardForTests, registerAllRules } from "./rules/index.ts";
+import type { Action } from "./types.ts";
 
 type PlatformOutcome = "success" | "failed";
 
@@ -204,6 +206,29 @@ async function getCreateTasks(batchId: number, sourceId: number) {
         eq(todoTasksTable.trafficSourceId, sourceId),
       ),
     );
+}
+
+function advanceFromRunOneAction(
+  seed: RunMachineSeed & { sourceOneId: number },
+): Extract<Action, { type: "CompleteTrafficSourceRunPlatform" }> {
+  return {
+    type: "CompleteTrafficSourceRunPlatform",
+    workspaceId: seed.workspaceId,
+    batchId: seed.batchId,
+    trafficSourceId: seed.sourceOneId,
+    platform: "ios",
+    campaignId: seed.iosCampaignId,
+    outcome: "completed",
+  };
+}
+
+function countCreateVoluumTasks(
+  tasks: Awaited<ReturnType<typeof getCreateTasks>>,
+) {
+  return {
+    ios: tasks.filter((t) => t.taskType === "create_voluum_campaign_ios").length,
+    android: tasks.filter((t) => t.taskType === "create_voluum_campaign_android").length,
+  };
 }
 
 async function seedSingleSourceRun() {
@@ -452,6 +477,69 @@ describe("batch traffic source run state machine", { concurrency: false }, () =>
 
     const createTasks = await getCreateTasks(seed.batchId, seed.sourceTwoId);
     assert.equal(createTasks.length, 2);
+  });
+
+  test("activateNextTrafficSourceRun twice only activates and seeds tasks once", async () => {
+    const seed = await seedRunMachine();
+    const action = advanceFromRunOneAction(seed);
+
+    await db.transaction(async (tx) => {
+      await activateNextTrafficSourceRun(tx, action, 1);
+    });
+
+    let [, next] = await getRuns(seed.batchId);
+    assert.equal(next.status, "active");
+    let counts = countCreateVoluumTasks(await getCreateTasks(seed.batchId, seed.sourceTwoId));
+    assert.equal(counts.ios, 1);
+    assert.equal(counts.android, 1);
+
+    const [batchAfterFirst] = await db
+      .select({ trafficSourceStep: testingBatchesTable.trafficSourceStep })
+      .from(testingBatchesTable)
+      .where(eq(testingBatchesTable.id, seed.batchId));
+    assert.equal(batchAfterFirst?.trafficSourceStep, 1);
+
+    await db.transaction(async (tx) => {
+      await activateNextTrafficSourceRun(tx, action, 1);
+    });
+
+    [, next] = await getRuns(seed.batchId);
+    assert.equal(next.status, "active");
+    counts = countCreateVoluumTasks(await getCreateTasks(seed.batchId, seed.sourceTwoId));
+    assert.equal(counts.ios, 1);
+    assert.equal(counts.android, 1);
+
+    const [batchAfterSecond] = await db
+      .select({ trafficSourceStep: testingBatchesTable.trafficSourceStep })
+      .from(testingBatchesTable)
+      .where(eq(testingBatchesTable.id, seed.batchId));
+    assert.equal(batchAfterSecond?.trafficSourceStep, 1);
+  });
+
+  test("activateNextTrafficSourceRun on already-active next run creates no tasks", async () => {
+    const seed = await seedRunMachine();
+
+    await db
+      .update(batchTrafficSourceRunsTable)
+      .set({
+        status: "active",
+        iosStatus: "active",
+        androidStatus: "active",
+        startedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(batchTrafficSourceRunsTable.batchId, seed.batchId),
+          eq(batchTrafficSourceRunsTable.trafficSourceId, seed.sourceTwoId),
+        ),
+      );
+
+    await db.transaction(async (tx) => {
+      await activateNextTrafficSourceRun(tx, advanceFromRunOneAction(seed), 1);
+    });
+
+    const tasks = await getCreateTasks(seed.batchId, seed.sourceTwoId);
+    assert.equal(tasks.length, 0);
   });
 
   test("next-source progression starts iOS and Android together", async () => {

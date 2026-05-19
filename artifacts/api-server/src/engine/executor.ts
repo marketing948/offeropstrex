@@ -93,7 +93,7 @@ async function recordTaskCreatedOperationalEvents(tx: Tx, tasks: CreatedTaskAudi
   }
 }
 
-async function activateNextTrafficSourceRun(
+export async function activateNextTrafficSourceRun(
   tx: Tx,
   action: Extract<Action, { type: "CompleteTrafficSourceRunPlatform" }>,
   currentPosition: number,
@@ -170,31 +170,33 @@ async function activateNextTrafficSourceRun(
     return;
   }
 
-  if (nextRun.status === "pending") {
-    const now = new Date();
-    await tx
-      .update(batchTrafficSourceRunsTable)
-      .set({
-        status: "active",
-        iosStatus: "active",
-        androidStatus: "active",
-        startedAt: now,
-      })
-      .where(eq(batchTrafficSourceRunsTable.id, nextRun.id));
+  // First activation only: pending → active seeds paired create_voluum_* tasks.
+  // Replays with an already-active (or terminal) next run are no-ops.
+  if (nextRun.status !== "pending") return;
 
-    await tx
-      .update(testingBatchesTable)
-      .set({
-        currentWorkspaceTrafficSourceId: nextRun.trafficSourceId,
-        trafficSourceStep: sql`${testingBatchesTable.trafficSourceStep} + 1`,
-      })
-      .where(
-        and(
-          eq(testingBatchesTable.id, action.batchId),
-          eq(testingBatchesTable.workspaceId, action.workspaceId),
-        ),
-      );
-  }
+  const now = new Date();
+  await tx
+    .update(batchTrafficSourceRunsTable)
+    .set({
+      status: "active",
+      iosStatus: "active",
+      androidStatus: "active",
+      startedAt: now,
+    })
+    .where(eq(batchTrafficSourceRunsTable.id, nextRun.id));
+
+  await tx
+    .update(testingBatchesTable)
+    .set({
+      currentWorkspaceTrafficSourceId: nextRun.trafficSourceId,
+      trafficSourceStep: sql`${testingBatchesTable.trafficSourceStep} + 1`,
+    })
+    .where(
+      and(
+        eq(testingBatchesTable.id, action.batchId),
+        eq(testingBatchesTable.workspaceId, action.workspaceId),
+      ),
+    );
 
   const [source] = await tx
     .select({ name: workspaceTrafficSourcesTable.name })
