@@ -146,6 +146,14 @@ async function assign(employeeId: number, workspaceId: number): Promise<void> {
     .onConflictDoNothing();
 }
 
+function createVoluumCompleteBody(tag: string, voluumCampaignId?: string) {
+  const id = voluumCampaignId ?? `voluum-${tag}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  return {
+    voluumCampaignId: id,
+    campaignUrl: `https://example.test/${tag}`,
+  };
+}
+
 async function seedCampaignOpsBase() {
   const workspaceId = await createWorkspace("campaign-ops");
   const employeeId = await createEmployee();
@@ -900,9 +908,13 @@ describe("route scoped invariants", { concurrency: false }, () => {
       })
       .returning({ id: todoTasksTable.id });
 
-    const { response, json } = await request("POST", `/todo-tasks/${task.id}/complete`, seed.employeeId, {
-      campaignUrl: "https://example.test/ios",
-    });
+    const completeBody = createVoluumCompleteBody("ios");
+    const { response, json } = await request(
+      "POST",
+      `/todo-tasks/${task.id}/complete`,
+      seed.employeeId,
+      completeBody,
+    );
     assert.equal(response.status, 200);
     assert.equal(json.status, "DONE");
 
@@ -912,8 +924,8 @@ describe("route scoped invariants", { concurrency: false }, () => {
       .where(eq(campaignsTable.id, json.campaignId));
     assert.equal(campaign.status, "voluum_created");
     assert.equal(campaign.trafficSourceId, seed.sourceOneId);
-    assert.equal(campaign.campaignUrl, "https://example.test/ios");
-    assert.equal(campaign.voluumCampaignId, null);
+    assert.equal(campaign.campaignUrl, completeBody.campaignUrl);
+    assert.equal(campaign.voluumCampaignId, completeBody.voluumCampaignId);
 
     const [runAfterIos] = await db
       .select()
@@ -945,9 +957,13 @@ describe("route scoped invariants", { concurrency: false }, () => {
         trafficSourceId: seed.sourceOneId,
       })
       .returning({ id: todoTasksTable.id });
-    const android = await request("POST", `/todo-tasks/${androidTask.id}/complete`, seed.employeeId, {
-      campaignUrl: "https://example.test/android",
-    });
+    const androidBody = createVoluumCompleteBody("android");
+    const android = await request(
+      "POST",
+      `/todo-tasks/${androidTask.id}/complete`,
+      seed.employeeId,
+      androidBody,
+    );
     assert.equal(android.response.status, 200);
 
     const [runAfterAndroid] = await db
@@ -961,7 +977,7 @@ describe("route scoped invariants", { concurrency: false }, () => {
       .select({ campaignUrl: campaignsTable.campaignUrl })
       .from(campaignsTable)
       .where(eq(campaignsTable.id, android.json.campaignId));
-    assert.equal(androidCampaign.campaignUrl, "https://example.test/android");
+    assert.equal(androidCampaign.campaignUrl, androidBody.campaignUrl);
   });
 
   test("typed CampaignOps completion rolls back on follow-up failure", async () => {
@@ -986,7 +1002,7 @@ describe("route scoped invariants", { concurrency: false }, () => {
       .returning({ id: todoTasksTable.id });
 
     const { response } = await request("POST", `/todo-tasks/${task.id}/complete`, seed.employeeId, {
-      campaignUrl: "https://example.test/rollback",
+      ...createVoluumCompleteBody("rollback"),
     });
     assert.equal(response.status, 500);
 
@@ -1030,9 +1046,7 @@ describe("route scoped invariants", { concurrency: false }, () => {
       })
       .returning({ id: todoTasksTable.id });
 
-    const payload = {
-      campaignUrl: "https://example.test/duplicate",
-    };
+    const payload = createVoluumCompleteBody("duplicate");
 
     const first = await request("POST", `/todo-tasks/${task.id}/complete`, seed.employeeId, payload);
     assert.equal(first.response.status, 200);
@@ -1214,7 +1228,7 @@ describe("route scoped invariants", { concurrency: false }, () => {
     assert.equal(patch.response.status, 403);
 
     const complete = await request("POST", `/todo-tasks/${task.id}/complete`, otherEmployeeId, {
-      campaignUrl: "https://example.test/forbidden",
+      ...createVoluumCompleteBody("forbidden"),
     });
     assert.equal(complete.response.status, 403);
 
@@ -1255,9 +1269,16 @@ describe("route scoped invariants", { concurrency: false }, () => {
       assert.equal(missingUrl.response.status, 400);
 
       const blankUrl = await request("POST", `/todo-tasks/${task.id}/complete`, seed.employeeId, {
+        voluumCampaignId: "valid-id",
         campaignUrl: "   ",
       });
       assert.equal(blankUrl.response.status, 400);
+
+      const blankVoluumId = await request("POST", `/todo-tasks/${task.id}/complete`, seed.employeeId, {
+        voluumCampaignId: "   ",
+        campaignUrl: "https://example.test/ok",
+      });
+      assert.equal(blankVoluumId.response.status, 400);
     }
 
     const [campaign] = await db
@@ -1317,9 +1338,12 @@ describe("route scoped invariants", { concurrency: false }, () => {
       })
       .returning({ id: todoTasksTable.id });
 
-    const missingSource = await request("POST", `/todo-tasks/${missingSourceTask.id}/complete`, seed.employeeId, {
-      campaignUrl: "https://example.test/missing-source",
-    });
+    const missingSource = await request(
+      "POST",
+      `/todo-tasks/${missingSourceTask.id}/complete`,
+      seed.employeeId,
+      createVoluumCompleteBody("missing-source"),
+    );
     assert.equal(missingSource.response.status, 400);
 
     const [missingSourceTaskAfter] = await db
@@ -1360,7 +1384,7 @@ describe("route scoped invariants", { concurrency: false }, () => {
       })
       .returning({ id: todoTasksTable.id });
     const batchSource = await request("POST", `/todo-tasks/${batchSourceTask.id}/complete`, seed.employeeId, {
-      campaignUrl: "https://example.test/batch-source",
+      ...createVoluumCompleteBody("batch-source"),
     });
     assert.equal(batchSource.response.status, 200);
 
@@ -1389,7 +1413,7 @@ describe("route scoped invariants", { concurrency: false }, () => {
       .returning({ id: todoTasksTable.id });
 
     const foreignSourceCompletion = await request("POST", `/todo-tasks/${foreignSourceTask.id}/complete`, seed.employeeId, {
-      campaignUrl: "https://example.test/foreign-source",
+      ...createVoluumCompleteBody("foreign-source"),
     });
     assert.equal(foreignSourceCompletion.response.status, 400);
 

@@ -368,7 +368,10 @@ describe("operational events timeline", { concurrency: false }, () => {
         authorization: `Bearer ${authToken(seed.employeeId)}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ campaignUrl: "https://campaign.example/audit" }),
+      body: JSON.stringify({
+        voluumCampaignId: `voluum-audit-${Date.now()}`,
+        campaignUrl: "https://campaign.example/audit",
+      }),
     });
     const json = await response.json() as { status: string };
 

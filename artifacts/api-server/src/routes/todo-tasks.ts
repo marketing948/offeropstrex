@@ -358,12 +358,13 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
 // chain-emits TaskCompleted (see executor CompleteTaskFromRequest).
 //
 // Body shape varies by task.taskType:
-//  - create_voluum_campaign_ios | create_voluum_campaign_android: { campaignUrl }
+//  - create_voluum_campaign_ios | create_voluum_campaign_android: { voluumCampaignId, campaignUrl }
 //  - take_campaign_live: { trafficSourceCampaignId }
 //  - find_winners: success or failure payload
 //  - all_traffic_sources_tested: no body
 
 const createVoluumCampaignSchema = z.object({
+  voluumCampaignId: z.string().trim().min(1).max(256),
   campaignUrl: z.string().trim().min(1),
 });
 const takeCampaignLiveSchema = z.object({
@@ -458,7 +459,8 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
     completion = {
       kind: "create_voluum_campaign",
       platform: platformFromType,
-      ...parsed.data,
+      voluumCampaignId: parsed.data.voluumCampaignId,
+      campaignUrl: parsed.data.campaignUrl,
       trafficSourceId,
       campaignName: task.title,
       voluumCampaignName: task.title,
@@ -528,9 +530,14 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
     if (
       message === "trafficSourceId does not belong to this workspace" ||
       message === "Task is missing relatedBatchId" ||
-      message === "Task missing relatedCampaignId"
+      message === "Task missing relatedCampaignId" ||
+      message === "voluumCampaignId is required"
     ) {
       res.status(400).json({ error: message });
+      return;
+    }
+    if (message.includes("already linked to another campaign in this workspace")) {
+      res.status(409).json({ error: message });
       return;
     }
     if (message === "Campaign not found") {

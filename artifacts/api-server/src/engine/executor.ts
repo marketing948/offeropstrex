@@ -697,6 +697,25 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
           if (task.relatedBatchId == null) {
             throw new Error("Task is missing relatedBatchId");
           }
+          const voluumCampaignId = action.completion.voluumCampaignId.trim();
+          if (!voluumCampaignId) {
+            throw new Error("voluumCampaignId is required");
+          }
+          const [existingVoluumLink] = await tx
+            .select({ id: campaignsTable.id })
+            .from(campaignsTable)
+            .where(
+              and(
+                eq(campaignsTable.workspaceId, action.workspaceId),
+                eq(campaignsTable.voluumCampaignId, voluumCampaignId),
+              ),
+            )
+            .limit(1);
+          if (existingVoluumLink) {
+            throw new Error(
+              `Voluum campaign ID "${voluumCampaignId}" is already linked to another campaign in this workspace`,
+            );
+          }
           const [tsRow] = await tx
             .select({ id: workspaceTrafficSourcesTable.id })
             .from(workspaceTrafficSourcesTable)
@@ -720,7 +739,7 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
               campaignName: action.completion.campaignName,
               trafficSourceId: action.completion.trafficSourceId,
               campaignUrl: action.completion.campaignUrl ?? null,
-              voluumCampaignId: action.completion.voluumCampaignId ?? null,
+              voluumCampaignId,
               voluumCampaignName: action.completion.voluumCampaignName,
               status: "voluum_created",
             })
@@ -751,7 +770,7 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
 
           completionPayload = {
             trafficSourceId: action.completion.trafficSourceId,
-            voluumCampaignId: action.completion.voluumCampaignId ?? null,
+            voluumCampaignId,
             voluumCampaignName: action.completion.voluumCampaignName,
             campaignName: action.completion.campaignName,
             campaignUrl: action.completion.campaignUrl ?? null,

@@ -549,13 +549,23 @@ function useCompleteTask() {
 
 function CreateVoluumCampaignForm({ task, platform, onCompleted }: { task: TodoTask; platform: Platform; onCompleted: () => void }) {
   const complete = useCompleteTask();
+  const { toast } = useToast();
+  const [voluumCampaignId, setVoluumCampaignId] = useState("");
   const [campaignUrl, setCampaignUrl] = useState("");
   const [pending, setPending] = useState(false);
 
   async function submit() {
-    if (!campaignUrl.trim()) return;
+    if (!voluumCampaignId.trim()) {
+      toast({ title: "Voluum Campaign ID is required", variant: "destructive" });
+      return;
+    }
+    if (!campaignUrl.trim()) {
+      toast({ title: "Voluum Campaign URL is required", variant: "destructive" });
+      return;
+    }
     setPending(true);
     const ok = await complete(task.id, {
+      voluumCampaignId: voluumCampaignId.trim(),
       campaignUrl: campaignUrl.trim(),
     });
     setPending(false);
@@ -565,11 +575,23 @@ function CreateVoluumCampaignForm({ task, platform, onCompleted }: { task: TodoT
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Create the {platform === "ios" ? "iOS" : "Android"} Voluum campaign in your tracker, then enter its details below. Saving creates the Campaign and spawns a <strong>take_campaign_live</strong> task.
+        Create the {platform === "ios" ? "iOS" : "Android"} Voluum campaign in your tracker, then enter its details below. The <strong>Voluum Campaign ID</strong> is the permanent link for metrics sync — tags are for grouping only. Saving creates the Campaign and spawns a <strong>take_campaign_live</strong> task.
       </p>
       <div className="rounded-md border bg-muted/30 p-3 text-sm">
         <div className="text-xs text-muted-foreground">Campaign name to create</div>
         <div className="font-medium">{task.title}</div>
+      </div>
+      <div>
+        <Label className="text-xs">Voluum Campaign ID *</Label>
+        <Input
+          className="mt-1 h-9 font-mono text-sm"
+          value={voluumCampaignId}
+          onChange={(e) => setVoluumCampaignId(e.target.value)}
+          placeholder="e.g. a1b2c3d4-e5f6-…"
+        />
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          In Voluum, open the campaign and copy the <strong>Campaign ID</strong> from the URL or settings (not tags).
+        </p>
       </div>
       <div>
         <Label className="text-xs">Voluum Campaign URL *</Label>

@@ -29,7 +29,7 @@ export type TaskCompletionDetails =
       kind: "create_voluum_campaign";
       platform: "ios" | "android";
       trafficSourceId: number;
-      voluumCampaignId?: string | null;
+      voluumCampaignId: string;
       voluumCampaignName: string;
       campaignName: string;
       campaignUrl: string;
