@@ -124,12 +124,9 @@ async function buildEnrichment(
   };
 }
 
-// Phase 11 (post-spec) — testing-batches.ts no longer mutates
-// testing_batches directly. PATCH/DELETE/go-live route through the
-// engine executor helpers (executeUpdateBatchFields,
-// executeChangeBatchStatusManual, executeDeleteBatch,
-// executeGoLiveBatch). The PHASE5_LEGACY_EXEMPTIONS allowlist entry
-// for this file has been removed.
+// Phase 11 (post-spec) — testing_batches row writes go through
+// executeUpdateBatchFields / executeDeleteBatch. Lifecycle transitions
+// emit BatchStatusChanged or BatchCampaignsGoLiveRequested (engine-owned).
 
 router.get("/testing-batches", async (req, res): Promise<void> => {
   const workspaceId = await requireWorkspaceFromQuery(req, res);

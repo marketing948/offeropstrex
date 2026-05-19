@@ -272,25 +272,17 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
   res.json(serializeTask(task));
 });
 
-// CampaignOps redesign — task completion endpoint that also performs
-// the per-task-type side effects on the Campaign row (campaigns is
-// not in FORBIDDEN_TABLES, so the route may write it directly).
+// CampaignOps redesign — task completion boundary.
 //
-// POST /todo-tasks/:id/complete
+// POST /todo-tasks/:id/complete validates the body, then emits
+// TaskCompletionRequested. The engine owns task/campaign writes and
+// chain-emits TaskCompleted (see executor CompleteTaskFromRequest).
+//
 // Body shape varies by task.taskType:
-//  - create_voluum_campaign_ios | create_voluum_campaign_android:
-//      { campaignUrl }
-//      → inserts a Campaign(status=voluum_created), stores ids back on the
-//        task (relatedCampaignId), marks task DONE, emits TaskCompleted.
-//  - take_campaign_live:
-//      { trafficSourceCampaignId }
-//      → updates Campaign(status=live, liveStartedAt=now()), marks DONE, emits.
-//  - find_winners:
-//      success: { winnersCount, revenue, cost, clicks?, conversions?, notes? }
-//      failure: { outcome: "failed", failureReason, notes? }
-//      → updates Campaign outcome, marks DONE, emits.
-//  - all_traffic_sources_tested:
-//      no body — terminal acknowledgement; just mark DONE.
+//  - create_voluum_campaign_ios | create_voluum_campaign_android: { campaignUrl }
+//  - take_campaign_live: { trafficSourceCampaignId }
+//  - find_winners: success or failure payload
+//  - all_traffic_sources_tested: no body
 
 const createVoluumCampaignSchema = z.object({
   campaignUrl: z.string().trim().min(1),

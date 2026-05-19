@@ -37,10 +37,8 @@ const ALLOWLIST_SUFFIXES = [
 const PHASE5_LEGACY_EXEMPTIONS = [
   // sync.ts removed in Phase 5g — all engine-owned mutations now go
   // through engine/executor.ts via emit() / executeCreateBatch().
-  // testing-batches.ts removed in Phase 11 — PATCH/DELETE/go-live now
-  // route through executor helpers (executeUpdateBatchFields,
-  // executeChangeBatchStatusManual, executeDeleteBatch,
-  // executeGoLiveBatch).
+  // testing-batches.ts removed in Phase 11 — PATCH/DELETE use
+  // executeUpdateBatchFields / executeDeleteBatch; go-live emits events.
   join("artifacts", "api-server", "src", "routes", "todo-tasks.ts"),
   // CampaignOps redesign — find_winners scheduler emits via the bus
   // (FindWinnersDue → CreateTask) which is enforced by the executor.

@@ -1061,37 +1061,6 @@ export async function executeUpdateBatchFields(
   return row ?? null;
 }
 
-export async function executeChangeBatchStatusManual(
-  workspaceId: number,
-  batchId: number,
-  status: BatchStatus,
-): Promise<void> {
-  await db
-    .update(testingBatchesTable)
-    .set({ status })
-    .where(
-      and(
-        eq(testingBatchesTable.id, batchId),
-        eq(testingBatchesTable.workspaceId, workspaceId),
-      ),
-    );
-}
-
-export async function executeGoLiveBatch(
-  workspaceId: number,
-  batchId: number,
-): Promise<void> {
-  await db
-    .update(testingBatchesTable)
-    .set({ status: "LIVE_TESTS", liveAt: new Date() })
-    .where(
-      and(
-        eq(testingBatchesTable.id, batchId),
-        eq(testingBatchesTable.workspaceId, workspaceId),
-      ),
-    );
-}
-
 export async function executeDeleteBatch(
   workspaceId: number,
   batchId: number,

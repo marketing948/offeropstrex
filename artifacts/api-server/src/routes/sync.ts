@@ -673,15 +673,12 @@ export async function autoGroupOffersIntoBatches(
 
 /**
  * For each non-soft-deleted voluum_campaign_mapping in the workspace,
- * stamp the linked batch with the Voluum campaign id/name, transition it
- * to `live_testing` if still in a pre-live status, and auto-complete any
- * open `create_test_campaign` tasks (matched by traffic source and, when
- * inferable, device) plus any legacy `add_to_live_campaign` task.
+ * emit TrackerCampaignImported when device + traffic source resolve.
+ * Batch/task progression is owned by engine rules — this pass does not
+ * write testing_batches or todo_tasks directly.
  *
- * The mappings table is the source of truth for "this batch is inside a
- * Voluum campaign". Mappings can be created manually by users (POST
- * /sync/voluum/mappings) or by future automation; either way, this pass
- * keeps the batch + task state consistent.
+ * Mappings can be created manually (POST /sync/voluum/mappings) or by
+ * automation; either way, engine events keep batch state consistent.
  */
 async function detectBatchesInVoluumCampaigns(
   workspaceId: number,
@@ -1762,20 +1759,6 @@ router.post("/sync/voluum/trigger", async (req, res): Promise<void> => {
     const mappedBatchIds = [...new Set(mappings.map(m => m.batchId))];
     const allBatchesToEvaluate = new Set<number>([...mappedBatchIds, ...visitsAffectedBatchIds]);
     await checkClickThresholds(workspaceId, [...allBatchesToEvaluate], req.log as any);
-    for (const batchId of visitsAffectedBatchIds) {
-      try {
-        await emit({
-          type: "BatchStatsUpdated",
-          workspaceId,
-          payload: { batchId },
-        });
-      } catch (emitErr: any) {
-        triggerLog.warn(
-          { err: emitErr?.message, batchId },
-          "[Sync] BatchStatsUpdated emit failed (non-fatal)",
-        );
-      }
-    }
 
     const syncedAt = new Date().toISOString();
     const message = `Synced ${imported} rows, skipped ${skipped} (no mapping).`;

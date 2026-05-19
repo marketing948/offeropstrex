@@ -146,7 +146,7 @@ export async function handleTaskCompleted(
   }
 
   // take_campaign_live: no engine action — the 7-day cron schedules
-  // find_winners. (The route already updated the Campaign row.)
+  // find_winners. (The executor already updated the Campaign row.)
   // all_traffic_sources_tested: terminal — no follow-on.
   // Legacy types: no-op.
   return [];
