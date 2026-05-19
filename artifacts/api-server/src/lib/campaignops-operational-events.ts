@@ -19,6 +19,24 @@ export const TRAFFIC_SOURCE_RUN_ACTIVATED_PAYLOAD_KEYS = [
   "position",
 ] as const;
 
+export const RECONCILIATION_VIOLATION_INVARIANTS = [
+  "invariant2",
+  "invariant3",
+  "invariant4",
+  "invariant5",
+] as const;
+
+export type ReconciliationViolationInvariant =
+  (typeof RECONCILIATION_VIOLATION_INVARIANTS)[number];
+
+export const RECONCILIATION_VIOLATION_PAYLOAD_KEYS = [
+  "workspaceId",
+  "invariant",
+  "violationCount",
+  "affectedBatchIds",
+  "reconciliationPassAt",
+] as const;
+
 export const TRAFFIC_SOURCE_RUN_TERMINAL_PAYLOAD_KEYS = [
   "batchId",
   "workspaceId",
@@ -106,6 +124,56 @@ export function isTerminalTrafficSourceRunStatus(
   status: string,
 ): status is "completed" | "failed" | "skipped" {
   return TERMINAL_RUN_STATUSES.has(status);
+}
+
+export type ReconciliationViolationOperationalInput = {
+  workspaceId: number;
+  invariant: ReconciliationViolationInvariant;
+  violationCount: number;
+  affectedBatchIds?: number[];
+  reconciliationPassAt: Date;
+};
+
+export async function recordReconciliationViolationOperationalEvent(
+  input: ReconciliationViolationOperationalInput,
+  client: OperationalEventsDb = db,
+): Promise<void> {
+  const payload: Record<string, number | string | number[]> = {
+    workspaceId: input.workspaceId,
+    invariant: input.invariant,
+    violationCount: input.violationCount,
+    reconciliationPassAt: input.reconciliationPassAt.toISOString(),
+  };
+  if (input.affectedBatchIds != null && input.affectedBatchIds.length > 0) {
+    payload.affectedBatchIds = input.affectedBatchIds;
+  }
+
+  await recordOperationalEvent(
+    {
+      workspaceId: input.workspaceId,
+      entityType: "workspace",
+      entityId: input.workspaceId,
+      eventType: "RECONCILIATION_VIOLATION",
+      actorType: "system",
+      source: "engine.reconciliation",
+      payloadJson: payload,
+    },
+    client,
+  );
+}
+
+/** Best-effort telemetry; must not fail reconciliation passes. */
+export async function recordReconciliationViolationOperationalEvents(
+  violations: ReconciliationViolationOperationalInput[],
+): Promise<void> {
+  for (const violation of violations) {
+    if (violation.violationCount <= 0) continue;
+    try {
+      await recordReconciliationViolationOperationalEvent(violation);
+    } catch {
+      // Swallow — reconciliation remains log-only for repair; telemetry is optional.
+    }
+  }
 }
 
 export async function recordTrafficSourceRunTerminalOperationalEvent(

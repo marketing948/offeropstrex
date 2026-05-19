@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   db,
   employeesTable,
+  operationalEventsTable,
   testingBatchesTable,
   todoTasksTable,
   voluumOffersTable,
@@ -12,7 +13,8 @@ import {
   workspacesTable,
   workspaceTrafficSourcesTable,
 } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import { RECONCILIATION_VIOLATION_PAYLOAD_KEYS } from "../../lib/campaignops-operational-events.ts";
 import { logger } from "../../lib/logger.ts";
 import { reconcileWorkspace } from "./index.ts";
 
@@ -23,7 +25,56 @@ let employeeId: number;
 let trafficSourceId: number;
 let workspaceTrafficSourceId: number;
 
+function assertSafeReconciliationPayload(payload: unknown): void {
+  assert.ok(payload !== null && typeof payload === "object");
+  const record = payload as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    assert.ok(
+      (RECONCILIATION_VIOLATION_PAYLOAD_KEYS as readonly string[]).includes(key),
+      `unexpected payload key: ${key}`,
+    );
+    const value = record[key];
+    if (key === "affectedBatchIds") {
+      assert.ok(Array.isArray(value));
+      assert.ok(value.every((id) => typeof id === "number"));
+      continue;
+    }
+    assert.ok(
+      typeof value === "number" || typeof value === "string",
+      `unexpected value type for ${key}`,
+    );
+  }
+}
+
+async function countReconciliationViolationEvents(wsId: number): Promise<number> {
+  const rows = await db
+    .select({ id: operationalEventsTable.id })
+    .from(operationalEventsTable)
+    .where(
+      and(
+        eq(operationalEventsTable.workspaceId, wsId),
+        eq(operationalEventsTable.eventType, "RECONCILIATION_VIOLATION"),
+      ),
+    );
+  return rows.length;
+}
+
 before(async () => {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS operational_events (
+      id serial PRIMARY KEY,
+      workspace_id integer NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      entity_type text NOT NULL,
+      entity_id text NOT NULL,
+      event_type text NOT NULL,
+      actor_type text NOT NULL DEFAULT 'system',
+      actor_id text,
+      source text NOT NULL,
+      payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
   const [ws] = await db
     .insert(workspacesTable)
     .values({ name: `reconcile-test-${Date.now()}` })
@@ -163,8 +214,29 @@ describe("reconciliation: invariants on a healthy workspace", () => {
       status: "TODO",
     });
 
+    const beforeEvents = await countReconciliationViolationEvents(workspaceId);
     const result = await reconcileWorkspace(workspaceId, silentLog);
     assert.ok(result.invariant4Violations >= 1, "invariant 4 violation reported");
+
+    const events = await db
+      .select()
+      .from(operationalEventsTable)
+      .where(
+        and(
+          eq(operationalEventsTable.workspaceId, workspaceId),
+          eq(operationalEventsTable.eventType, "RECONCILIATION_VIOLATION"),
+        ),
+      );
+    assert.ok(events.length > beforeEvents);
+    const latest = events[events.length - 1]!;
+    assert.equal(latest.entityType, "workspace");
+    assert.equal(latest.source, "engine.reconciliation");
+    const latestPayload = latest.payloadJson as Record<string, unknown>;
+    assertSafeReconciliationPayload(latestPayload);
+    assert.equal(latestPayload.invariant, "invariant4");
+    assert.ok((latestPayload.violationCount as number) >= 1);
+    assert.ok((latestPayload.affectedBatchIds as number[]).includes(batch.id));
+    assert.ok(typeof latestPayload.reconciliationPassAt === "string");
   });
 
   test("invariant 4 healthy: NEW_BATCH with both create_voluum_campaign_* tasks", async () => {
@@ -239,6 +311,11 @@ describe("reconciliation: invariants on a healthy workspace", () => {
     const result = await reconcileWorkspace(isolatedWs.id, silentLog);
     assert.equal(result.invariant1Violations, 0, "invariant 1 (retired)");
     assert.equal(result.invariant4Violations, 0, "invariant 4 (healthy task pair)");
+    assert.equal(
+      await countReconciliationViolationEvents(isolatedWs.id),
+      0,
+      "healthy workspace emits no RECONCILIATION_VIOLATION",
+    );
 
     await db.delete(workspacesTable).where(eq(workspacesTable.id, isolatedWs.id));
     // Invariant 4 cardinality (duplicate detection) is defense-in-depth
@@ -292,5 +369,81 @@ describe("reconciliation: invariants on a healthy workspace", () => {
 
     const result = await reconcileWorkspace(workspaceId, silentLog);
     assert.ok(result.invariant3Violations >= 1, "invariant 3 violation reported");
+
+    const inv3Events = await db
+      .select()
+      .from(operationalEventsTable)
+      .where(
+        and(
+          eq(operationalEventsTable.workspaceId, workspaceId),
+          eq(operationalEventsTable.eventType, "RECONCILIATION_VIOLATION"),
+        ),
+      );
+    const inv3 = inv3Events.find((row) => {
+      const payload = row.payloadJson as Record<string, unknown>;
+      return payload.invariant === "invariant3";
+    });
+    assert.ok(inv3, "invariant 3 emits RECONCILIATION_VIOLATION");
+    const inv3Payload = inv3!.payloadJson as Record<string, unknown>;
+    assertSafeReconciliationPayload(inv3Payload);
+    assert.equal(inv3Payload.invariant, "invariant3");
+    assert.ok((inv3Payload.violationCount as number) >= 1);
+    assert.ok(!("affectedBatchIds" in inv3Payload));
+    assert.ok(typeof inv3Payload.reconciliationPassAt === "string");
+  });
+});
+
+describe("reconciliation: operational event telemetry", { concurrency: false }, () => {
+  test("invariant 2 violation emits structured RECONCILIATION_VIOLATION", async () => {
+    const [ws] = await db
+      .insert(workspacesTable)
+      .values({ name: `recon-ops-i2-${Date.now()}` })
+      .returning({ id: workspacesTable.id });
+
+    const [batch] = await db
+      .insert(testingBatchesTable)
+      .values({
+        workspaceId: ws.id,
+        employeeId,
+        batchName: `recon-ops-i2-${Date.now()}`,
+        affiliateNetwork: "AN",
+        geo: "DE",
+        trafficSource: "Source R",
+        currentTrafficSourceId: trafficSourceId,
+        currentWorkspaceTrafficSourceId: workspaceTrafficSourceId,
+        status: "WAITING_FOR_TRACKER_CAMPAIGNS",
+      })
+      .returning({ id: testingBatchesTable.id });
+
+    await db.insert(todoTasksTable).values({
+      workspaceId: ws.id,
+      employeeId,
+      relatedBatchId: batch.id,
+      trafficSourceId: workspaceTrafficSourceId,
+      title: "Create iOS tracker",
+      taskType: "CREATE_IOS_TRACKER_CAMPAIGN",
+      trackerCampaignDevice: "ios",
+      status: "TODO",
+    });
+
+    const result = await reconcileWorkspace(ws.id, silentLog);
+    assert.equal(result.invariant2Violations, 1);
+
+    const [event] = await db
+      .select()
+      .from(operationalEventsTable)
+      .where(
+        and(
+          eq(operationalEventsTable.workspaceId, ws.id),
+          eq(operationalEventsTable.eventType, "RECONCILIATION_VIOLATION"),
+        ),
+      );
+    assert.ok(event);
+    const eventPayload = event.payloadJson as Record<string, unknown>;
+    assert.equal(eventPayload.invariant, "invariant2");
+    assert.deepEqual(eventPayload.affectedBatchIds, [batch.id]);
+    assertSafeReconciliationPayload(eventPayload);
+
+    await db.delete(workspacesTable).where(eq(workspacesTable.id, ws.id));
   });
 });

@@ -49,6 +49,10 @@
 import { campaignsTable, db, testingBatchesTable, todoTasksTable, voluumOffersTable } from "@workspace/db";
 import { and, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import type { Logger } from "pino";
+import {
+  recordReconciliationViolationOperationalEvents,
+  type ReconciliationViolationOperationalInput,
+} from "../../lib/campaignops-operational-events.ts";
 
 export interface ReconcileResult {
   workspaceId: number;
@@ -84,6 +88,8 @@ export async function reconcileWorkspace(
   log: Logger,
   options: ReconcileOptions = {},
 ): Promise<ReconcileResult> {
+  const reconciliationPassAt = new Date();
+  const operationalViolations: ReconciliationViolationOperationalInput[] = [];
   const result: ReconcileResult = {
     workspaceId,
     invariant1Violations: 0,
@@ -127,6 +133,12 @@ export async function reconcileWorkspace(
       { workspaceId, count: result.invariant3Violations },
       "[Reconcile] invariant 3: tagged offers not attached to any batch",
     );
+    operationalViolations.push({
+      workspaceId,
+      invariant: "invariant3",
+      violationCount: result.invariant3Violations,
+      reconciliationPassAt,
+    });
   }
 
   // Load every active batch in this workspace once.
@@ -224,6 +236,13 @@ export async function reconcileWorkspace(
         { workspaceId, violatingBatches },
         "[Reconcile] invariant 2: active batches missing tracker-creation tasks — Phase 2 will emit TrackerTasksMissing",
       );
+      operationalViolations.push({
+        workspaceId,
+        invariant: "invariant2",
+        violationCount: result.invariant2Violations,
+        affectedBatchIds: violatingBatches.map((row) => row.batchId),
+        reconciliationPassAt,
+      });
     }
   }
 
@@ -284,6 +303,13 @@ export async function reconcileWorkspace(
         { workspaceId, violating: violating4 },
         "[Reconcile] invariant 4: NEW_BATCH batches with missing or duplicate create_voluum_campaign_* tasks",
       );
+      operationalViolations.push({
+        workspaceId,
+        invariant: "invariant4",
+        violationCount: result.invariant4Violations,
+        affectedBatchIds: violating4.map((row) => row.batchId),
+        reconciliationPassAt,
+      });
     }
   }
 
@@ -330,8 +356,17 @@ export async function reconcileWorkspace(
         { workspaceId, batchIds: missingGoLive },
         "[Reconcile] invariant 5: ready+ready campaign batches missing GO_LIVE task",
       );
+      operationalViolations.push({
+        workspaceId,
+        invariant: "invariant5",
+        violationCount: result.invariant5Violations,
+        affectedBatchIds: missingGoLive,
+        reconciliationPassAt,
+      });
     }
   }
+
+  await recordReconciliationViolationOperationalEvents(operationalViolations);
 
   log.info(
     {
