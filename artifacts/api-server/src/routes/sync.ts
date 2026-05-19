@@ -21,6 +21,7 @@ import { serializeWorkspaceForEmployee, setActiveWorkspaceForEmployee } from "..
 import { upsertSetting } from "../lib/settings-store";
 import { normalizeRawTags, pickValidVoluumTag, validateTrackerCampaignTag, type VoluumTagSkipReason, type TrackerCampaignTagSkipReason } from "../lib/voluum-tag";
 import { isVoluumDryRunEnabled } from "../lib/feature-flags";
+import { recordOperationalEvent } from "../lib/operational-events";
 // SPEC Phase 1: parseVoluumCampaignName is being phased out as a workflow
 // driver. The structured-name auto-mapping pre-pass it powered has been
 // removed. The remaining call site (device detection in the mapping loop
@@ -1447,7 +1448,7 @@ export { checkClickThresholds } from "./sync/click-threshold.ts";
 
 // POST /sync/voluum/discovery-preview — read-only dry-run metadata preview.
 // This route authenticates, fetches traffic sources and affiliate networks only,
-// and emits no events or creates tasks/batches.
+// and creates no workflow events, tasks, batches, or lifecycle mutations.
 router.post("/sync/voluum/discovery-preview", async (req, res): Promise<void> => {
   if (!isVoluumDryRunEnabled()) {
     res.status(410).json({
@@ -1516,7 +1517,7 @@ router.post("/sync/voluum/discovery-preview", async (req, res): Promise<void> =>
     }
   }
 
-  res.json({
+  const responseBody = {
     mode: "dry_run",
     workspaceId,
     enabled: true,
@@ -1535,7 +1536,32 @@ router.post("/sync/voluum/discovery-preview", async (req, res): Promise<void> =>
       tasks: false,
       batches: false,
     },
-  });
+  };
+
+  try {
+    const actor = await getEmployeeFromToken(req);
+    await recordOperationalEvent({
+      workspaceId,
+      entityType: "sync_preview",
+      entityId: `workspace:${workspaceId}`,
+      eventType: "SYNC_PREVIEW_RUN",
+      actorType: actor ? "employee" : "system",
+      actorId: actor?.id ?? null,
+      source: "sync.voluum.discovery-preview",
+      payloadJson: {
+        credentialsValid: authResult.credentials.valid,
+        credentialCode: authResult.credentials.valid ? null : authResult.credentials.code,
+        trafficSourcesFound: trafficSources.length,
+        affiliateNetworksFound: affiliateNetworks.length,
+        metadataFetches,
+        warnings,
+      },
+    });
+  } catch (err) {
+    req.log.warn({ err, workspaceId }, "[VoluumDryRun] operational event write failed");
+  }
+
+  res.json(responseBody);
 });
 
 // GET /sync/voluum/status?workspace_id=N — workspace-scoped sync status.

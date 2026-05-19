@@ -2,17 +2,22 @@ import { after, afterEach, before, beforeEach, describe, test } from "node:test"
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import app from "../app.ts";
 import {
+  campaignsTable,
   db,
   employeeWorkspaceAssignmentsTable,
   employeesTable,
   eventsTable,
   operationalEventsTable,
+  testingBatchesTable,
+  todoTasksTable,
   workspacesTable,
+  workspaceTrafficSourcesTable,
 } from "@workspace/db";
 import { recordOperationalEvent } from "../lib/operational-events.ts";
+import { applyAction } from "../engine/executor.ts";
 
 let server: Server;
 let baseUrl: string;
@@ -122,6 +127,32 @@ async function assign(employeeId: number, workspaceId: number): Promise<void> {
     .insert(employeeWorkspaceAssignmentsTable)
     .values({ employeeId, workspaceId, role: "employee" })
     .onConflictDoNothing();
+}
+
+async function seedCampaignOpsBase() {
+  const workspaceId = await createWorkspace("audit-hook");
+  const employeeId = await createEmployee();
+  await assign(employeeId, workspaceId);
+
+  const [source] = await db
+    .insert(workspaceTrafficSourcesTable)
+    .values({ workspaceId, name: `Audit Source ${Date.now()}`, position: 1, isActive: true })
+    .returning({ id: workspaceTrafficSourcesTable.id });
+  const [batch] = await db
+    .insert(testingBatchesTable)
+    .values({
+      workspaceId,
+      employeeId,
+      batchName: `Audit Batch ${Date.now()}`,
+      affiliateNetwork: "Audit Network",
+      geo: "DE",
+      trafficSource: "Audit Source",
+      batchTag: `audit_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
+      currentWorkspaceTrafficSourceId: source.id,
+    })
+    .returning({ id: testingBatchesTable.id });
+
+  return { workspaceId, employeeId, batchId: batch.id, trafficSourceId: source.id };
 }
 
 describe("operational events timeline", { concurrency: false }, () => {
@@ -268,5 +299,122 @@ describe("operational events timeline", { concurrency: false }, () => {
       .from(operationalEventsTable)
       .where(eq(operationalEventsTable.workspaceId, workspaceId));
     assert.equal(rows.length, 0);
+  });
+
+  test("records TASK_CREATED from the engine task creation boundary", async () => {
+    const seed = await seedCampaignOpsBase();
+
+    await db.transaction((tx) =>
+      applyAction({
+        type: "CreateTask",
+        workspaceId: seed.workspaceId,
+        data: {
+          employeeId: seed.employeeId,
+          relatedBatchId: seed.batchId,
+          title: "Audit task creation",
+          taskType: "find_winners",
+          priority: "high",
+          trafficSourceId: seed.trafficSourceId,
+        },
+      }, tx),
+    );
+
+    const [task] = await db
+      .select({ id: todoTasksTable.id })
+      .from(todoTasksTable)
+      .where(and(eq(todoTasksTable.workspaceId, seed.workspaceId), eq(todoTasksTable.title, "Audit task creation")));
+    const [event] = await db
+      .select()
+      .from(operationalEventsTable)
+      .where(
+        and(
+          eq(operationalEventsTable.workspaceId, seed.workspaceId),
+          eq(operationalEventsTable.eventType, "TASK_CREATED"),
+          eq(operationalEventsTable.entityId, String(task.id)),
+        ),
+      );
+
+    assert.equal(event.entityType, "task");
+    assert.equal(event.actorType, "system");
+    assert.equal(event.source, "engine");
+    assert.deepEqual(event.payloadJson, {
+      taskType: "find_winners",
+      employeeId: seed.employeeId,
+      relatedBatchId: seed.batchId,
+      relatedCampaignId: null,
+      priority: "high",
+      trafficSourceId: seed.trafficSourceId,
+    });
+  });
+
+  test("records CAMPAIGN_LINKED and TASK_COMPLETED after create-campaign completion succeeds", async () => {
+    const seed = await seedCampaignOpsBase();
+    const [task] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        employeeId: seed.employeeId,
+        relatedBatchId: seed.batchId,
+        title: "Create campaign for audit",
+        taskType: "create_voluum_campaign_ios",
+        status: "TODO",
+        trafficSourceId: seed.trafficSourceId,
+      })
+      .returning({ id: todoTasksTable.id });
+
+    const response = await fetch(`${baseUrl}/todo-tasks/${task.id}/complete`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${authToken(seed.employeeId)}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ campaignUrl: "https://campaign.example/audit" }),
+    });
+    const json = await response.json() as { status: string };
+
+    assert.equal(response.status, 200);
+    assert.equal(json.status, "DONE");
+
+    const campaignEvents = await db
+      .select()
+      .from(operationalEventsTable)
+      .where(
+        and(
+          eq(operationalEventsTable.workspaceId, seed.workspaceId),
+          eq(operationalEventsTable.eventType, "CAMPAIGN_LINKED"),
+        ),
+      );
+    const completedEvents = await db
+      .select()
+      .from(operationalEventsTable)
+      .where(
+        and(
+          eq(operationalEventsTable.workspaceId, seed.workspaceId),
+          eq(operationalEventsTable.eventType, "TASK_COMPLETED"),
+          eq(operationalEventsTable.entityId, String(task.id)),
+        ),
+      );
+    const [campaign] = await db
+      .select({ id: campaignsTable.id })
+      .from(campaignsTable)
+      .where(eq(campaignsTable.workspaceId, seed.workspaceId));
+
+    assert.equal(campaignEvents.length, 1);
+    assert.equal(campaignEvents[0]!.entityType, "campaign");
+    assert.equal(campaignEvents[0]!.entityId, String(campaign.id));
+    assert.deepEqual(campaignEvents[0]!.payloadJson, {
+      taskId: task.id,
+      taskType: "create_voluum_campaign_ios",
+      batchId: seed.batchId,
+      platform: "ios",
+      trafficSourceId: seed.trafficSourceId,
+    });
+    assert.equal(completedEvents.length, 1);
+    assert.deepEqual(completedEvents[0]!.payloadJson, {
+      taskType: "create_voluum_campaign_ios",
+      relatedBatchId: seed.batchId,
+      relatedCampaignId: campaign.id,
+      completionKind: "create_voluum_campaign",
+    });
   });
 });

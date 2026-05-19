@@ -9,6 +9,7 @@ import {
   employeesTable,
   employeeWorkspaceAssignmentsTable,
   eventsTable,
+  operationalEventsTable,
   performanceTable,
   testingBatchesTable,
   todoTasksTable,
@@ -30,6 +31,20 @@ let voluumFetchCalls: Array<{ url: string; init?: RequestInit }> = [];
 let voluumFetchMock: ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => Promise<Response>) | null = null;
 
 before(async () => {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS operational_events (
+      id serial PRIMARY KEY,
+      workspace_id integer NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      entity_type text NOT NULL,
+      entity_id text NOT NULL,
+      event_type text NOT NULL,
+      actor_type text NOT NULL DEFAULT 'system',
+      actor_id text,
+      source text NOT NULL,
+      payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
   server = app.listen(0);
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const address = server.address() as AddressInfo;
@@ -182,6 +197,16 @@ async function eventCount(workspaceId: number): Promise<number> {
     .from(eventsTable)
     .where(eq(eventsTable.workspaceId, workspaceId));
   return row?.count ?? 0;
+}
+
+async function operationalEvents(workspaceId: number, eventType: string) {
+  return db
+    .select()
+    .from(operationalEventsTable)
+    .where(
+      eq(operationalEventsTable.workspaceId, workspaceId),
+    )
+    .then((rows) => rows.filter((row) => row.eventType === eventType));
 }
 
 async function writeCounts(workspaceId: number): Promise<{ batches: number; tasks: number; performance: number }> {
@@ -447,6 +472,49 @@ describe("Voluum discovery preview dry-run route", { concurrency: false }, () =>
     assert.equal(serialized.includes("raw-network-secret"), false);
     assert.equal(serialized.includes("extraPayload"), false);
     assertOnlyVoluumAuthAndMetadataWereCalled();
+  });
+
+  test("records sanitized SYNC_PREVIEW_RUN operational event after preview succeeds", async () => {
+    process.env["ENABLE_VOLUUM"] = "false";
+    process.env["ENABLE_VOLUUM_DRY_RUN"] = "true";
+    const { workspaceId, employeeId } = await seedWorkspaceAccess();
+    await setWorkspaceVoluumCredentials(workspaceId, {
+      accessId: "valid-access-id",
+      accessKey: "valid-access-key",
+      voluumWorkspaceId: "workspace-1",
+    });
+    mockVoluumDiscoveryMetadata({
+      trafficSources: new Response(JSON.stringify({
+        trafficSources: [{ id: "ts-1", name: "Meta Source", secret: "raw-source-secret" }],
+      }), { status: 200 }),
+      affiliateNetworks: new Response(JSON.stringify({
+        affiliateNetworks: [{ id: "an-1", name: "Meta Network", accessKey: "raw-network-secret" }],
+      }), { status: 200 }),
+    });
+
+    const { response } = await request("POST", "/sync/voluum/discovery-preview", employeeId, { workspaceId });
+
+    assert.equal(response.status, 200);
+    const events = await operationalEvents(workspaceId, "SYNC_PREVIEW_RUN");
+    assert.equal(events.length, 1);
+    assert.equal(events[0]!.entityType, "sync_preview");
+    assert.equal(events[0]!.entityId, `workspace:${workspaceId}`);
+    assert.equal(events[0]!.actorType, "employee");
+    assert.equal(events[0]!.actorId, String(employeeId));
+    assert.equal(events[0]!.source, "sync.voluum.discovery-preview");
+    assert.deepEqual(events[0]!.payloadJson, {
+      credentialsValid: true,
+      credentialCode: null,
+      trafficSourcesFound: 1,
+      affiliateNetworksFound: 1,
+      metadataFetches: true,
+      warnings: [],
+    });
+    const serialized = JSON.stringify(events[0]);
+    assert.equal(serialized.includes("valid-access-key"), false);
+    assert.equal(serialized.includes("voluum-session-token"), false);
+    assert.equal(serialized.includes("raw-source-secret"), false);
+    assert.equal(serialized.includes("raw-network-secret"), false);
   });
 
   test("response does not include secrets, tokens, headers, or raw provider errors", async () => {

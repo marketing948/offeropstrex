@@ -18,10 +18,15 @@ import { and, asc, eq, gt, ne, sql } from "drizzle-orm";
 import { emitWithinTx } from "./event-bus.ts";
 import type { Action, BatchStatus, Tx } from "./types.ts";
 import { assertNever } from "./types.ts";
+import { recordOperationalEvent } from "../lib/operational-events.ts";
 
 type CreateBatchAction = Extract<Action, { type: "CreateBatch" }>;
 type PlatformRunStatus = "pending" | "active" | "completed" | "failed" | "skipped";
 type TrafficSourceRunStatus = "pending" | "active" | "completed" | "failed" | "skipped";
+type CreatedTaskAuditRow = Pick<
+  typeof todoTasksTable.$inferSelect,
+  "id" | "workspaceId" | "employeeId" | "relatedBatchId" | "relatedCampaignId" | "taskType" | "priority" | "trafficSourceId"
+>;
 
 const TERMINAL_PLATFORM_STATUSES = new Set<PlatformRunStatus>([
   "completed",
@@ -45,6 +50,31 @@ function deriveTrafficSourceRunStatus(
   }
 
   return "active";
+}
+
+async function recordTaskCreatedOperationalEvent(tx: Tx, task: CreatedTaskAuditRow): Promise<void> {
+  await recordOperationalEvent({
+    workspaceId: task.workspaceId,
+    entityType: "task",
+    entityId: task.id,
+    eventType: "TASK_CREATED",
+    actorType: "system",
+    source: "engine",
+    payloadJson: {
+      taskType: task.taskType,
+      employeeId: task.employeeId,
+      relatedBatchId: task.relatedBatchId,
+      relatedCampaignId: task.relatedCampaignId,
+      priority: task.priority,
+      trafficSourceId: task.trafficSourceId,
+    },
+  }, tx);
+}
+
+async function recordTaskCreatedOperationalEvents(tx: Tx, tasks: CreatedTaskAuditRow[]): Promise<void> {
+  for (const task of tasks) {
+    await recordTaskCreatedOperationalEvent(tx, task);
+  }
 }
 
 async function activateNextTrafficSourceRun(
@@ -98,7 +128,7 @@ async function activateNextTrafficSourceRun(
       .limit(1);
     if (existingAllDone) return;
 
-    await tx
+    const createdSummaryTasks = await tx
       .insert(todoTasksTable)
       .values({
         workspaceId: action.workspaceId,
@@ -109,7 +139,18 @@ async function activateNextTrafficSourceRun(
         priority: "low",
         status: "TODO",
       })
-      .onConflictDoNothing();
+      .onConflictDoNothing()
+      .returning({
+        id: todoTasksTable.id,
+        workspaceId: todoTasksTable.workspaceId,
+        employeeId: todoTasksTable.employeeId,
+        relatedBatchId: todoTasksTable.relatedBatchId,
+        relatedCampaignId: todoTasksTable.relatedCampaignId,
+        taskType: todoTasksTable.taskType,
+        priority: todoTasksTable.priority,
+        trafficSourceId: todoTasksTable.trafficSourceId,
+      });
+    await recordTaskCreatedOperationalEvents(tx, createdSummaryTasks);
     return;
   }
 
@@ -152,7 +193,7 @@ async function activateNextTrafficSourceRun(
   const sourceName = source?.name ?? `traffic source #${nextRun.trafficSourceId}`;
   const batchName = batch.batchName ?? `Batch #${action.batchId}`;
 
-  await tx
+  const createdCampaignTasks = await tx
     .insert(todoTasksTable)
     .values([
       {
@@ -176,7 +217,18 @@ async function activateNextTrafficSourceRun(
         trafficSourceId: nextRun.trafficSourceId,
       },
     ])
-    .onConflictDoNothing();
+    .onConflictDoNothing()
+    .returning({
+      id: todoTasksTable.id,
+      workspaceId: todoTasksTable.workspaceId,
+      employeeId: todoTasksTable.employeeId,
+      relatedBatchId: todoTasksTable.relatedBatchId,
+      relatedCampaignId: todoTasksTable.relatedCampaignId,
+      taskType: todoTasksTable.taskType,
+      priority: todoTasksTable.priority,
+      trafficSourceId: todoTasksTable.trafficSourceId,
+    });
+  await recordTaskCreatedOperationalEvents(tx, createdCampaignTasks);
 }
 
 /**
@@ -267,7 +319,7 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
     }
 
     case "CreateTask": {
-      await tx
+      const createdTasks = await tx
         .insert(todoTasksTable)
         .values({
           workspaceId: action.workspaceId,
@@ -289,7 +341,18 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
         // tracker-task index) make concurrent rule firings safe —
         // the second insert silently no-ops instead of crashing the
         // engine tx.
-        .onConflictDoNothing();
+        .onConflictDoNothing()
+        .returning({
+          id: todoTasksTable.id,
+          workspaceId: todoTasksTable.workspaceId,
+          employeeId: todoTasksTable.employeeId,
+          relatedBatchId: todoTasksTable.relatedBatchId,
+          relatedCampaignId: todoTasksTable.relatedCampaignId,
+          taskType: todoTasksTable.taskType,
+          priority: todoTasksTable.priority,
+          trafficSourceId: todoTasksTable.trafficSourceId,
+        });
+      await recordTaskCreatedOperationalEvents(tx, createdTasks);
       return;
     }
 
@@ -391,6 +454,14 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
             trafficSourceCampaignId: string;
           }
         | null = null;
+      let linkedCampaign:
+        | {
+            campaignId: number;
+            batchId: number;
+            platform: "ios" | "android";
+            trafficSourceId: number;
+          }
+        | null = null;
 
       switch (action.completion.kind) {
         case "generic":
@@ -430,6 +501,12 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
             })
             .returning({ id: campaignsTable.id });
           resolvedCampaignId = campaign.id;
+          linkedCampaign = {
+            campaignId: campaign.id,
+            batchId: task.relatedBatchId,
+            platform: action.completion.platform,
+            trafficSourceId: action.completion.trafficSourceId,
+          };
 
           await tx
             .update(batchTrafficSourceRunsTable)
@@ -602,6 +679,41 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
         },
         dedupeKey: `task_completed:${updated.id}`,
       });
+
+      if (linkedCampaign !== null) {
+        await recordOperationalEvent({
+          workspaceId: action.workspaceId,
+          entityType: "campaign",
+          entityId: linkedCampaign.campaignId,
+          eventType: "CAMPAIGN_LINKED",
+          actorType: "employee",
+          actorId: action.completedByEmployeeId,
+          source: "engine",
+          payloadJson: {
+            taskId: updated.id,
+            taskType: updated.taskType,
+            batchId: linkedCampaign.batchId,
+            platform: linkedCampaign.platform,
+            trafficSourceId: linkedCampaign.trafficSourceId,
+          },
+        }, tx);
+      }
+
+      await recordOperationalEvent({
+        workspaceId: action.workspaceId,
+        entityType: "task",
+        entityId: updated.id,
+        eventType: "TASK_COMPLETED",
+        actorType: "employee",
+        actorId: action.completedByEmployeeId,
+        source: "engine",
+        payloadJson: {
+          taskType: updated.taskType,
+          relatedBatchId: updated.relatedBatchId,
+          relatedCampaignId: resolvedCampaignId,
+          completionKind: action.completion.kind,
+        },
+      }, tx);
       return;
     }
 
@@ -828,7 +940,7 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
       // (`batch_created:<id>`); a re-emit short-circuits in event-bus
       // before this action is ever produced.
       const batchName = action.data.batchName;
-      await tx
+      const createdIosTasks = await tx
         .insert(todoTasksTable)
         .values({
           workspaceId: action.workspaceId,
@@ -839,8 +951,19 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
           priority: "medium",
           status: "TODO",
         })
-        .onConflictDoNothing();
-      await tx
+        .onConflictDoNothing()
+        .returning({
+          id: todoTasksTable.id,
+          workspaceId: todoTasksTable.workspaceId,
+          employeeId: todoTasksTable.employeeId,
+          relatedBatchId: todoTasksTable.relatedBatchId,
+          relatedCampaignId: todoTasksTable.relatedCampaignId,
+          taskType: todoTasksTable.taskType,
+          priority: todoTasksTable.priority,
+          trafficSourceId: todoTasksTable.trafficSourceId,
+        });
+      await recordTaskCreatedOperationalEvents(tx, createdIosTasks);
+      const createdAndroidTasks = await tx
         .insert(todoTasksTable)
         .values({
           workspaceId: action.workspaceId,
@@ -851,7 +974,18 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
           priority: "medium",
           status: "TODO",
         })
-        .onConflictDoNothing();
+        .onConflictDoNothing()
+        .returning({
+          id: todoTasksTable.id,
+          workspaceId: todoTasksTable.workspaceId,
+          employeeId: todoTasksTable.employeeId,
+          relatedBatchId: todoTasksTable.relatedBatchId,
+          relatedCampaignId: todoTasksTable.relatedCampaignId,
+          taskType: todoTasksTable.taskType,
+          priority: todoTasksTable.priority,
+          trafficSourceId: todoTasksTable.trafficSourceId,
+        });
+      await recordTaskCreatedOperationalEvents(tx, createdAndroidTasks);
       return;
     }
 
