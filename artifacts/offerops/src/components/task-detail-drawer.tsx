@@ -59,6 +59,11 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { getTaskTypeVisual } from "@/lib/task-type-visuals";
+import {
+  parseWinnerHandoffContext,
+  winnerHandoffHumanDescription,
+} from "@/lib/winner-handoff";
+import { Copy } from "lucide-react";
 
 type Platform = "ios" | "android";
 
@@ -728,8 +733,22 @@ function ManualTaskForm({
   task: TodoTask;
   onCompleted: () => void;
 }) {
+  const { toast } = useToast();
   const complete = useCompleteTask();
   const [pending, setPending] = useState(false);
+  const handoff = parseWinnerHandoffContext(task.description);
+  const humanDescription = winnerHandoffHumanDescription(task.description);
+
+  async function copyWinnerIds() {
+    if (!handoff?.winnerOfferIds.length) return;
+    const text = handoff.winnerOfferIds.join(", ");
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({ title: "Copied winner offer IDs" });
+    } catch {
+      toast({ title: "Could not copy", variant: "destructive" });
+    }
+  }
 
   async function submit() {
     setPending(true);
@@ -743,15 +762,73 @@ function ManualTaskForm({
       <p className="text-sm text-muted-foreground">
         Mark this reminder complete when you have finished the work. This does not trigger CampaignOps automation.
       </p>
-      {task.description?.trim() && (
+      {handoff && (
+        <WinnerHandoffPanel handoff={handoff} onCopyAll={copyWinnerIds} />
+      )}
+      {humanDescription && (
         <div className="rounded-md border bg-muted/30 p-3 text-sm whitespace-pre-wrap">
-          {task.description}
+          {humanDescription}
         </div>
       )}
       <div className="flex justify-end gap-2 pt-2">
-        <Button size="sm" onClick={submit} disabled={pending}>
+        <Button size="sm" onClick={() => void submit()} disabled={pending}>
           {pending ? "Completing…" : "Mark complete"}
         </Button>
+      </div>
+    </div>
+  );
+}
+
+function WinnerHandoffPanel({
+  handoff,
+  onCopyAll,
+}: {
+  handoff: NonNullable<ReturnType<typeof parseWinnerHandoffContext>>;
+  onCopyAll: () => void;
+}) {
+  const platformLabel = handoff.platform === "ios" ? "iOS" : "Android";
+  return (
+    <div className="rounded-md border border-amber-200 bg-amber-50/80 p-3 space-y-3 dark:border-amber-900 dark:bg-amber-950/30">
+      <p className="text-xs font-semibold uppercase tracking-wide text-amber-900 dark:text-amber-200">
+        Winner handoff (manual — no Voluum auto-transfer)
+      </p>
+      {handoff.missingWorkingCampaign ? (
+        <p className="text-sm text-amber-800 dark:text-amber-300">
+          No live working campaign was found for this slot. Create or locate the working campaign before moving offers.
+        </p>
+      ) : handoff.targetWorkingCampaignId != null ? (
+        <p className="text-sm">
+          Target working campaign:{" "}
+          <span className="font-mono font-medium">#{handoff.targetWorkingCampaignId}</span>
+        </p>
+      ) : null}
+      <p className="text-xs text-muted-foreground">
+        Testing campaign #{handoff.testingCampaignId}
+        {handoff.batchId != null ? ` · batch #${handoff.batchId}` : ""}
+        {` · ${platformLabel}`}
+        {handoff.trafficSourceId != null ? ` · traffic source #${handoff.trafficSourceId}` : ""}
+      </p>
+      <div>
+        <div className="flex items-center justify-between gap-2 mb-1.5">
+          <span className="text-xs font-medium">Winner offer IDs</span>
+          {handoff.winnerOfferIds.length > 0 && (
+            <Button type="button" variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={onCopyAll}>
+              <Copy className="h-3 w-3" />
+              Copy all
+            </Button>
+          )}
+        </div>
+        {handoff.winnerOfferIds.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {handoff.winnerOfferIds.map((id) => (
+              <Badge key={id} variant="secondary" className="font-mono text-xs">
+                {id}
+              </Badge>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">No winner IDs recorded at close — confirm IDs in Voluum.</p>
+        )}
       </div>
     </div>
   );

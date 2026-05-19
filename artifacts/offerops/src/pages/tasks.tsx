@@ -36,7 +36,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CalendarClock, CheckSquare, ChevronRight, PlayCircle } from "lucide-react";
+import { CalendarClock, CheckSquare, ChevronRight, PlayCircle, Plus } from "lucide-react";
+import { CreateManualTaskDialog } from "@/components/create-manual-task-dialog";
 
 const STATUS_LABEL: Record<TodoTaskStatus, string> = {
   TODO: "To do",
@@ -73,6 +74,8 @@ export default function Tasks() {
   const { currentEmployee } = useAuth();
   const queryClient = useQueryClient();
   const employeeId = currentEmployee?.id;
+  const isAdmin = currentEmployee?.role === "admin";
+  const [createManualOpen, setCreateManualOpen] = useState(false);
 
   const taskParams = {
     workspace_id: activeWorkspaceId ?? 0,
@@ -168,7 +171,23 @@ export default function Tasks() {
             )}
           </p>
         )}
+        {isAdmin && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="mt-3 gap-1.5"
+            onClick={() => setCreateManualOpen(true)}
+          >
+            <Plus className="h-4 w-4" />
+            Create manual task
+          </Button>
+        )}
       </header>
+
+      {isAdmin && (
+        <CreateManualTaskDialog open={createManualOpen} onOpenChange={setCreateManualOpen} />
+      )}
 
       <div className="flex flex-wrap gap-2">
         {FILTER_OPTIONS.map(({ key, label }) => (

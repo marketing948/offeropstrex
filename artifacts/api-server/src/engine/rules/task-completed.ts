@@ -23,6 +23,10 @@ import {
   campaignsTable,
   testingBatchesTable,
 } from "@workspace/db";
+import {
+  formatTakeCampaignLiveTitle,
+  resolveCampaignDisplayName,
+} from "../../lib/campaign-display-name.ts";
 import type { Action, EventInput, Tx } from "../types.ts";
 
 type TaskCompletedEvent = Extract<EventInput, { type: "TaskCompleted" }>;
@@ -52,6 +56,7 @@ export async function handleTaskCompleted(
       .select({
         id: campaignsTable.id,
         campaignName: campaignsTable.campaignName,
+        platform: campaignsTable.platform,
       })
       .from(campaignsTable)
       .where(
@@ -64,11 +69,20 @@ export async function handleTaskCompleted(
     if (!campaign) return [];
 
     const [batch] = await tx
-      .select({ employeeId: testingBatchesTable.employeeId })
+      .select({
+        employeeId: testingBatchesTable.employeeId,
+        batchName: testingBatchesTable.batchName,
+      })
       .from(testingBatchesTable)
       .where(eq(testingBatchesTable.id, relatedBatchId))
       .limit(1);
     if (!batch || batch.employeeId == null) return [];
+
+    const displayName = resolveCampaignDisplayName({
+      campaignName: campaign.campaignName,
+      batchName: batch.batchName,
+      platform: campaign.platform,
+    });
 
     return [
       {
@@ -78,7 +92,7 @@ export async function handleTaskCompleted(
           employeeId: batch.employeeId,
           relatedBatchId,
           relatedCampaignId,
-          title: `Take "${campaign.campaignName}" live`,
+          title: formatTakeCampaignLiveTitle(displayName),
           taskType: "take_campaign_live",
           priority: "high",
         },

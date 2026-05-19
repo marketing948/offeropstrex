@@ -49,21 +49,33 @@ export function ManualCloseCampaignDialog({
   const [winnerOfferIds, setWinnerOfferIds] = useState("");
   const [pending, setPending] = useState(false);
 
+  function parseWinnerOfferIds(raw: string): number[] {
+    return raw
+      .split(/[,\n\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => Number(s))
+      .filter((n) => Number.isInteger(n) && n > 0);
+  }
+
   async function submit() {
+    const parsedWinnerIds = parseWinnerOfferIds(winnerOfferIds);
+    if (reason === "winners_found" && parsedWinnerIds.length === 0) {
+      toast({
+        title: "Winner offer IDs required",
+        description: "Enter at least one winning Voluum/offer ID before closing.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setPending(true);
     try {
-      const parsedWinnerIds = winnerOfferIds
-        .split(/[,\s]+/)
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((s) => Number(s))
-        .filter((n) => Number.isInteger(n) && n > 0);
-
       const body: Record<string, unknown> = {
         reason,
         note: note.trim() || null,
       };
-      if (reason === "winners_found" && parsedWinnerIds.length > 0) {
+      if (reason === "winners_found") {
         body.winnerOfferIds = parsedWinnerIds;
       }
 
@@ -135,13 +147,16 @@ export function ManualCloseCampaignDialog({
           )}
           {reason === "winners_found" && (
             <div>
-              <Label className="text-xs">Winner offer IDs (optional)</Label>
-              <Input
-                className="mt-1 h-9 font-mono text-sm"
-                placeholder="e.g. 12, 34, 56"
+              <Label className="text-xs">Winner offer IDs *</Label>
+              <Textarea
+                className="mt-1 min-h-[4rem] font-mono text-sm"
+                placeholder="e.g. 12, 34, 56 (comma or newline separated)"
                 value={winnerOfferIds}
                 onChange={(e) => setWinnerOfferIds(e.target.value)}
               />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Enter the winning Voluum/offer IDs to move to the working campaign.
+              </p>
             </div>
           )}
           <div>

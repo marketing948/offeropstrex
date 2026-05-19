@@ -10,6 +10,12 @@ import {
 import { applyAction } from "../engine/executor.ts";
 import { checkWorkspaceAccess } from "./workspace-access.ts";
 import { recordOperationalEvent } from "./operational-events.ts";
+import { resolveCampaignDisplayName } from "./campaign-display-name.ts";
+import {
+  buildWinnerHandoffDescription,
+  buildWinnerHandoffTitle,
+  type WinnerHandoffContext,
+} from "./winner-handoff.ts";
 
 export const MANUAL_CLOSE_REASONS = [
   "opened_by_mistake",
@@ -248,9 +254,15 @@ export async function manualCloseCampaign(
       const winnerIds =
         input.winnerOfferIds?.filter((id) => Number.isInteger(id) && id > 0) ?? [];
 
-      const taskPayload = {
+      const displayName = resolveCampaignDisplayName({
+        campaignName: row.campaignName,
+        batchName: batch?.batchName,
+        platform: row.platform,
+      });
+
+      const handoffContext: WinnerHandoffContext = {
         kind: "winners_found_manual_close",
-        campaignId: row.id,
+        testingCampaignId: row.id,
         batchId: row.batchId,
         platform: row.platform,
         trafficSourceId: row.trafficSourceId,
@@ -260,19 +272,16 @@ export async function manualCloseCampaign(
         manualCloseReason: input.reason,
       };
 
-      const title = missingWorkingCampaign
-        ? `Create working campaign for winners (${row.campaignName})`
-        : `Move winners to working campaign (${row.campaignName})`;
+      const title = buildWinnerHandoffTitle({
+        campaignName: displayName,
+        missingWorkingCampaign,
+      });
 
-      const descriptionLines = [
-        missingWorkingCampaign
-          ? "No live working campaign matches this slot. Create the working campaign, then complete winner transfer in Voluum manually."
-          : `Target working campaign #${targetWorkingCampaignId}. Add winner offers in Voluum manually — no automatic transfer.`,
-        winnerIds.length > 0
-          ? `Winner offer IDs: ${winnerIds.join(", ")}`
-          : "Record winner offer IDs when completing this task.",
-        input.note?.trim() ? `Note: ${input.note.trim()}` : null,
-      ].filter(Boolean);
+      const description = buildWinnerHandoffDescription({
+        context: handoffContext,
+        targetWorkingCampaignId,
+        note: input.note,
+      });
 
       const [task] = await tx
         .insert(todoTasksTable)
@@ -283,7 +292,7 @@ export async function manualCloseCampaign(
           relatedCampaignId: row.id,
           trafficSourceId: row.trafficSourceId,
           title,
-          description: `${descriptionLines.join("\n")}\n\n${JSON.stringify(taskPayload)}`,
+          description,
           taskType: "MANUAL",
           priority: "high",
           status: "TODO",
@@ -314,6 +323,10 @@ export async function manualCloseCampaign(
       platform: updated.platform,
       trafficSourceId: updated.trafficSourceId,
       reason: input.reason,
+      winnerOfferIds:
+        input.reason === "winners_found"
+          ? input.winnerOfferIds?.filter((id) => Number.isInteger(id) && id > 0) ?? []
+          : undefined,
       followUpTaskIds,
       missingWorkingCampaign,
       targetWorkingCampaignId,

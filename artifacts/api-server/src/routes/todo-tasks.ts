@@ -15,6 +15,7 @@ import { requireWorkspaceFromBody } from "../lib/require-workspace";
 import { emit } from "../engine/event-bus.ts";
 import type { TaskCompletionDetails } from "../engine/types.ts";
 import { getEmployeeFromToken } from "./auth";
+import { composeCampaignDisplayName } from "../lib/campaign-display-name.ts";
 
 const router: IRouter = Router();
 
@@ -456,14 +457,26 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       res.status(400).json({ error: "Task is missing trafficSourceId" });
       return;
     }
+    const [batch] = await db
+      .select({ batchName: testingBatchesTable.batchName })
+      .from(testingBatchesTable)
+      .where(
+        and(
+          eq(testingBatchesTable.id, task.relatedBatchId),
+          eq(testingBatchesTable.workspaceId, task.workspaceId),
+        ),
+      )
+      .limit(1);
+    const batchLabel = batch?.batchName?.trim() || `Batch #${task.relatedBatchId}`;
+    const campaignDisplayName = composeCampaignDisplayName(batchLabel, platformFromType);
     completion = {
       kind: "create_voluum_campaign",
       platform: platformFromType,
       voluumCampaignId: parsed.data.voluumCampaignId,
       campaignUrl: parsed.data.campaignUrl,
       trafficSourceId,
-      campaignName: task.title,
-      voluumCampaignName: task.title,
+      campaignName: campaignDisplayName,
+      voluumCampaignName: campaignDisplayName,
     };
   } else if (task.taskType === "take_campaign_live") {
     if (task.relatedCampaignId == null) {

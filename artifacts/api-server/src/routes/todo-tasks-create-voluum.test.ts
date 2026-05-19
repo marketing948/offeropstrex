@@ -203,6 +203,69 @@ describe("POST /todo-tasks/:id/complete create_voluum_campaign", { concurrency: 
     assert.equal(followUp.status, "TODO");
   });
 
+  test("take_campaign_live title uses batch display name not create_voluum task title", async () => {
+    const workspaceId = await createWorkspace();
+    const employeeId = await createEmployee();
+    await assign(employeeId, workspaceId);
+
+    const batchName = "LB_US_batch1";
+    const [source] = await db
+      .insert(workspaceTrafficSourcesTable)
+      .values({ workspaceId, name: "Source", position: 1, isActive: true })
+      .returning({ id: workspaceTrafficSourcesTable.id });
+
+    const [batch] = await db
+      .insert(testingBatchesTable)
+      .values({
+        workspaceId,
+        employeeId,
+        batchName,
+        affiliateNetwork: "Net",
+        geo: "DE",
+        trafficSource: "Source",
+        batchTag: `CV_${Date.now()}`,
+      })
+      .returning({ id: testingBatchesTable.id });
+
+    const [task] = await db
+      .insert(todoTasksTable)
+      .values({
+        workspaceId,
+        employeeId,
+        relatedBatchId: batch.id,
+        taskType: "create_voluum_campaign_android",
+        title: `Create Voluum campaign for ${batchName} Android`,
+        trafficSourceId: source.id,
+      })
+      .returning({ id: todoTasksTable.id });
+
+    const voluumId = `vc-title-${Date.now()}`;
+    const { response } = await request(
+      "POST",
+      `/todo-tasks/${task.id}/complete`,
+      employeeId,
+      completeBody(voluumId),
+    );
+    assert.equal(response.status, 200);
+
+    const [campaign] = await db
+      .select({ id: campaignsTable.id, campaignName: campaignsTable.campaignName })
+      .from(campaignsTable)
+      .where(eq(campaignsTable.voluumCampaignId, voluumId));
+    assert.equal(campaign.campaignName, `${batchName} Android`);
+
+    const [followUp] = await db
+      .select({ title: todoTasksTable.title })
+      .from(todoTasksTable)
+      .where(
+        and(
+          eq(todoTasksTable.relatedCampaignId, campaign.id),
+          eq(todoTasksTable.taskType, "take_campaign_live"),
+        ),
+      );
+    assert.equal(followUp.title, `Take "${batchName} Android" live`);
+  });
+
   test("rejects duplicate voluumCampaignId in same workspace", async () => {
     const seed = await seedBatchWithCreateTask();
     const voluumId = `vc-dup-${Date.now()}`;
