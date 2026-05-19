@@ -7,12 +7,13 @@
 // task completion flow).
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace-context";
 import { authedJson } from "@/lib/api-fetch";
 import { ProductionLiveCampaignForm } from "@/components/production-live-campaign-form";
+import { ManualCloseCampaignDialog } from "@/components/manual-close-campaign-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -133,8 +134,10 @@ function toNextDate(value: string): string {
 export default function LiveCampaigns() {
   const { currentEmployee } = useAuth();
   const { activeWorkspaceId } = useWorkspace();
+  const queryClient = useQueryClient();
   const isAdmin = currentEmployee?.role === "admin";
   const [addOpen, setAddOpen] = useState(false);
+  const [closeTarget, setCloseTarget] = useState<{ id: number; name: string } | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("live");
   const [platformFilter, setPlatformFilter] = useState<string>("all");
   const [trafficSourceFilter, setTrafficSourceFilter] = useState<string>("all");
@@ -384,15 +387,16 @@ export default function LiveCampaigns() {
               <TableHead className="text-right">ROI</TableHead>
               <TableHead className="text-right">Winners</TableHead>
               <TableHead>Worker</TableHead>
+              <TableHead className="w-[100px]">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={12} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>
+              <TableRow><TableCell colSpan={13} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>
             ) : isError ? (
-              <TableRow><TableCell colSpan={12} className="text-center py-8 text-destructive">{errorMessage}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={13} className="text-center py-8 text-destructive">{errorMessage}</TableCell></TableRow>
             ) : filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={12} className="text-center py-8 text-muted-foreground">No campaigns match these filters.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={13} className="text-center py-8 text-muted-foreground">No campaigns match these filters.</TableCell></TableRow>
             ) : (
               filtered.map((c) => (
                 <TableRow key={c.id}>
@@ -417,6 +421,21 @@ export default function LiveCampaigns() {
                   <TableCell className="text-right tabular-nums">{fmtPct(c.roi)}</TableCell>
                   <TableCell className="text-right tabular-nums">{c.winnersCount ?? "—"}</TableCell>
                   <TableCell className="text-xs">{c.employeeName ?? "—"}</TableCell>
+                  <TableCell>
+                    {c.status !== "closed" ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => setCloseTarget({ id: c.id, name: c.campaignName })}
+                      >
+                        Close
+                      </Button>
+                    ) : (
+                      <span className="text-[11px] text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
                 </TableRow>
               ))
             )}
@@ -448,6 +467,19 @@ export default function LiveCampaigns() {
           </button>
         </div>
       </div>
+
+      {closeTarget && (
+        <ManualCloseCampaignDialog
+          open={!!closeTarget}
+          onOpenChange={(open) => !open && setCloseTarget(null)}
+          campaignId={closeTarget.id}
+          campaignName={closeTarget.name}
+          onClosed={() => {
+            void queryClient.invalidateQueries({ queryKey: ["live-campaigns"] });
+            void queryClient.invalidateQueries({ queryKey: ["live-campaign-filter-options"] });
+          }}
+        />
+      )}
 
       {isAdmin && (
         <Dialog open={addOpen} onOpenChange={setAddOpen}>

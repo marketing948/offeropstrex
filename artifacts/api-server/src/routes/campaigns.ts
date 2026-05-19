@@ -36,6 +36,12 @@ import {
   insertProductionLiveCampaign,
   PRODUCTION_CAMPAIGN_PURPOSES,
 } from "../lib/production-live-campaigns.ts";
+import {
+  assertCanManualCloseCampaign,
+  MANUAL_CLOSE_REASONS,
+  ManualCloseError,
+  manualCloseCampaign,
+} from "../lib/manual-campaign-close.ts";
 
 const router: IRouter = Router();
 
@@ -385,6 +391,67 @@ router.patch("/campaigns/:id", async (req, res): Promise<void> => {
           `Campaign is in status "${existing.status}"; cannot transition to "${nextStatus}" ` +
           "(concurrent update or invalid from-state).",
       });
+      return;
+    }
+    throw err;
+  }
+});
+
+const manualCloseBodySchema = z.object({
+  reason: z.enum(MANUAL_CLOSE_REASONS),
+  note: z.string().nullable().optional(),
+  winnerOfferIds: z.array(z.number().int().positive()).optional(),
+});
+
+router.post("/campaigns/:id/manual-close", async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+
+  const parsed = manualCloseBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const [existing] = await db
+    .select()
+    .from(campaignsTable)
+    .where(eq(campaignsTable.id, id));
+  if (!existing) {
+    res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
+
+  let batchEmployeeId: number | null = null;
+  if (existing.batchId != null) {
+    const [batch] = await db
+      .select({ employeeId: testingBatchesTable.employeeId })
+      .from(testingBatchesTable)
+      .where(
+        and(
+          eq(testingBatchesTable.id, existing.batchId),
+          eq(testingBatchesTable.workspaceId, existing.workspaceId),
+        ),
+      )
+      .limit(1);
+    batchEmployeeId = batch?.employeeId ?? null;
+  }
+
+  try {
+    const actor = await assertCanManualCloseCampaign(req, existing, batchEmployeeId);
+    const result = await manualCloseCampaign(existing, actor.id, parsed.data);
+    res.json({
+      ...serialize(result.campaign),
+      followUpTaskIds: result.followUpTaskIds,
+      missingWorkingCampaign: result.missingWorkingCampaign,
+      targetWorkingCampaignId: result.targetWorkingCampaignId,
+    });
+  } catch (err) {
+    if (err instanceof ManualCloseError) {
+      res.status(err.statusCode).json({ error: err.message });
       return;
     }
     throw err;
