@@ -52,6 +52,22 @@ function deriveTrafficSourceRunStatus(
   return "active";
 }
 
+function shouldAdvanceTrafficSourceRun(
+  iosStatus: PlatformRunStatus,
+  androidStatus: PlatformRunStatus,
+  runStatus: TrafficSourceRunStatus,
+): boolean {
+  const iosTerminal = TERMINAL_PLATFORM_STATUSES.has(iosStatus);
+  const androidTerminal = TERMINAL_PLATFORM_STATUSES.has(androidStatus);
+  if (!iosTerminal || !androidTerminal) return false;
+
+  if (runStatus === "completed") return true;
+  if (runStatus === "failed" && iosStatus === "failed" && androidStatus === "failed") {
+    return true;
+  }
+  return false;
+}
+
 async function recordTaskCreatedOperationalEvent(tx: Tx, task: CreatedTaskAuditRow): Promise<void> {
   await recordOperationalEvent({
     workspaceId: task.workspaceId,
@@ -776,7 +792,7 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
         })
         .where(eq(batchTrafficSourceRunsTable.id, run.id));
 
-      if (nextRunStatus === "completed") {
+      if (shouldAdvanceTrafficSourceRun(nextIosStatus, nextAndroidStatus, nextRunStatus)) {
         await activateNextTrafficSourceRun(tx, action, run.position);
       }
       return;

@@ -11,9 +11,8 @@
 //   find_winners                   → mark the platform outcome on the
 //                                    active batch_traffic_source_run.
 //                                    The executor derives run status and
-//                                    advances to the next source when
-//                                    the run has a successful terminal
-//                                    outcome.
+//                                    advances when both platforms are
+//                                    terminal (success and/or dual-fail).
 //
 // Legacy task types (CREATE_*_CAMPAIGN, GO_LIVE, OPTIMIZATION_FOLLOWUP,
 // FIND_WINNERS, PAUSE_*, MOVE_WINNERS_*) are no-ops — historical data only.
