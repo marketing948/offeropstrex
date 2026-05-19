@@ -19,6 +19,7 @@ import DailyReports from "@/pages/daily-reports";
 import WeeklyReports from "@/pages/weekly-reports";
 import Settings from "@/pages/settings";
 import Performance from "@/pages/performance";
+import MissionControl from "@/pages/mission-control";
 import OpsQueue from "@/pages/ops-queue";
 import TrackerCampaigns from "@/pages/tracker-campaigns";
 import LiveCampaigns from "@/pages/live-campaigns";
@@ -68,6 +69,9 @@ function Router() {
       <Route path="/login" component={Login} />
 
       <Route path="/ops">
+        {() => <ProtectedRoute component={MissionControl} />}
+      </Route>
+      <Route path="/ops/legacy">
         {() => <ProtectedRoute component={OpsQueue} />}
       </Route>
 

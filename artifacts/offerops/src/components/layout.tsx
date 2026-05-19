@@ -288,7 +288,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   // ── Nav items (Pivot Phase 0: Tracker Campaigns hidden — Voluum disabled) ──
   const navItems = isAdmin ? [
-    { href: "/ops", label: "Operations Hub", icon: Layers, highlight: true },
+    { href: "/ops", label: "Mission Control", icon: Layers, highlight: true },
     { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
     { href: "/testing-batches", label: "Batches", icon: FolderTree },
     { href: "/live-campaigns", label: "Live Campaigns", icon: Radio },
@@ -297,7 +297,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { href: "/reports", label: "Reports", icon: FileBarChart },
     { href: "/employees", label: "Team", icon: Users },
   ] : [
-    { href: "/ops", label: "Operations Hub", icon: Layers, highlight: true },
+    { href: "/ops", label: "Mission Control", icon: Layers, highlight: true },
     { href: "/employee-dashboard", label: "My Dashboard", icon: LayoutDashboard },
     { href: "/testing-batches", label: "My Batches", icon: FolderTree },
     { href: "/live-campaigns", label: "Live Campaigns", icon: Radio },
