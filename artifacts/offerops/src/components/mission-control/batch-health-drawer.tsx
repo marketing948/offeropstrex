@@ -11,20 +11,21 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { RecommendationBadge } from "@/components/mission-control/recommendation-badge";
 import type { BatchHealthResponse } from "@/lib/batch-health-api";
+import { formatRelativeTime, formatWhenShort } from "@/lib/mission-control-format";
 import {
   HEALTH_STATE_STYLES,
-  RECOMMENDATION_LABELS,
   deriveMissionControlHealthState,
 } from "@/lib/mission-control-health";
 import { batchStatusConfig } from "@/lib/batch-status";
-import { ExternalLink } from "lucide-react";
-
-const SEVERITY_BADGE: Record<string, string> = {
-  info: "bg-slate-100 text-slate-700 border-slate-200",
-  warning: "bg-amber-50 text-amber-900 border-amber-200",
-  critical: "bg-red-50 text-red-800 border-red-200",
-};
+import {
+  ClipboardList,
+  ExternalLink,
+  History,
+  Lightbulb,
+  PlayCircle,
+} from "lucide-react";
 
 function PlatformPill({ label, status }: { label: string; status: string }) {
   const terminal = new Set(["completed", "failed", "skipped"]).has(status);
@@ -47,14 +48,39 @@ function PlatformPill({ label, status }: { label: string; status: string }) {
   );
 }
 
-function formatWhen(iso: string | null): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+function DrawerSection({
+  title,
+  icon: Icon,
+  count,
+  children,
+}: {
+  title: string;
+  icon: React.ElementType;
+  count?: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <section>
+      <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <Icon className="h-3.5 w-3.5" />
+        {title}
+        {count != null && (
+          <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] normal-case">
+            {count}
+          </span>
+        )}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+function EmptyBlock({ message }: { message: string }) {
+  return (
+    <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-6 text-center">
+      <p className="text-sm text-muted-foreground">{message}</p>
+    </div>
+  );
 }
 
 export type BatchHealthDrawerProps = {
@@ -104,11 +130,11 @@ export function BatchHealthDrawer({
               </span>
             )}
           </div>
-          {statusCfg && (
+          {statusCfg && health && (
             <p className="mt-2 text-xs text-muted-foreground">
               Lifecycle: <span className="font-medium text-foreground">{statusCfg.label}</span>
               {" · "}
-              Step {health!.batch.trafficSourceStep}
+              Step {health.batch.trafficSourceStep}
             </p>
           )}
         </SheetHeader>
@@ -128,41 +154,7 @@ export function BatchHealthDrawer({
 
           {!isLoading && health && (
             <div className="space-y-6 pb-6">
-              <section>
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Recommendations
-                </h3>
-                <ul className="space-y-2">
-                  {health.recommendations.map((rec) => (
-                    <li
-                      key={rec.code}
-                      className="rounded-lg border border-border bg-card px-3 py-2.5"
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge
-                          variant="outline"
-                          className={`text-[10px] font-semibold ${SEVERITY_BADGE[rec.severity] ?? ""}`}
-                        >
-                          {RECOMMENDATION_LABELS[rec.code]}
-                        </Badge>
-                        {rec.suggestedActionType && (
-                          <span className="font-mono text-[10px] text-muted-foreground">
-                            {rec.suggestedActionType}
-                          </span>
-                        )}
-                      </div>
-                      <p className="mt-1.5 text-sm text-foreground/90">{rec.message}</p>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-
-              <Separator />
-
-              <section>
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Active run
-                </h3>
+              <DrawerSection title="Run state" icon={PlayCircle}>
                 {health.activeRun ? (
                   <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
                     <div className="flex justify-between gap-2 text-sm">
@@ -176,23 +168,24 @@ export function BatchHealthDrawer({
                       <PlatformPill label="Android" status={health.activeRun.androidStatus} />
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-                      <span>Started {formatWhen(health.activeRun.startedAt)}</span>
-                      <span>Completed {formatWhen(health.activeRun.completedAt)}</span>
+                      <span title={formatWhenShort(health.activeRun.startedAt)}>
+                        Started {formatRelativeTime(health.activeRun.startedAt)}
+                      </span>
+                      <span title={formatWhenShort(health.activeRun.completedAt)}>
+                        Completed {formatRelativeTime(health.activeRun.completedAt)}
+                      </span>
                     </div>
                   </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground">No active traffic source run.</p>
+                  <EmptyBlock message="No active traffic source run for this batch." />
                 )}
-              </section>
+              </DrawerSection>
 
               <Separator />
 
-              <section>
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Open tasks ({health.openTasks.length})
-                </h3>
+              <DrawerSection title="Tasks" icon={ClipboardList} count={health.openTasks.length}>
                 {health.openTasks.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No open tasks.</p>
+                  <EmptyBlock message="No open tasks — nothing queued for operators on this batch." />
                 ) : (
                   <ul className="space-y-2">
                     {health.openTasks.map((task) => (
@@ -208,16 +201,13 @@ export function BatchHealthDrawer({
                     ))}
                   </ul>
                 )}
-              </section>
+              </DrawerSection>
 
               <Separator />
 
-              <section>
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Recent events
-                </h3>
+              <DrawerSection title="Events" icon={History}>
                 {health.recentEvents.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No recent operational events.</p>
+                  <EmptyBlock message="No recent operational events recorded for this batch." />
                 ) : (
                   <ul className="space-y-2">
                     {health.recentEvents.slice(0, 12).map((event) => (
@@ -233,14 +223,44 @@ export function BatchHealthDrawer({
                             {event.entityType}/{event.entityId} · {event.source}
                           </p>
                         </div>
-                        <time className="shrink-0 text-[10px] text-muted-foreground">
-                          {formatWhen(event.createdAt)}
+                        <time
+                          className="shrink-0 text-[10px] text-muted-foreground"
+                          title={formatWhenShort(event.createdAt)}
+                        >
+                          {formatRelativeTime(event.createdAt)}
                         </time>
                       </li>
                     ))}
                   </ul>
                 )}
-              </section>
+              </DrawerSection>
+
+              <Separator />
+
+              <DrawerSection title="Recommendations" icon={Lightbulb} count={health.recommendations.length}>
+                {health.recommendations.length === 0 ? (
+                  <EmptyBlock message="No recommendations available." />
+                ) : (
+                  <ul className="space-y-2">
+                    {health.recommendations.map((rec) => (
+                      <li
+                        key={rec.code}
+                        className="rounded-lg border border-border bg-card px-3 py-2.5"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <RecommendationBadge rec={rec} />
+                          {rec.suggestedActionType && (
+                            <Badge variant="secondary" className="font-mono text-[10px]">
+                              {rec.suggestedActionType}
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="mt-1.5 text-sm text-foreground/90">{rec.message}</p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </DrawerSection>
             </div>
           )}
         </ScrollArea>
