@@ -1,5 +1,10 @@
 import { Link } from "wouter";
 import {
+  useListCampaigns,
+  getListCampaignsQueryKey,
+  type Campaign,
+} from "@workspace/api-client-react";
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -11,19 +16,28 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { BatchHealthDrawerRecovery } from "@/components/mission-control/batch-health-drawer-recovery";
+import { CopyButton } from "@/components/mission-control/copy-button";
 import { RecommendationBadge } from "@/components/mission-control/recommendation-badge";
-import type { BatchHealthResponse } from "@/lib/batch-health-api";
+import { useAuth } from "@/lib/auth";
+import type { BatchHealthOpenTask, BatchHealthResponse } from "@/lib/batch-health-api";
 import { formatRelativeTime, formatWhenShort } from "@/lib/mission-control-format";
 import {
   HEALTH_STATE_STYLES,
   deriveMissionControlHealthState,
+  hasCriticalRecommendations,
+  isOverdueOpenTask,
+  isStuckTerminalRun,
 } from "@/lib/mission-control-health";
 import { batchStatusConfig } from "@/lib/batch-status";
+import { wsQueryOpts } from "@/lib/ws-query";
+import { cn } from "@/lib/utils";
 import {
   ClipboardList,
   ExternalLink,
   History,
   Lightbulb,
+  Link2,
   PlayCircle,
 } from "lucide-react";
 
@@ -83,6 +97,92 @@ function EmptyBlock({ message }: { message: string }) {
   );
 }
 
+function externalHref(url: string | null | undefined): string | null {
+  if (!url?.trim()) return null;
+  const u = url.trim();
+  if (u.startsWith("http://") || u.startsWith("https://")) return u;
+  return null;
+}
+
+function campaignById(campaigns: Campaign[] | undefined): Map<number, Campaign> {
+  const map = new Map<number, Campaign>();
+  for (const c of campaigns ?? []) map.set(c.id, c);
+  return map;
+}
+
+function QuickLinkButton({
+  href,
+  external,
+  children,
+}: {
+  href: string;
+  external?: boolean;
+  children: React.ReactNode;
+}) {
+  if (external) {
+    return (
+      <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" asChild>
+        <a href={href} target="_blank" rel="noopener noreferrer">
+          <ExternalLink className="h-3 w-3" />
+          {children}
+        </a>
+      </Button>
+    );
+  }
+  return (
+    <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" asChild>
+      <Link href={href}>
+        <ExternalLink className="h-3 w-3" />
+        {children}
+      </Link>
+    </Button>
+  );
+}
+
+function TaskRow({
+  batchId,
+  task,
+  campaign,
+}: {
+  batchId: number;
+  task: BatchHealthOpenTask;
+  campaign: Campaign | undefined;
+}) {
+  const overdue = isOverdueOpenTask(task);
+  const voluumHref = externalHref(campaign?.campaignUrl);
+
+  return (
+    <li
+      className={cn(
+        "rounded-md border px-3 py-2 text-sm",
+        overdue
+          ? "border-red-300 bg-red-50/60 dark:border-red-900 dark:bg-red-950/30"
+          : "border-border",
+      )}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="font-medium leading-snug">{task.title}</p>
+          <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+            {task.taskType} · {task.status}
+            {overdue && (
+              <span className="ml-2 font-semibold text-red-700 dark:text-red-300">· Overdue</span>
+            )}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <CopyButton value={String(task.id)} label="task id" />
+          <QuickLinkButton href={`/tasks?open=${task.id}`}>Task</QuickLinkButton>
+          {task.relatedCampaignId != null && (
+            <QuickLinkButton href={`/testing-batches/${batchId}`}>Campaign</QuickLinkButton>
+          )}
+          {voluumHref && <QuickLinkButton href={voluumHref} external>Voluum</QuickLinkButton>}
+        </div>
+      </div>
+    </li>
+  );
+}
+
 export type BatchHealthDrawerProps = {
   batchId: number | null;
   batchName?: string;
@@ -91,6 +191,8 @@ export type BatchHealthDrawerProps = {
   isError: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  workspaceId: number | null;
+  onHealthRefetch?: () => Promise<unknown>;
 };
 
 export function BatchHealthDrawer({
@@ -101,24 +203,66 @@ export function BatchHealthDrawer({
   isError,
   open,
   onOpenChange,
+  workspaceId,
+  onHealthRefetch,
 }: BatchHealthDrawerProps) {
+  const { currentEmployee } = useAuth();
+  const isAdmin = currentEmployee?.role === "admin";
+
   const overall = health
     ? deriveMissionControlHealthState(health.recommendations)
     : "healthy";
   const styles = HEALTH_STATE_STYLES[overall];
   const statusCfg = health ? batchStatusConfig(health.batch.status) : null;
+  const stuckRun = isStuckTerminalRun(health);
+  const criticalRecs = hasCriticalRecommendations(health);
+
+  const campaignParams =
+    batchId != null && workspaceId
+      ? { workspace_id: workspaceId, batch_id: batchId }
+      : { workspace_id: 0 };
+
+  const { data: campaigns } = useListCampaigns(
+    campaignParams,
+    wsQueryOpts(workspaceId, getListCampaignsQueryKey(campaignParams), {
+      enabled: open && batchId != null && !!workspaceId,
+      staleTime: 60_000,
+    }),
+  );
+
+  const campaignsById = campaignById(campaigns);
+
+  const displayName = batchName ?? health?.batch.batchName ?? "Batch health";
+  const trafficSourceId =
+    health?.activeRun?.trafficSourceId ?? health?.batch.currentWorkspaceTrafficSourceId;
+
+  const relatedCampaignIds = new Set<number>();
+  for (const task of health?.openTasks ?? []) {
+    if (task.relatedCampaignId != null) relatedCampaignIds.add(task.relatedCampaignId);
+  }
+  if (health?.activeRun?.iosCampaignId) relatedCampaignIds.add(health.activeRun.iosCampaignId);
+  if (health?.activeRun?.androidCampaignId) relatedCampaignIds.add(health.activeRun.androidCampaignId);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-lg">
-        <SheetHeader className="border-b px-6 py-5 text-left">
+        <SheetHeader
+          className={cn(
+            "border-b px-6 py-5 text-left",
+            criticalRecs && "border-red-200 bg-red-50/30 dark:border-red-900 dark:bg-red-950/20",
+          )}
+        >
           <div className="flex items-start justify-between gap-3 pr-8">
             <div className="min-w-0 flex-1">
-              <SheetTitle className="truncate text-lg">
-                {batchName ?? health?.batch.batchName ?? "Batch health"}
-              </SheetTitle>
+              <div className="flex items-center gap-1">
+                <SheetTitle className="truncate text-lg">{displayName}</SheetTitle>
+                <CopyButton value={displayName} label="batch name" />
+              </div>
               <SheetDescription className="mt-1">
-                Operational snapshot · read-only
+                Operational snapshot
+                {batchId != null && (
+                  <span className="ml-1 font-mono text-[10px]">#{batchId}</span>
+                )}
               </SheetDescription>
             </div>
             {!isLoading && health && (
@@ -152,11 +296,66 @@ export function BatchHealthDrawer({
             <p className="text-sm text-destructive">Could not load batch health.</p>
           )}
 
-          {!isLoading && health && (
+          {!isLoading && health && batchId != null && (
             <div className="space-y-6 pb-6">
+              <DrawerSection title="Quick links" icon={Link2}>
+                <div className="flex flex-wrap gap-2">
+                  <QuickLinkButton href={`/testing-batches/${batchId}`}>Batch detail</QuickLinkButton>
+                  {health.openTasks.length > 0 && (
+                    <QuickLinkButton href={`/tasks?open=${health.openTasks[0]!.id}`}>
+                      First open task
+                    </QuickLinkButton>
+                  )}
+                  {[...relatedCampaignIds].slice(0, 4).map((cid) => {
+                    const c = campaignsById.get(cid);
+                    const voluumHref = externalHref(c?.campaignUrl);
+                    return (
+                      <span key={cid} className="inline-flex items-center gap-0.5">
+                        <QuickLinkButton href={`/testing-batches/${batchId}`}>
+                          {c?.campaignName ? c.campaignName.slice(0, 18) : `Campaign #${cid}`}
+                        </QuickLinkButton>
+                        {voluumHref && (
+                          <QuickLinkButton href={voluumHref} external>
+                            Voluum
+                          </QuickLinkButton>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+                {trafficSourceId != null && (
+                  <p className="mt-2 flex items-center gap-1 text-[10px] text-muted-foreground">
+                    Traffic source id {trafficSourceId}
+                    <CopyButton value={String(trafficSourceId)} label="traffic source id" />
+                    {health.activeRun?.trafficSourceName && (
+                      <>
+                        <span className="mx-1">·</span>
+                        {health.activeRun.trafficSourceName}
+                        <CopyButton
+                          value={health.activeRun.trafficSourceName}
+                          label="traffic source name"
+                        />
+                      </>
+                    )}
+                  </p>
+                )}
+              </DrawerSection>
+
+              <Separator />
+
               <DrawerSection title="Run state" icon={PlayCircle}>
                 {health.activeRun ? (
-                  <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
+                  <div
+                    className={cn(
+                      "space-y-3 rounded-lg border bg-muted/20 p-3",
+                      stuckRun && "border-amber-400 ring-1 ring-amber-400/40",
+                    )}
+                  >
+                    {stuckRun && (
+                      <p className="text-xs font-medium text-amber-800 dark:text-amber-200">
+                        Both platforms are terminal but the batch has not advanced.
+                      </p>
+                    )}
                     <div className="flex justify-between gap-2 text-sm">
                       <span className="font-medium">{health.activeRun.trafficSourceName}</span>
                       <span className="font-mono text-xs text-muted-foreground">
@@ -189,15 +388,16 @@ export function BatchHealthDrawer({
                 ) : (
                   <ul className="space-y-2">
                     {health.openTasks.map((task) => (
-                      <li
+                      <TaskRow
                         key={task.id}
-                        className="rounded-md border border-border px-3 py-2 text-sm"
-                      >
-                        <p className="font-medium leading-snug">{task.title}</p>
-                        <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
-                          {task.taskType} · {task.status}
-                        </p>
-                      </li>
+                        batchId={batchId}
+                        task={task}
+                        campaign={
+                          task.relatedCampaignId != null
+                            ? campaignsById.get(task.relatedCampaignId)
+                            : undefined
+                        }
+                      />
                     ))}
                   </ul>
                 )}
@@ -245,10 +445,16 @@ export function BatchHealthDrawer({
                     {health.recommendations.map((rec) => (
                       <li
                         key={rec.code}
-                        className="rounded-lg border border-border bg-card px-3 py-2.5"
+                        className={cn(
+                          "rounded-lg border bg-card px-3 py-2.5",
+                          rec.severity === "critical"
+                            ? "border-red-300 bg-red-50/40 dark:border-red-900 dark:bg-red-950/25"
+                            : "border-border",
+                        )}
                       >
                         <div className="flex flex-wrap items-center gap-2">
                           <RecommendationBadge rec={rec} />
+                          <CopyButton value={rec.code} label="recommendation code" />
                           {rec.suggestedActionType && (
                             <Badge variant="secondary" className="font-mono text-[10px]">
                               {rec.suggestedActionType}
@@ -261,6 +467,13 @@ export function BatchHealthDrawer({
                   </ul>
                 )}
               </DrawerSection>
+
+              {isAdmin && onHealthRefetch && (
+                <>
+                  <Separator />
+                  <BatchHealthDrawerRecovery batchId={batchId} onSuccess={onHealthRefetch} />
+                </>
+              )}
             </div>
           )}
         </ScrollArea>

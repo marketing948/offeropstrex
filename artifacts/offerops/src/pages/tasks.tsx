@@ -3,8 +3,10 @@
  * Assigned open tasks (CampaignOps + MANUAL) with filters and completion flows.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  getGetTodoTaskQueryKey,
+  useGetTodoTask,
   useListTodoTasks,
   useUpdateTodoTask,
   useListWorkspaceTrafficSources,
@@ -59,6 +61,13 @@ function todayHeading(): string {
   });
 }
 
+function parseOpenTaskIdFromUrl(): number | null {
+  if (typeof window === "undefined") return null;
+  const raw = new URLSearchParams(window.location.search).get("open");
+  const id = Number(raw);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
 export default function Tasks() {
   const { activeWorkspaceId } = useWorkspace();
   const { currentEmployee } = useAuth();
@@ -92,6 +101,18 @@ export default function Tasks() {
   const updateTask = useUpdateTodoTask();
   const [selectedTask, setSelectedTask] = useState<TodoTask | null>(null);
   const [filter, setFilter] = useState<WorkerTaskFilter>("all");
+  const [deepLinkTaskId] = useState(() => parseOpenTaskIdFromUrl());
+
+  const { data: deepLinkedTask } = useGetTodoTask(deepLinkTaskId ?? 0, {
+    query: {
+      enabled: deepLinkTaskId != null,
+      queryKey: getGetTodoTaskQueryKey(deepLinkTaskId ?? 0),
+    },
+  });
+
+  useEffect(() => {
+    if (deepLinkedTask) setSelectedTask(deepLinkedTask);
+  }, [deepLinkedTask]);
 
   const openTasks = useMemo(
     () => (tasks ?? []).filter(isOpenWorkerTask),

@@ -7,9 +7,12 @@ import {
   activeRunStatusLabel,
   badgeRecommendations,
   currentTrafficSourceLabel,
+  hasOverdueOpenTasks,
+  isStuckTerminalRun,
   recommendationSummary,
   type MissionControlRowInput,
 } from "@/lib/mission-control-health";
+import { cn } from "@/lib/utils";
 import { batchStatusConfig } from "@/lib/batch-status";
 
 export type BatchListRowProps = {
@@ -35,16 +38,20 @@ export const BatchListRow = memo(function BatchListRow({
   const styles = HEALTH_STATE_STYLES[healthState];
   const statusCfg = batchStatusConfig(batch.status);
   const badges = health ? badgeRecommendations(health.recommendations) : [];
+  const overdue = hasOverdueOpenTasks(health);
+  const stuck = isStuckTerminalRun(health);
 
   return (
     <button
       type="button"
       onClick={onSelect}
-      className={`min-h-[7.75rem] w-full rounded-xl border px-4 py-3 text-left transition-all hover:shadow-sm ${
-        selected
-          ? `ring-2 ${styles.ring} border-primary/40 bg-card`
-          : "border-border bg-card hover:border-primary/25"
-      } ${isRefreshing ? "opacity-80" : ""}`}
+      className={cn(
+        "min-h-[7.75rem] w-full rounded-xl border px-4 py-3 text-left transition-all hover:shadow-sm",
+        selected ? `ring-2 ${styles.ring} border-primary/40 bg-card` : "border-border bg-card hover:border-primary/25",
+        healthState === "critical" && !selected && "border-red-200/80",
+        stuck && !selected && "border-amber-300/80",
+        isRefreshing && "opacity-80",
+      )}
     >
       <div className="flex h-full items-start gap-3">
         <span
@@ -88,6 +95,16 @@ export const BatchListRow = memo(function BatchListRow({
             <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
               {health?.flags.openTaskCount ?? "—"} open
             </span>
+            {overdue && (
+              <span className="shrink-0 rounded-md bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800 dark:bg-red-950 dark:text-red-200">
+                Overdue
+              </span>
+            )}
+            {stuck && (
+              <span className="shrink-0 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900 dark:bg-amber-950 dark:text-amber-100">
+                Stuck run
+              </span>
+            )}
           </div>
 
           {badges.length > 0 && (

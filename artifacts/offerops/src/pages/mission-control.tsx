@@ -24,6 +24,10 @@ import {
   type MissionControlFilter,
   type MissionControlRowInput,
 } from "@/lib/mission-control-health";
+import {
+  loadMissionControlPrefs,
+  saveMissionControlPrefs,
+} from "@/lib/mission-control-storage";
 import { BatchHealthDrawer } from "@/components/mission-control/batch-health-drawer";
 import { BatchListRow } from "@/components/mission-control/batch-list-row";
 import { BatchListRowSkeleton } from "@/components/mission-control/batch-list-row-skeleton";
@@ -110,8 +114,12 @@ export default function MissionControl() {
     })),
   });
 
-  const [filter, setFilter] = useState<MissionControlFilter>("all");
-  const [autoRefreshSec, setAutoRefreshSec] = useState(0);
+  const [filter, setFilter] = useState<MissionControlFilter>(
+    () => loadMissionControlPrefs().filter,
+  );
+  const [autoRefreshSec, setAutoRefreshSec] = useState(
+    () => loadMissionControlPrefs().autoRefreshSec,
+  );
   const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const refreshInFlight = useRef(false);
@@ -196,12 +204,22 @@ export default function MissionControl() {
   }, [refetchBatches, healthQueries]);
 
   useEffect(() => {
+    saveMissionControlPrefs({ filter, autoRefreshSec });
+  }, [filter, autoRefreshSec]);
+
+  useEffect(() => {
     if (autoRefreshSec <= 0) return;
     const id = window.setInterval(() => {
       void refreshAll();
     }, autoRefreshSec * 1000);
     return () => window.clearInterval(id);
   }, [autoRefreshSec, refreshAll]);
+
+  const refetchSelectedHealth = useCallback(async () => {
+    if (selectedHealthQuery) {
+      await selectedHealthQuery.refetch();
+    }
+  }, [selectedHealthQuery]);
 
   const openDrawer = (batchId: number) => {
     setSelectedBatchId(batchId);
@@ -358,6 +376,8 @@ export default function MissionControl() {
           isError={selectedHealthQuery?.isError ?? false}
           open={drawerOpen}
           onOpenChange={setDrawerOpen}
+          workspaceId={activeWorkspaceId}
+          onHealthRefetch={refetchSelectedHealth}
         />
       </div>
     </TooltipProvider>

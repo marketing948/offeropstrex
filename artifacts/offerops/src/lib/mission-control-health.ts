@@ -1,5 +1,6 @@
 import type { TestingBatch } from "@workspace/api-client-react";
 import type {
+  BatchHealthOpenTask,
   BatchHealthRecommendation,
   BatchHealthRecommendationCode,
   BatchHealthRecommendationSeverity,
@@ -121,6 +122,25 @@ export function currentTrafficSourceLabel(
 ): string {
   if (health?.activeRun?.trafficSourceName) return health.activeRun.trafficSourceName;
   return batchTrafficSource?.trim() || "—";
+}
+
+export function isOverdueOpenTask(task: BatchHealthOpenTask, now = new Date()): boolean {
+  if (!task.dueDate?.trim()) return false;
+  const due = new Date(task.dueDate);
+  if (Number.isNaN(due.getTime())) return false;
+  return due.getTime() < now.getTime();
+}
+
+export function hasOverdueOpenTasks(health: BatchHealthResponse | undefined): boolean {
+  return (health?.openTasks ?? []).some((task) => isOverdueOpenTask(task));
+}
+
+export function isStuckTerminalRun(health: BatchHealthResponse | undefined): boolean {
+  return health?.flags.activeRunFullyTerminalButNotAdvanced ?? false;
+}
+
+export function hasCriticalRecommendations(health: BatchHealthResponse | undefined): boolean {
+  return (health?.recommendations ?? []).some((r) => r.severity === "critical" && r.code !== "HEALTHY");
 }
 
 export function rowNeedsRecovery(health: BatchHealthResponse | undefined): boolean {
