@@ -449,6 +449,16 @@ router.patch("/testing-batches/:id", async (req, res): Promise<void> => {
   }
   if ((await requireWorkspaceAccess(req, res, existingBatch.workspaceId)) === null) return;
 
+  if (parsed.data.status !== undefined) {
+    res.status(400).json({
+      error: "Batch status cannot be changed via PATCH",
+      detail:
+        "Use POST /testing-batches/:id/go-live for OFFER_READY_FOR_LIVE_TESTING → LIVE_TESTS. " +
+        "Other batch status transitions are engine-driven.",
+    });
+    return;
+  }
+
   // Pivot Phase 3 (Task #26): translate the new payload field names
   // to their storage columns before passing to the executor:
   //   - assignedWorkerId  -> employeeId
@@ -456,13 +466,12 @@ router.patch("/testing-batches/:id", async (req, res): Promise<void> => {
   //     write currentTrafficSourceId because that legacy FK targets
   //     voluum_traffic_sources, while the manual flow validates
   //     against workspace_traffic_sources.
-  // Strip workspaceId — records cannot move workspaces. PATCH accepts
-  // `status` directly per the manual-flow contract; the engine still
-  // drives lifecycle transitions for events it owns, but a worker can
-  // correct the status of their manual batch via PATCH.
+  // Strip workspaceId — records cannot move workspaces. Lifecycle status
+  // changes must use POST /testing-batches/:id/go-live or engine events.
   const data = parsed.data;
   const {
     workspaceId: _ignoredWs,
+    status: _ignoredStatus,
     assignedWorkerId,
     trafficSourceId,
     testBudget: bodyTestBudget,
@@ -521,8 +530,6 @@ router.patch("/testing-batches/:id", async (req, res): Promise<void> => {
     }
   }
 
-  // Alias `nonStatusUpdates` is preserved for the legacy code path below
-  // (lookup-id resync). It now also carries `status` when supplied.
   const nonStatusUpdates = updates;
 
   // If new lookup IDs are provided, resync the legacy text columns
