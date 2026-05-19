@@ -23,6 +23,7 @@ import {
 } from "@workspace/db";
 import { z } from "zod/v4";
 import { checkWorkspaceAccess, requireWorkspaceAccess } from "../lib/workspace-access";
+import { applyAction } from "../engine/executor.ts";
 import { emit } from "../engine/event-bus";
 
 const router: IRouter = Router();
@@ -226,49 +227,93 @@ router.patch("/campaigns/:id", async (req, res): Promise<void> => {
     return;
   }
   const { campaignName, trafficSourceId, campaignUrl, status } = parsed.data;
-  const updates: Partial<typeof campaignsTable.$inferInsert> = {
+  const fieldUpdates: Partial<typeof campaignsTable.$inferInsert> = {
     updatedAt: new Date(),
   };
-  if (campaignName !== undefined) updates.campaignName = campaignName;
-  if (trafficSourceId !== undefined) updates.trafficSourceId = trafficSourceId;
-  if (campaignUrl !== undefined) updates.campaignUrl = campaignUrl;
-  let nextStatus: CampaignStatus = existing.status;
-  let statusChanged = false;
-  if (status !== undefined && status !== existing.status) {
-    nextStatus = status;
-    updates.status = nextStatus;
-    statusChanged = true;
+  if (campaignName !== undefined) fieldUpdates.campaignName = campaignName;
+  if (trafficSourceId !== undefined) fieldUpdates.trafficSourceId = trafficSourceId;
+  if (campaignUrl !== undefined) fieldUpdates.campaignUrl = campaignUrl;
+
+  const hasFieldUpdates =
+    campaignName !== undefined
+    || trafficSourceId !== undefined
+    || campaignUrl !== undefined;
+  const statusChanging = status !== undefined && status !== existing.status;
+
+  if (!statusChanging) {
+    if (!hasFieldUpdates) {
+      res.json(serialize(existing));
+      return;
+    }
+
+    const [row] = await db
+      .update(campaignsTable)
+      .set(fieldUpdates)
+      .where(and(eq(campaignsTable.id, id), eq(campaignsTable.workspaceId, existing.workspaceId)))
+      .returning();
+    res.json(serialize(row));
+    return;
   }
 
-  const [row] = await db
-    .update(campaignsTable)
-    .set(updates)
-    .where(and(eq(campaignsTable.id, id), eq(campaignsTable.workspaceId, existing.workspaceId)))
-    .returning();
+  const nextStatus = status;
 
-  if (statusChanged) {
-    try {
-      await emit({
-        type: "CampaignStatusChanged",
-        workspaceId: row.workspaceId,
-        payload: {
-          campaignId: row.id,
-          batchId: row.batchId,
-          platform: row.platform,
+  try {
+    const row = await db.transaction(async (tx) => {
+      if (hasFieldUpdates) {
+        await tx
+          .update(campaignsTable)
+          .set(fieldUpdates)
+          .where(
+            and(
+              eq(campaignsTable.id, id),
+              eq(campaignsTable.workspaceId, existing.workspaceId),
+            ),
+          );
+      }
+
+      await applyAction(
+        {
+          type: "UpdateCampaignStatus",
+          workspaceId: existing.workspaceId,
+          campaignId: id,
           from: existing.status,
           to: nextStatus,
         },
-        dedupeKey: `campaign_status:${row.id}:${nextStatus}`,
-      });
-    } catch (err) {
-      req.log.warn(
-        { err, campaignId: row.id },
-        "[campaigns] CampaignStatusChanged emit failed — tombstoned",
+        tx,
       );
-    }
-  }
 
-  res.json(serialize(row));
+      const [current] = await tx
+        .select()
+        .from(campaignsTable)
+        .where(
+          and(
+            eq(campaignsTable.id, id),
+            eq(campaignsTable.workspaceId, existing.workspaceId),
+          ),
+        )
+        .limit(1);
+
+      if (!current || current.status !== nextStatus) {
+        throw new Error("Invalid campaign status transition");
+      }
+
+      return current;
+    });
+
+    res.json(serialize(row));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message === "Invalid campaign status transition") {
+      res.status(409).json({
+        error: message,
+        detail:
+          `Campaign is in status "${existing.status}"; cannot transition to "${nextStatus}" ` +
+          "(concurrent update or invalid from-state).",
+      });
+      return;
+    }
+    throw err;
+  }
 });
 
 router.get("/live-campaigns", async (req, res): Promise<void> => {
