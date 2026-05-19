@@ -660,6 +660,7 @@ export const TodoTaskTaskType = {
   take_campaign_live: "take_campaign_live",
   find_winners: "find_winners",
   all_traffic_sources_tested: "all_traffic_sources_tested",
+  MANUAL: "MANUAL",
 } as const;
 
 export type TodoTaskPriority =
@@ -765,6 +766,26 @@ export interface CreateTodoTaskBody {
   trafficSourceName?: string | null;
   /** @nullable */
   device?: string | null;
+}
+
+export type CreateManualTodoTaskBodyPriority =
+  (typeof CreateManualTodoTaskBodyPriority)[keyof typeof CreateManualTodoTaskBodyPriority];
+
+export const CreateManualTodoTaskBodyPriority = {
+  low: "low",
+  medium: "medium",
+  high: "high",
+} as const;
+
+export interface CreateManualTodoTaskBody {
+  workspaceId: number;
+  assignedEmployeeId: number;
+  /** @maxLength 500 */
+  title: string;
+  /** @maxLength 8000 */
+  description?: string;
+  dueAt?: string;
+  priority?: CreateManualTodoTaskBodyPriority;
 }
 
 export type UpdateTodoTaskBodyTaskType =
@@ -1611,6 +1632,7 @@ export const ListTodoTasksTaskType = {
   take_campaign_live: "take_campaign_live",
   find_winners: "find_winners",
   all_traffic_sources_tested: "all_traffic_sources_tested",
+  MANUAL: "MANUAL",
 } as const;
 
 export type ListSuspiciousBatchesParams = {

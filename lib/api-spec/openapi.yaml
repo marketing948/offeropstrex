@@ -1385,7 +1385,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS, create_voluum_campaign_ios, create_voluum_campaign_android, take_campaign_live, find_winners, all_traffic_sources_tested]
+            enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS, create_voluum_campaign_ios, create_voluum_campaign_android, take_campaign_live, find_winners, all_traffic_sources_tested, MANUAL]
         - name: workspace_id
           in: query
           schema:
@@ -1417,6 +1417,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TodoTask"
+
+  /todo-tasks/manual:
+    post:
+      operationId: createManualTodoTask
+      tags: [todo-tasks]
+      summary: Create a human MANUAL task (admin only, not CampaignOps)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateManualTodoTaskBody"
+      responses:
+        "201":
+          description: Manual task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodoTask"
+        "400":
+          description: Bad request
+        "403":
+          description: Forbidden
 
   /todo-tasks/{id}:
     get:
@@ -3133,7 +3156,7 @@ components:
           type: ["string", "null"]
         taskType:
           type: string
-          enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, GO_LIVE_TRAFFIC_SOURCE_CAMPAIGN, MOVE_WINNERS_TO_SCALED_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS, CREATE_IOS_CAMPAIGN, CREATE_ANDROID_CAMPAIGN, GO_LIVE, OPTIMIZATION_FOLLOWUP, create_voluum_campaign_ios, create_voluum_campaign_android, take_campaign_live, find_winners, all_traffic_sources_tested]
+          enum: [CREATE_IOS_TRACKER_CAMPAIGN, CREATE_ANDROID_TRACKER_CAMPAIGN, GO_LIVE_TRAFFIC_SOURCE_CAMPAIGN, MOVE_WINNERS_TO_SCALED_CAMPAIGN, FIND_WINNERS, PAUSE_TRAFFIC_SOURCE_CAMPAIGNS, CREATE_IOS_CAMPAIGN, CREATE_ANDROID_CAMPAIGN, GO_LIVE, OPTIMIZATION_FOLLOWUP, create_voluum_campaign_ios, create_voluum_campaign_android, take_campaign_live, find_winners, all_traffic_sources_tested, MANUAL]
         priority:
           type: string
           enum: [low, medium, high]
@@ -3196,6 +3219,27 @@ components:
         - title
         - taskType
         - priority
+
+    CreateManualTodoTaskBody:
+      type: object
+      required: [workspaceId, assignedEmployeeId, title]
+      properties:
+        workspaceId:
+          type: integer
+        assignedEmployeeId:
+          type: integer
+        title:
+          type: string
+          maxLength: 500
+        description:
+          type: string
+          maxLength: 8000
+        dueAt:
+          type: string
+          format: date-time
+        priority:
+          type: string
+          enum: [low, medium, high]
 
     UpdateTodoTaskBody:
       type: object

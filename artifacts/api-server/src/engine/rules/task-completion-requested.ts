@@ -12,7 +12,11 @@ export async function handleTaskCompletionRequested(
   tx: Tx,
 ): Promise<Action[]> {
   const [task] = await tx
-    .select({ id: todoTasksTable.id, status: todoTasksTable.status })
+    .select({
+      id: todoTasksTable.id,
+      status: todoTasksTable.status,
+      taskType: todoTasksTable.taskType,
+    })
     .from(todoTasksTable)
     .where(
       and(
@@ -24,13 +28,17 @@ export async function handleTaskCompletionRequested(
 
   if (!task || task.status === "DONE") return [];
 
+  // MANUAL tasks must never use generic / CampaignOps completion shapes.
+  const completion =
+    task.taskType === "MANUAL" ? ({ kind: "manual" } as const) : event.payload.completion;
+
   return [
     {
       type: "CompleteTaskFromRequest",
       workspaceId: event.workspaceId,
       taskId: event.payload.taskId,
       completedByEmployeeId: event.payload.completedByEmployeeId,
-      completion: event.payload.completion,
+      completion,
     },
   ];
 }

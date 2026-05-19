@@ -18,6 +18,10 @@ export type BatchStatus = (typeof batchStatusEnum.enumValues)[number];
 
 export type TaskCompletionDetails =
   | {
+      /** Human MANUAL tasks: close without TaskCompleted / CampaignOps. */
+      kind: "manual";
+    }
+  | {
       kind: "generic";
       completionPayload?: Record<string, unknown>;
     }
@@ -184,7 +188,8 @@ export type EventInput =
           | "create_voluum_campaign_android"
           | "take_campaign_live"
           | "find_winners"
-          | "all_traffic_sources_tested";
+          | "all_traffic_sources_tested"
+          | "MANUAL";
         relatedBatchId: number | null;
         // CampaignOps redesign — set when the completed task references
         // a Campaign (take_campaign_live, find_winners, and the
@@ -230,7 +235,8 @@ export type EventInput =
           | "create_voluum_campaign_android"
           | "take_campaign_live"
           | "find_winners"
-          | "all_traffic_sources_tested";
+          | "all_traffic_sources_tested"
+          | "MANUAL";
         relatedBatchId: number | null;
         title: string;
         ageHours: number;

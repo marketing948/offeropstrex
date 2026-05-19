@@ -33,6 +33,7 @@ import type {
   CreateEmployeeBody,
   CreateGeoBody,
   CreateGoalBody,
+  CreateManualTodoTaskBody,
   CreateOfferBody,
   CreatePerformanceBody,
   CreateTestingBatchBody,
@@ -5284,6 +5285,93 @@ export const useCreateTodoTask = <
   TContext
 > => {
   return useMutation(getCreateTodoTaskMutationOptions(options));
+};
+
+/**
+ * @summary Create a human MANUAL task (admin only, not CampaignOps)
+ */
+export const getCreateManualTodoTaskUrl = () => {
+  return `/api/todo-tasks/manual`;
+};
+
+export const createManualTodoTask = async (
+  createManualTodoTaskBody: CreateManualTodoTaskBody,
+  options?: RequestInit,
+): Promise<TodoTask> => {
+  return customFetch<TodoTask>(getCreateManualTodoTaskUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createManualTodoTaskBody),
+  });
+};
+
+export const getCreateManualTodoTaskMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createManualTodoTask>>,
+    TError,
+    { data: BodyType<CreateManualTodoTaskBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createManualTodoTask>>,
+  TError,
+  { data: BodyType<CreateManualTodoTaskBody> },
+  TContext
+> => {
+  const mutationKey = ["createManualTodoTask"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createManualTodoTask>>,
+    { data: BodyType<CreateManualTodoTaskBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createManualTodoTask(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateManualTodoTaskMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createManualTodoTask>>
+>;
+export type CreateManualTodoTaskMutationBody =
+  BodyType<CreateManualTodoTaskBody>;
+export type CreateManualTodoTaskMutationError = ErrorType<void>;
+
+/**
+ * @summary Create a human MANUAL task (admin only, not CampaignOps)
+ */
+export const useCreateManualTodoTask = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createManualTodoTask>>,
+    TError,
+    { data: BodyType<CreateManualTodoTaskBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createManualTodoTask>>,
+  TError,
+  { data: BodyType<CreateManualTodoTaskBody> },
+  TContext
+> => {
+  return useMutation(getCreateManualTodoTaskMutationOptions(options));
 };
 
 /**

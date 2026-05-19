@@ -499,6 +499,10 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
         | null = null;
 
       switch (action.completion.kind) {
+        case "manual":
+          completionPayload = {};
+          break;
+
         case "generic":
           completionPayload = action.completion.completionPayload ?? {};
           break;
@@ -703,52 +707,54 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
         }
       }
 
-      await emitWithinTx(tx, {
-        type: "TaskCompleted",
-        workspaceId: action.workspaceId,
-        payload: {
-          taskId: updated.id,
-          taskType: updated.taskType,
-          relatedBatchId: updated.relatedBatchId,
-          relatedCampaignId: resolvedCampaignId,
-        },
-        dedupeKey: `task_completed:${updated.id}`,
-      });
+      if (action.completion.kind !== "manual") {
+        await emitWithinTx(tx, {
+          type: "TaskCompleted",
+          workspaceId: action.workspaceId,
+          payload: {
+            taskId: updated.id,
+            taskType: updated.taskType,
+            relatedBatchId: updated.relatedBatchId,
+            relatedCampaignId: resolvedCampaignId,
+          },
+          dedupeKey: `task_completed:${updated.id}`,
+        });
 
-      if (linkedCampaign !== null) {
+        if (linkedCampaign !== null) {
+          await recordOperationalEvent({
+            workspaceId: action.workspaceId,
+            entityType: "campaign",
+            entityId: linkedCampaign.campaignId,
+            eventType: "CAMPAIGN_LINKED",
+            actorType: "employee",
+            actorId: action.completedByEmployeeId,
+            source: "engine",
+            payloadJson: {
+              taskId: updated.id,
+              taskType: updated.taskType,
+              batchId: linkedCampaign.batchId,
+              platform: linkedCampaign.platform,
+              trafficSourceId: linkedCampaign.trafficSourceId,
+            },
+          }, tx);
+        }
+
         await recordOperationalEvent({
           workspaceId: action.workspaceId,
-          entityType: "campaign",
-          entityId: linkedCampaign.campaignId,
-          eventType: "CAMPAIGN_LINKED",
+          entityType: "task",
+          entityId: updated.id,
+          eventType: "TASK_COMPLETED",
           actorType: "employee",
           actorId: action.completedByEmployeeId,
           source: "engine",
           payloadJson: {
-            taskId: updated.id,
             taskType: updated.taskType,
-            batchId: linkedCampaign.batchId,
-            platform: linkedCampaign.platform,
-            trafficSourceId: linkedCampaign.trafficSourceId,
+            relatedBatchId: updated.relatedBatchId,
+            relatedCampaignId: resolvedCampaignId,
+            completionKind: action.completion.kind,
           },
         }, tx);
       }
-
-      await recordOperationalEvent({
-        workspaceId: action.workspaceId,
-        entityType: "task",
-        entityId: updated.id,
-        eventType: "TASK_COMPLETED",
-        actorType: "employee",
-        actorId: action.completedByEmployeeId,
-        source: "engine",
-        payloadJson: {
-          taskType: updated.taskType,
-          relatedBatchId: updated.relatedBatchId,
-          relatedCampaignId: resolvedCampaignId,
-          completionKind: action.completion.kind,
-        },
-      }, tx);
       return;
     }
 

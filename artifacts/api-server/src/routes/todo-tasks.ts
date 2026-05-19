@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { eq, and } from "drizzle-orm";
-import { db, todoTasksTable, employeesTable, testingBatchesTable } from "@workspace/db";
+import { db, todoTasksTable, employeesTable, testingBatchesTable, employeeWorkspaceAssignmentsTable } from "@workspace/db";
 import { z } from "zod/v4";
 import {
   CreateTodoTaskBody,
@@ -10,7 +10,7 @@ import {
   DeleteTodoTaskParams,
   ListTodoTasksQueryParams,
 } from "@workspace/api-zod";
-import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access";
+import { requireWorkspaceFromQuery, requireWorkspaceAccess, requireAdmin } from "../lib/workspace-access";
 import { requireWorkspaceFromBody } from "../lib/require-workspace";
 import { emit } from "../engine/event-bus.ts";
 import type { TaskCompletionDetails } from "../engine/types.ts";
@@ -106,6 +106,81 @@ router.get("/todo-tasks", async (req, res): Promise<void> => {
     .orderBy(todoTasksTable.createdAt);
 
   res.json(tasks.map(r => serializeTask(r.task, r.employeeName, r.batchName)));
+});
+
+const createManualTodoTaskBodySchema = z.object({
+  workspaceId: z.number().int().positive(),
+  assignedEmployeeId: z.number().int().positive(),
+  title: z.string().trim().min(1).max(500),
+  description: z.string().trim().max(8000).optional(),
+  /** ISO 8601 datetime stored in `due_date` (text) for list/SLA display. */
+  dueAt: z.string().datetime().optional(),
+  priority: z.enum(["low", "medium", "high"]).optional(),
+});
+
+/** Admin-only human reminders — not part of CampaignOps automation. */
+router.post("/todo-tasks/manual", async (req, res): Promise<void> => {
+  if ((await requireAdmin(req, res)) === null) return;
+
+  const parsed = createManualTodoTaskBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const body = parsed.data;
+  const workspaceId = await requireWorkspaceAccess(req, res, body.workspaceId);
+  if (workspaceId === null) return;
+
+  const [assigneeOk] = await db
+    .select({ id: employeeWorkspaceAssignmentsTable.id })
+    .from(employeeWorkspaceAssignmentsTable)
+    .where(
+      and(
+        eq(employeeWorkspaceAssignmentsTable.workspaceId, workspaceId),
+        eq(employeeWorkspaceAssignmentsTable.employeeId, body.assignedEmployeeId),
+      ),
+    )
+    .limit(1);
+  if (!assigneeOk) {
+    res.status(400).json({
+      error: "assignedEmployeeId must be a member of the target workspace",
+    });
+    return;
+  }
+
+  const [inserted] = await db
+    .insert(todoTasksTable)
+    .values({
+      workspaceId,
+      employeeId: body.assignedEmployeeId,
+      relatedBatchId: null,
+      relatedCampaignId: null,
+      title: body.title,
+      description: body.description ?? null,
+      taskType: "MANUAL",
+      priority: body.priority ?? "medium",
+      status: "TODO",
+      dueDate: body.dueAt ?? null,
+    })
+    .returning();
+
+  const [row] = await db
+    .select({
+      task: todoTasksTable,
+      employeeName: employeesTable.name,
+      batchName: testingBatchesTable.batchName,
+    })
+    .from(todoTasksTable)
+    .leftJoin(employeesTable, eq(todoTasksTable.employeeId, employeesTable.id))
+    .leftJoin(testingBatchesTable, eq(todoTasksTable.relatedBatchId, testingBatchesTable.id))
+    .where(eq(todoTasksTable.id, inserted.id));
+
+  if (!row) {
+    res.status(500).json({ error: "Failed to load created task" });
+    return;
+  }
+
+  res.status(201).json(serializeTask(row.task, row.employeeName, row.batchName));
 });
 
 // Phase 3 (Task #13) removed manual task creation. Tasks are now
@@ -235,13 +310,17 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
       });
       return;
     }
+    const completion =
+      existing.taskType === "MANUAL"
+        ? ({ kind: "manual" } as const)
+        : ({ kind: "generic" } as const);
     await emit({
       type: "TaskCompletionRequested",
       workspaceId: existing.workspaceId,
       payload: {
         taskId: params.data.id,
         completedByEmployeeId: actor.id,
-        completion: { kind: "generic" },
+        completion,
       },
       dedupeKey: `task_completion_requested:${params.data.id}`,
     });
@@ -408,6 +487,8 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
     completion = { kind: "find_winners", ...parsed.data };
   } else if (task.taskType === "all_traffic_sources_tested") {
     completion = { kind: "all_traffic_sources_tested" };
+  } else if (task.taskType === "MANUAL") {
+    completion = { kind: "manual" };
   } else {
     res.status(400).json({
       error: `Task type "${task.taskType}" is not supported by this endpoint. Use PATCH /todo-tasks/:id for legacy task types.`,

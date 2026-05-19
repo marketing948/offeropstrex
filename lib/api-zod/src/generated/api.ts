@@ -1549,6 +1549,7 @@ export const ListTodoTasksQueryParams = zod.object({
       "take_campaign_live",
       "find_winners",
       "all_traffic_sources_tested",
+      "MANUAL",
     ])
     .optional(),
   workspace_id: zod.coerce.number().optional(),
@@ -1576,6 +1577,7 @@ export const ListTodoTasksResponseItem = zod.object({
     "take_campaign_live",
     "find_winners",
     "all_traffic_sources_tested",
+    "MANUAL",
   ]),
   priority: zod.enum(["low", "medium", "high"]),
   status: zod.enum(["TODO", "IN_PROGRESS", "BLOCKED", "DONE"]),
@@ -1623,6 +1625,25 @@ export const CreateTodoTaskBody = zod.object({
 });
 
 /**
+ * @summary Create a human MANUAL task (admin only, not CampaignOps)
+ */
+export const createManualTodoTaskBodyTitleMax = 500;
+
+export const createManualTodoTaskBodyDescriptionMax = 8000;
+
+export const CreateManualTodoTaskBody = zod.object({
+  workspaceId: zod.number(),
+  assignedEmployeeId: zod.number(),
+  title: zod.string().max(createManualTodoTaskBodyTitleMax),
+  description: zod
+    .string()
+    .max(createManualTodoTaskBodyDescriptionMax)
+    .optional(),
+  dueAt: zod.coerce.date().optional(),
+  priority: zod.enum(["low", "medium", "high"]).optional(),
+});
+
+/**
  * @summary Get todo task by ID
  */
 export const GetTodoTaskParams = zod.object({
@@ -1651,6 +1672,7 @@ export const GetTodoTaskResponse = zod.object({
     "take_campaign_live",
     "find_winners",
     "all_traffic_sources_tested",
+    "MANUAL",
   ]),
   priority: zod.enum(["low", "medium", "high"]),
   status: zod.enum(["TODO", "IN_PROGRESS", "BLOCKED", "DONE"]),
@@ -1721,6 +1743,7 @@ export const UpdateTodoTaskResponse = zod.object({
     "take_campaign_live",
     "find_winners",
     "all_traffic_sources_tested",
+    "MANUAL",
   ]),
   priority: zod.enum(["low", "medium", "high"]),
   status: zod.enum(["TODO", "IN_PROGRESS", "BLOCKED", "DONE"]),
