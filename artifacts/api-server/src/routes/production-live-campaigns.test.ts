@@ -6,12 +6,14 @@ import { and, eq } from "drizzle-orm";
 import app from "../app.ts";
 import { ensureProductionLiveCampaignSchema } from "../test-utils/ensure-production-live-campaign-schema.ts";
 import {
+  affiliateNetworksTable,
   batchTrafficSourceRunsTable,
   campaignsTable,
   db,
   employeeWorkspaceAssignmentsTable,
   employeesTable,
   eventsTable,
+  geosTable,
   operationalEventsTable,
   testingBatchesTable,
   todoTasksTable,
@@ -123,12 +125,30 @@ async function seedWorkspaceWithSource() {
     .values({ workspaceId, name: `Source ${Date.now()}`, position: 1, isActive: true })
     .returning({ id: workspaceTrafficSourcesTable.id });
 
-  return { workspaceId, adminId, workerId, sourceId: source.id };
+  const [network] = await db
+    .insert(affiliateNetworksTable)
+    .values({ workspaceId, name: `Network ${Date.now()}`, isActive: true })
+    .returning({ id: affiliateNetworksTable.id });
+
+  const [geo] = await db
+    .insert(geosTable)
+    .values({ workspaceId, code: "US", name: "United States", isActive: true })
+    .returning({ id: geosTable.id });
+
+  return {
+    workspaceId,
+    adminId,
+    workerId,
+    sourceId: source.id,
+    networkId: network.id,
+    geoId: geo.id,
+  };
 }
 
 function workingBody(
-  seed: { workspaceId: number; sourceId: number },
+  seed: { workspaceId: number; sourceId: number; networkId: number; geoId: number },
   voluumId: string,
+  overrides: Record<string, unknown> = {},
 ) {
   return {
     workspaceId: seed.workspaceId,
@@ -136,9 +156,11 @@ function workingBody(
     campaignPurpose: "working",
     platform: "ios",
     trafficSourceId: seed.sourceId,
+    affiliateNetworkId: seed.networkId,
+    geoId: seed.geoId,
     voluumCampaignId: voluumId,
     campaignUrl: `https://voluum.example/${voluumId}`,
-    geo: "US",
+    ...overrides,
   };
 }
 
@@ -190,14 +212,123 @@ describe("POST /production-live-campaigns", { concurrency: false }, () => {
 
     const childVoluum = `vc-scale-${Date.now()}`;
     const { response, json } = await request("POST", "/production-live-campaigns", seed.adminId, {
-      ...workingBody(seed, childVoluum),
+      workspaceId: seed.workspaceId,
       campaignPurpose: "scaling",
       campaignName: "Scaled variant",
       parentCampaignId: parent.json?.id,
+      voluumCampaignId: childVoluum,
+      campaignUrl: `https://voluum.example/${childVoluum}`,
     });
     assert.equal(response.status, 201);
     assert.equal(json?.campaignPurpose, "scaling");
     assert.equal(json?.parentCampaignId, parent.json?.id);
+    assert.equal(json?.platform, parent.json?.platform);
+    assert.equal(json?.trafficSourceId, parent.json?.trafficSourceId);
+    assert.equal(json?.affiliateNetworkId, parent.json?.affiliateNetworkId);
+    assert.equal(json?.geoId, parent.json?.geoId);
+  });
+
+  test("working campaign requires affiliateNetworkId and geoId", async () => {
+    const seed = await seedWorkspaceWithSource();
+    const base = workingBody(seed, `vc-missing-fields-${Date.now()}`);
+
+    const { affiliateNetworkId: _network, ...withoutNetwork } = base;
+    const noNetwork = await request("POST", "/production-live-campaigns", seed.adminId, withoutNetwork);
+    assert.equal(noNetwork.response.status, 400);
+
+    const { geoId: _geo, ...withoutGeo } = base;
+    const noGeo = await request("POST", "/production-live-campaigns", seed.adminId, withoutGeo);
+    assert.equal(noGeo.response.status, 400);
+  });
+
+  test("duplicate live working campaign slot returns 409", async () => {
+    const seed = await seedWorkspaceWithSource();
+    const first = await request(
+      "POST",
+      "/production-live-campaigns",
+      seed.adminId,
+      workingBody(seed, `vc-slot-a-${Date.now()}`),
+    );
+    assert.equal(first.response.status, 201);
+
+    const second = await request(
+      "POST",
+      "/production-live-campaigns",
+      seed.adminId,
+      workingBody(seed, `vc-slot-b-${Date.now()}`),
+    );
+    assert.equal(second.response.status, 409);
+  });
+
+  test("closed working campaign does not block a new live working in the same slot", async () => {
+    const seed = await seedWorkspaceWithSource();
+    const voluumA = `vc-closed-slot-${Date.now()}`;
+    const first = await request(
+      "POST",
+      "/production-live-campaigns",
+      seed.adminId,
+      workingBody(seed, voluumA),
+    );
+    assert.equal(first.response.status, 201);
+
+    await db
+      .update(campaignsTable)
+      .set({ status: "closed" })
+      .where(eq(campaignsTable.id, first.json?.id as number));
+
+    const second = await request(
+      "POST",
+      "/production-live-campaigns",
+      seed.adminId,
+      workingBody(seed, `${voluumA}-replacement`),
+    );
+    assert.equal(second.response.status, 201);
+    assert.equal(second.json?.status, "live");
+  });
+
+  test("scaling rejects metadata that conflicts with parent", async () => {
+    const seed = await seedWorkspaceWithSource();
+    const parent = await request(
+      "POST",
+      "/production-live-campaigns",
+      seed.adminId,
+      workingBody(seed, `vc-scale-parent-${Date.now()}`),
+    );
+    assert.equal(parent.response.status, 201);
+
+    const { response, json } = await request("POST", "/production-live-campaigns", seed.adminId, {
+      workspaceId: seed.workspaceId,
+      campaignPurpose: "scaling",
+      campaignName: "Bad scaling",
+      parentCampaignId: parent.json?.id,
+      platform: "android",
+      voluumCampaignId: `vc-scale-bad-${Date.now()}`,
+      campaignUrl: "https://voluum.example/bad",
+    });
+    assert.equal(response.status, 400);
+    assert.equal(json?.error, "scaling campaign platform must match parent working campaign");
+  });
+
+  test("cross-workspace parentCampaignId is rejected", async () => {
+    const seedA = await seedWorkspaceWithSource();
+    const seedB = await seedWorkspaceWithSource();
+    const parent = await request(
+      "POST",
+      "/production-live-campaigns",
+      seedA.adminId,
+      workingBody(seedA, `vc-parent-ws-a-${Date.now()}`),
+    );
+    assert.equal(parent.response.status, 201);
+
+    const { response } = await request("POST", "/production-live-campaigns", seedB.adminId, {
+      workspaceId: seedB.workspaceId,
+      campaignPurpose: "scaling",
+      campaignName: "Wrong workspace parent",
+      parentCampaignId: parent.json?.id,
+      voluumCampaignId: `vc-scale-wrong-ws-${Date.now()}`,
+      campaignUrl: "https://voluum.example/wrong-ws",
+    });
+    assert.equal(response.status, 400);
   });
 
   test("scaling parent must be working, not another scaling campaign", async () => {

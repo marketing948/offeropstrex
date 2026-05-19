@@ -2,8 +2,10 @@ import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useListAffiliateNetworks,
+  useListGeos,
   useListWorkspaceTrafficSources,
   getListAffiliateNetworksQueryKey,
+  getListGeosQueryKey,
   getListWorkspaceTrafficSourcesQueryKey,
 } from "@workspace/api-client-react";
 import { authedJson } from "@/lib/api-fetch";
@@ -52,6 +54,10 @@ export function ProductionLiveCampaignForm({
     tsParams,
     wsQueryOpts(activeWorkspaceId, getListAffiliateNetworksQueryKey(tsParams)),
   );
+  const { data: geos = [] } = useListGeos(
+    tsParams,
+    wsQueryOpts(activeWorkspaceId, getListGeosQueryKey(tsParams)),
+  );
 
   const [campaignPurpose, setCampaignPurpose] = useState<"working" | "scaling">("working");
   const [campaignName, setCampaignName] = useState("");
@@ -60,7 +66,7 @@ export function ProductionLiveCampaignForm({
   const [voluumCampaignId, setVoluumCampaignId] = useState("");
   const [campaignUrl, setCampaignUrl] = useState("");
   const [affiliateNetworkId, setAffiliateNetworkId] = useState("");
-  const [geo, setGeo] = useState("");
+  const [geoId, setGeoId] = useState("");
   const [parentCampaignId, setParentCampaignId] = useState("");
   const [notes, setNotes] = useState("");
   const [pending, setPending] = useState(false);
@@ -70,35 +76,45 @@ export function ProductionLiveCampaignForm({
     [workingParents],
   );
 
+  const isScaling = campaignPurpose === "scaling";
+
   async function submit() {
     if (!activeWorkspaceId) return;
-    if (!campaignName.trim() || !voluumCampaignId.trim() || !campaignUrl.trim() || !trafficSourceId) {
+    if (!campaignName.trim() || !voluumCampaignId.trim() || !campaignUrl.trim()) {
       toast({ title: "Fill all required fields", variant: "destructive" });
       return;
     }
-    if (campaignPurpose === "scaling" && !parentCampaignId) {
+    if (isScaling && !parentCampaignId) {
       toast({ title: "Select a parent working campaign", variant: "destructive" });
+      return;
+    }
+    if (!isScaling && (!trafficSourceId || !affiliateNetworkId || !geoId)) {
+      toast({ title: "Network, GEO, and traffic source are required", variant: "destructive" });
       return;
     }
 
     setPending(true);
     try {
+      const body: Record<string, unknown> = {
+        workspaceId: activeWorkspaceId,
+        campaignName: campaignName.trim(),
+        campaignPurpose,
+        voluumCampaignId: voluumCampaignId.trim(),
+        campaignUrl: campaignUrl.trim(),
+        notes: notes.trim() || null,
+      };
+      if (isScaling) {
+        body.parentCampaignId = Number(parentCampaignId);
+      } else {
+        body.platform = platform;
+        body.trafficSourceId = Number(trafficSourceId);
+        body.affiliateNetworkId = Number(affiliateNetworkId);
+        body.geoId = Number(geoId);
+      }
+
       await authedJson("/api/production-live-campaigns", {
         method: "POST",
-        body: JSON.stringify({
-          workspaceId: activeWorkspaceId,
-          campaignName: campaignName.trim(),
-          campaignPurpose,
-          platform,
-          trafficSourceId: Number(trafficSourceId),
-          voluumCampaignId: voluumCampaignId.trim(),
-          campaignUrl: campaignUrl.trim(),
-          affiliateNetworkId: affiliateNetworkId ? Number(affiliateNetworkId) : null,
-          geo: geo.trim() || null,
-          parentCampaignId:
-            campaignPurpose === "scaling" ? Number(parentCampaignId) : null,
-          notes: notes.trim() || null,
-        }),
+        body: JSON.stringify(body),
       });
       toast({ title: "Production campaign added" });
       void queryClient.invalidateQueries({ queryKey: ["live-campaigns"] });
@@ -137,39 +153,26 @@ export function ProductionLiveCampaignForm({
             </SelectContent>
           </Select>
         </div>
-        <div>
-          <Label className="text-xs">Platform *</Label>
-          <Select value={platform} onValueChange={(v) => setPlatform(v as "ios" | "android")}>
-            <SelectTrigger className="mt-1 h-9">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ios">iOS</SelectItem>
-              <SelectItem value="android">Android</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+        {!isScaling && (
+          <div>
+            <Label className="text-xs">Platform *</Label>
+            <Select value={platform} onValueChange={(v) => setPlatform(v as "ios" | "android")}>
+              <SelectTrigger className="mt-1 h-9">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ios">iOS</SelectItem>
+                <SelectItem value="android">Android</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
       </div>
       <div>
         <Label className="text-xs">Campaign name *</Label>
         <Input className="mt-1 h-9" value={campaignName} onChange={(e) => setCampaignName(e.target.value)} />
       </div>
-      <div>
-        <Label className="text-xs">Traffic source *</Label>
-        <Select value={trafficSourceId} onValueChange={setTrafficSourceId}>
-          <SelectTrigger className="mt-1 h-9">
-            <SelectValue placeholder="Select source" />
-          </SelectTrigger>
-          <SelectContent>
-            {trafficSources.map((ts) => (
-              <SelectItem key={ts.id} value={String(ts.id)}>
-                {ts.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      {campaignPurpose === "scaling" && (
+      {isScaling ? (
         <div>
           <Label className="text-xs">Parent working campaign *</Label>
           <Select value={parentCampaignId} onValueChange={setParentCampaignId}>
@@ -184,7 +187,60 @@ export function ProductionLiveCampaignForm({
               ))}
             </SelectContent>
           </Select>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Network, GEO, traffic source, and platform are inherited from the parent working campaign.
+          </p>
         </div>
+      ) : (
+        <>
+          <div>
+            <Label className="text-xs">Traffic source *</Label>
+            <Select value={trafficSourceId} onValueChange={setTrafficSourceId}>
+              <SelectTrigger className="mt-1 h-9">
+                <SelectValue placeholder="Select source" />
+              </SelectTrigger>
+              <SelectContent>
+                {trafficSources.map((ts) => (
+                  <SelectItem key={ts.id} value={String(ts.id)}>
+                    {ts.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <Label className="text-xs">Affiliate network *</Label>
+              <Select value={affiliateNetworkId} onValueChange={setAffiliateNetworkId}>
+                <SelectTrigger className="mt-1 h-9">
+                  <SelectValue placeholder="Select network" />
+                </SelectTrigger>
+                <SelectContent>
+                  {affiliateNetworks.map((n) => (
+                    <SelectItem key={n.id} value={String(n.id)}>
+                      {n.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs">GEO *</Label>
+              <Select value={geoId} onValueChange={setGeoId}>
+                <SelectTrigger className="mt-1 h-9">
+                  <SelectValue placeholder="Select GEO" />
+                </SelectTrigger>
+                <SelectContent>
+                  {geos.filter((g) => g.isActive !== false).map((g) => (
+                    <SelectItem key={g.id} value={String(g.id)}>
+                      {g.code}{g.name ? ` — ${g.name}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </>
       )}
       <div>
         <Label className="text-xs">Voluum Campaign ID *</Label>
@@ -206,28 +262,6 @@ export function ProductionLiveCampaignForm({
           onChange={(e) => setCampaignUrl(e.target.value)}
           placeholder="https://…"
         />
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <Label className="text-xs">Affiliate network</Label>
-          <Select value={affiliateNetworkId || "none"} onValueChange={(v) => setAffiliateNetworkId(v === "none" ? "" : v)}>
-            <SelectTrigger className="mt-1 h-9">
-              <SelectValue placeholder="Optional" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">None</SelectItem>
-              {affiliateNetworks.map((n) => (
-                <SelectItem key={n.id} value={String(n.id)}>
-                  {n.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div>
-          <Label className="text-xs">GEO</Label>
-          <Input className="mt-1 h-9" value={geo} onChange={(e) => setGeo(e.target.value)} placeholder="Optional" />
-        </div>
       </div>
       <div>
         <Label className="text-xs">Notes</Label>

@@ -69,21 +69,53 @@ const productionLiveBodySchema = z
     workspaceId: z.number().int().positive(),
     campaignName: z.string().trim().min(1),
     campaignPurpose: z.enum(PRODUCTION_CAMPAIGN_PURPOSES),
-    platform: z.enum(["ios", "android"]),
-    trafficSourceId: z.number().int().positive(),
+    platform: z.enum(["ios", "android"]).optional(),
+    trafficSourceId: z.number().int().positive().optional(),
     voluumCampaignId: z.string().trim().min(1).max(256),
     campaignUrl: z.string().trim().min(1),
-    affiliateNetworkId: z.number().int().positive().nullable().optional(),
-    geo: z.string().trim().min(1).nullable().optional(),
-    parentCampaignId: z.number().int().positive().nullable().optional(),
+    affiliateNetworkId: z.number().int().positive().optional(),
+    geoId: z.number().int().positive().optional(),
+    geo: z.string().trim().min(1).optional(),
+    parentCampaignId: z.number().int().positive().optional(),
     notes: z.string().nullable().optional(),
   })
   .superRefine((data, ctx) => {
-    if (data.campaignPurpose === "scaling" && data.parentCampaignId == null) {
+    if (data.campaignPurpose === "scaling") {
+      if (data.parentCampaignId == null) {
+        ctx.addIssue({
+          code: "custom",
+          message: "parentCampaignId is required for scaling campaigns",
+          path: ["parentCampaignId"],
+        });
+      }
+      return;
+    }
+    if (data.affiliateNetworkId == null) {
       ctx.addIssue({
         code: "custom",
-        message: "parentCampaignId is required for scaling campaigns",
-        path: ["parentCampaignId"],
+        message: "affiliateNetworkId is required for working campaigns",
+        path: ["affiliateNetworkId"],
+      });
+    }
+    if (data.geoId == null && (data.geo == null || data.geo === "")) {
+      ctx.addIssue({
+        code: "custom",
+        message: "geoId is required for working campaigns",
+        path: ["geoId"],
+      });
+    }
+    if (data.trafficSourceId == null) {
+      ctx.addIssue({
+        code: "custom",
+        message: "trafficSourceId is required for working campaigns",
+        path: ["trafficSourceId"],
+      });
+    }
+    if (data.platform == null) {
+      ctx.addIssue({
+        code: "custom",
+        message: "platform is required for working campaigns",
+        path: ["platform"],
       });
     }
   });
@@ -552,8 +584,8 @@ router.post("/production-live-campaigns", async (req, res): Promise<void> => {
   if ((await requireWorkspaceAccess(req, res, body.workspaceId)) === null) return;
 
   try {
-    await assertProductionLiveCampaignPrerequisites(body);
-    const row = await insertProductionLiveCampaign(body);
+    const resolved = await assertProductionLiveCampaignPrerequisites(body);
+    const row = await insertProductionLiveCampaign(resolved);
 
     await recordOperationalEvent({
       workspaceId: body.workspaceId,
@@ -564,30 +596,56 @@ router.post("/production-live-campaigns", async (req, res): Promise<void> => {
       actorId: admin.id,
       source: "routes.campaigns",
       payloadJson: {
-        campaignPurpose: body.campaignPurpose,
-        platform: body.platform,
-        trafficSourceId: body.trafficSourceId,
+        campaignPurpose: resolved.campaignPurpose,
+        platform: resolved.platform,
+        trafficSourceId: resolved.trafficSourceId,
+        affiliateNetworkId: resolved.affiliateNetworkId,
+        geoId: resolved.geoId,
         voluumCampaignId: row.voluumCampaignId,
-        parentCampaignId: body.parentCampaignId ?? null,
+        parentCampaignId: resolved.parentCampaignId,
       },
     });
 
     res.status(201).json(serialize(row));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const code = (err as { code?: string; cause?: { code?: string } })?.code
+      ?? (err as { cause?: { code?: string } })?.cause?.code;
+    if (code === "23505" && message.includes("campaigns_working_live_slot_unique")) {
+      res.status(409).json({
+        error:
+          "A live working campaign already exists for this affiliate network, GEO, traffic source, and platform",
+      });
+      return;
+    }
     if (
       message === "voluumCampaignId is required" ||
       message === "campaignUrl is required" ||
       message === "parentCampaignId is required for scaling campaigns" ||
+      message === "affiliateNetworkId is required for working campaigns" ||
+      message === "geoId is required for working campaigns" ||
+      message === "trafficSourceId is required for working campaigns" ||
+      message === "platform is required for working campaigns" ||
       message === "trafficSourceId does not belong to this workspace" ||
       message === "affiliateNetworkId does not belong to this workspace" ||
+      message === "geoId does not belong to this workspace" ||
+      message === "geo must match a workspace GEO code, or provide geoId" ||
       message === "parentCampaignId not found in this workspace" ||
-      message === "parentCampaignId must reference a working campaign"
+      message === "parentCampaignId must reference a working campaign" ||
+      message === "parent working campaign is missing slot metadata" ||
+      message === "scaling campaign platform must match parent working campaign" ||
+      message === "scaling campaign trafficSourceId must match parent working campaign" ||
+      message === "scaling campaign affiliateNetworkId must match parent working campaign" ||
+      message === "scaling campaign geoId must match parent working campaign" ||
+      message === "scaling campaign geo must match parent working campaign"
     ) {
       res.status(400).json({ error: message });
       return;
     }
-    if (message.includes("already linked to another campaign in this workspace")) {
+    if (
+      message.includes("already linked to another campaign in this workspace") ||
+      message.includes("A live working campaign already exists for this affiliate network")
+    ) {
       res.status(409).json({ error: message });
       return;
     }

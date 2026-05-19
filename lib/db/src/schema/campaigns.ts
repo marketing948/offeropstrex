@@ -5,6 +5,7 @@ import { workspacesTable } from "./workspaces";
 import { testingBatchesTable } from "./testing-batches";
 import { workspaceTrafficSourcesTable } from "./workspace-traffic-sources";
 import { affiliateNetworksTable } from "./affiliate-networks";
+import { geosTable } from "./geos";
 
 // CampaignOps redesign (post Pivot Phase 7) — one Campaign per
 // (batch, platform, traffic_source) cycle. Status flow:
@@ -48,6 +49,8 @@ export const campaignsTable = pgTable("campaigns", {
     onDelete: "set null",
   }),
   geo: text("geo"),
+  /** Canonical GEO for working-campaign slot matching; prefer over free-text `geo`. */
+  geoId: integer("geo_id").references(() => geosTable.id, { onDelete: "set null" }),
   // Voluum (manual entry — no API integration)
   voluumCampaignId: text("voluum_campaign_id"),
   voluumCampaignName: text("voluum_campaign_name"),

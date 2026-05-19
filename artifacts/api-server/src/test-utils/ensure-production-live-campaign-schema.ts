@@ -38,6 +38,19 @@ export async function ensureProductionLiveCampaignSchema(): Promise<void> {
       ON campaigns (batch_id, platform, traffic_source_id)
       WHERE batch_id IS NOT NULL AND campaign_purpose = 'testing'
   `);
+  await db.execute(sql`
+    ALTER TABLE campaigns
+      ADD COLUMN IF NOT EXISTS geo_id integer REFERENCES geos(id) ON DELETE SET NULL
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS campaigns_working_live_slot_unique
+      ON campaigns (workspace_id, affiliate_network_id, geo_id, traffic_source_id, platform)
+      WHERE campaign_purpose = 'working'
+        AND status = 'live'
+        AND affiliate_network_id IS NOT NULL
+        AND geo_id IS NOT NULL
+        AND traffic_source_id IS NOT NULL
+  `);
 
   ensured = true;
 }
