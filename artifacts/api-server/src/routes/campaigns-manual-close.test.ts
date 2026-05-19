@@ -238,7 +238,9 @@ describe("POST /campaigns/:id/manual-close", { concurrency: false }, () => {
       and(eq(todoTasksTable.workspaceId, seed.workspaceId), eq(todoTasksTable.taskType, "MANUAL")),
     );
     assert.equal(tasks.length, 1);
-    assert.match(tasks[0]!.title, /Move winners to working campaign/);
+    assert.match(tasks[0]!.title, /Move winners from .+ to working campaign/);
+    assert.match(tasks[0]!.description ?? "", /---offerops-winner-handoff---/);
+    assert.match(tasks[0]!.description ?? "", /"winnerOfferIds":\[101,102\]/);
   });
 
   test("winners_found signals missing working campaign and creates setup task", async () => {
@@ -257,7 +259,7 @@ describe("POST /campaigns/:id/manual-close", { concurrency: false }, () => {
       and(eq(todoTasksTable.workspaceId, seed.workspaceId), eq(todoTasksTable.taskType, "MANUAL")),
     );
     assert.equal(tasks.length, 1);
-    assert.match(tasks[0]!.title, /Create working campaign for winners/);
+    assert.match(tasks[0]!.title, /Create\/find working campaign and move winners from/);
   });
 
   test("emits CAMPAIGN_MANUALLY_CLOSED operational event", async () => {
