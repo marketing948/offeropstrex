@@ -1,9 +1,10 @@
-import { pgTable, text, serial, timestamp, integer, numeric, pgEnum, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, numeric, pgEnum } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { workspacesTable } from "./workspaces";
 import { testingBatchesTable } from "./testing-batches";
 import { workspaceTrafficSourcesTable } from "./workspace-traffic-sources";
+import { affiliateNetworksTable } from "./affiliate-networks";
 
 // CampaignOps redesign (post Pivot Phase 7) — one Campaign per
 // (batch, platform, traffic_source) cycle. Status flow:
@@ -25,15 +26,28 @@ export const campaignStatusEnum = pgEnum("campaign_status", [
   "closed",
 ]);
 
+/** testing = CampaignOps batch cycle; working/scaling = manual production live. */
+export const campaignPurposeEnum = pgEnum("campaign_purpose", [
+  "testing",
+  "working",
+  "scaling",
+]);
+
 export const campaignsTable = pgTable("campaigns", {
   id: serial("id").primaryKey(),
   workspaceId: integer("workspace_id").notNull().references(() => workspacesTable.id, { onDelete: "cascade" }),
-  batchId: integer("batch_id").notNull().references(() => testingBatchesTable.id, { onDelete: "cascade" }),
+  batchId: integer("batch_id").references(() => testingBatchesTable.id, { onDelete: "cascade" }),
   platform: campaignPlatformEnum("platform").notNull(),
   campaignName: text("campaign_name").notNull(),
   trafficSourceId: integer("traffic_source_id").references(() => workspaceTrafficSourcesTable.id, { onDelete: "set null" }),
   campaignUrl: text("campaign_url"),
   status: campaignStatusEnum("status").notNull().default("voluum_created"),
+  campaignPurpose: campaignPurposeEnum("campaign_purpose").notNull().default("testing"),
+  parentCampaignId: integer("parent_campaign_id"),
+  affiliateNetworkId: integer("affiliate_network_id").references(() => affiliateNetworksTable.id, {
+    onDelete: "set null",
+  }),
+  geo: text("geo"),
   // Voluum (manual entry — no API integration)
   voluumCampaignId: text("voluum_campaign_id"),
   voluumCampaignName: text("voluum_campaign_name"),
@@ -51,12 +65,9 @@ export const campaignsTable = pgTable("campaigns", {
   notes: text("notes"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-}, (t) => ({
-  // CampaignOps redesign: one Campaign per (batch, platform, traffic_source)
-  // cycle. The earlier (batch, platform) unique constraint has been
-  // dropped because the new flow tests every traffic source per platform.
-  uniqBatchPlatformTrafficSource: unique("campaigns_batch_platform_traffic_source_unique")
-    .on(t.batchId, t.platform, t.trafficSourceId),
+}, (_t) => ({
+  // Partial unique index for testing campaigns only — see migration
+  // 0015_production_live_campaigns.sql (batch_id IS NOT NULL).
 }));
 
 export const insertCampaignSchema = createInsertSchema(campaignsTable).omit({ id: true, createdAt: true, updatedAt: true });

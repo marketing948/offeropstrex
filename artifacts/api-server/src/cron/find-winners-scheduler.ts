@@ -34,12 +34,14 @@ async function tick(): Promise<void> {
       .where(
         and(
           eq(campaignsTable.status, "live"),
+          isNotNull(campaignsTable.batchId),
           isNotNull(campaignsTable.liveStartedAt),
           lte(campaignsTable.liveStartedAt, cutoff),
         ),
       );
 
     for (const c of due) {
+      if (c.batchId == null) continue;
       // Skip if a find_winners task already exists for this campaign.
       const [existing] = await db
         .select({ id: todoTasksTable.id })

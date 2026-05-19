@@ -13,8 +13,9 @@
 // CampaignStatusChanged → rule → executor.
 
 import { Router, type IRouter, type Response } from "express";
-import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import {
+  affiliateNetworksTable,
   db,
   campaignsTable,
   testingBatchesTable,
@@ -22,9 +23,19 @@ import {
   employeesTable,
 } from "@workspace/db";
 import { z } from "zod/v4";
-import { checkWorkspaceAccess, requireWorkspaceAccess } from "../lib/workspace-access";
+import {
+  checkWorkspaceAccess,
+  requireAdmin,
+  requireWorkspaceAccess,
+} from "../lib/workspace-access";
 import { applyAction } from "../engine/executor.ts";
 import { emit } from "../engine/event-bus";
+import { recordOperationalEvent } from "../lib/operational-events.ts";
+import {
+  assertProductionLiveCampaignPrerequisites,
+  insertProductionLiveCampaign,
+  PRODUCTION_CAMPAIGN_PURPOSES,
+} from "../lib/production-live-campaigns.ts";
 
 const router: IRouter = Router();
 
@@ -52,6 +63,30 @@ const patchBodySchema = z.object({
   campaignUrl: z.string().nullable().optional(),
   status: z.enum(VALID_STATUSES).optional(),
 });
+
+const productionLiveBodySchema = z
+  .object({
+    workspaceId: z.number().int().positive(),
+    campaignName: z.string().trim().min(1),
+    campaignPurpose: z.enum(PRODUCTION_CAMPAIGN_PURPOSES),
+    platform: z.enum(["ios", "android"]),
+    trafficSourceId: z.number().int().positive(),
+    voluumCampaignId: z.string().trim().min(1).max(256),
+    campaignUrl: z.string().trim().min(1),
+    affiliateNetworkId: z.number().int().positive().nullable().optional(),
+    geo: z.string().trim().min(1).nullable().optional(),
+    parentCampaignId: z.number().int().positive().nullable().optional(),
+    notes: z.string().nullable().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.campaignPurpose === "scaling" && data.parentCampaignId == null) {
+      ctx.addIssue({
+        code: "custom",
+        message: "parentCampaignId is required for scaling campaigns",
+        path: ["parentCampaignId"],
+      });
+    }
+  });
 
 function serialize(row: typeof campaignsTable.$inferSelect) {
   return {
@@ -158,6 +193,7 @@ router.post("/campaigns", async (req, res): Promise<void> => {
         trafficSourceId: trafficSourceId ?? null,
         campaignUrl: campaignUrl ?? null,
         status: initialStatus,
+        campaignPurpose: "testing",
       })
       .returning();
   } catch (err) {
@@ -239,6 +275,13 @@ router.patch("/campaigns/:id", async (req, res): Promise<void> => {
     || trafficSourceId !== undefined
     || campaignUrl !== undefined;
   const statusChanging = status !== undefined && status !== existing.status;
+
+  if (existing.campaignPurpose !== "testing" && statusChanging) {
+    res.status(400).json({
+      error: "Production campaigns do not use CampaignOps lifecycle transitions",
+    });
+    return;
+  }
 
   if (!statusChanging) {
     if (!hasFieldUpdates) {
@@ -367,7 +410,6 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
 
   const conditions = [
     eq(campaignsTable.workspaceId, wsId),
-    eq(testingBatchesTable.workspaceId, wsId),
     eq(campaignsTable.status, status as LiveCampaignStatus),
   ];
 
@@ -377,30 +419,67 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
   if (trafficSourceId !== null) conditions.push(eq(campaignsTable.trafficSourceId, trafficSourceId));
   if (batchId !== null) conditions.push(eq(campaignsTable.batchId, batchId));
   if (req.query["geo"] != null && req.query["geo"] !== "") {
-    conditions.push(eq(testingBatchesTable.geo, String(req.query["geo"])));
+    const geo = String(req.query["geo"]);
+    conditions.push(
+      or(
+        eq(campaignsTable.geo, geo),
+        eq(testingBatchesTable.geo, geo),
+      )!,
+    );
   }
   if (req.query["affiliate_network"] != null && req.query["affiliate_network"] !== "") {
-    conditions.push(eq(testingBatchesTable.affiliateNetwork, String(req.query["affiliate_network"])));
+    const network = String(req.query["affiliate_network"]);
+    conditions.push(
+      or(
+        eq(testingBatchesTable.affiliateNetwork, network),
+        eq(affiliateNetworksTable.name, network),
+      )!,
+    );
   }
   if (dateFrom !== null) conditions.push(gte(campaignsTable.liveStartedAt, dateFrom));
   if (dateTo !== null) conditions.push(lte(campaignsTable.liveStartedAt, dateTo));
 
   if (access.employee.role === "admin") {
-    if (requestedWorkerId !== null) conditions.push(eq(testingBatchesTable.employeeId, requestedWorkerId));
+    if (requestedWorkerId !== null) {
+      conditions.push(
+        or(
+          inArray(campaignsTable.campaignPurpose, ["working", "scaling"]),
+          eq(testingBatchesTable.employeeId, requestedWorkerId),
+        )!,
+      );
+    }
   } else {
-    conditions.push(eq(testingBatchesTable.employeeId, access.employee.id));
-    if (requestedWorkerId !== null) conditions.push(eq(testingBatchesTable.employeeId, requestedWorkerId));
+    conditions.push(
+      or(
+        inArray(campaignsTable.campaignPurpose, ["working", "scaling"]),
+        eq(testingBatchesTable.employeeId, access.employee.id),
+      )!,
+    );
+    if (requestedWorkerId !== null) {
+      conditions.push(
+        or(
+          inArray(campaignsTable.campaignPurpose, ["working", "scaling"]),
+          eq(testingBatchesTable.employeeId, requestedWorkerId),
+        )!,
+      );
+    }
   }
+
+  const batchJoin = and(
+    eq(campaignsTable.batchId, testingBatchesTable.id),
+    eq(testingBatchesTable.workspaceId, wsId),
+  );
 
   const where = and(...conditions);
   const [totalRow] = await db
     .select({ total: sql<number>`count(*)::int` })
     .from(campaignsTable)
-    .innerJoin(
-      testingBatchesTable,
+    .leftJoin(testingBatchesTable, batchJoin)
+    .leftJoin(
+      affiliateNetworksTable,
       and(
-        eq(campaignsTable.batchId, testingBatchesTable.id),
-        eq(testingBatchesTable.workspaceId, wsId),
+        eq(campaignsTable.affiliateNetworkId, affiliateNetworksTable.id),
+        eq(affiliateNetworksTable.workspaceId, wsId),
       ),
     )
     .where(where);
@@ -409,19 +488,13 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
     .select({
       campaign: campaignsTable,
       batchName: testingBatchesTable.batchName,
-      batchGeo: testingBatchesTable.geo,
-      batchAffiliateNetwork: testingBatchesTable.affiliateNetwork,
+      batchGeo: sql<string | null>`coalesce(${campaignsTable.geo}, ${testingBatchesTable.geo})`,
+      batchAffiliateNetwork: sql<string | null>`coalesce(${affiliateNetworksTable.name}, ${testingBatchesTable.affiliateNetwork})`,
       employeeName: employeesTable.name,
       trafficSourceName: workspaceTrafficSourcesTable.name,
     })
     .from(campaignsTable)
-    .innerJoin(
-      testingBatchesTable,
-      and(
-        eq(campaignsTable.batchId, testingBatchesTable.id),
-        eq(testingBatchesTable.workspaceId, wsId),
-      ),
-    )
+    .leftJoin(testingBatchesTable, batchJoin)
     .leftJoin(
       employeesTable,
       eq(testingBatchesTable.employeeId, employeesTable.id),
@@ -433,6 +506,13 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
         eq(workspaceTrafficSourcesTable.workspaceId, wsId),
       ),
     )
+    .leftJoin(
+      affiliateNetworksTable,
+      and(
+        eq(campaignsTable.affiliateNetworkId, affiliateNetworksTable.id),
+        eq(affiliateNetworksTable.workspaceId, wsId),
+      ),
+    )
     .where(where)
     .orderBy(sql`${campaignsTable.liveStartedAt} desc nulls last`, desc(campaignsTable.id))
     .limit(limit)
@@ -441,7 +521,10 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
   res.json({
     items: rows.map((row) => ({
       ...serialize(row.campaign),
-      batchName: row.batchName,
+      batchName:
+        row.campaign.campaignPurpose === "testing"
+          ? row.batchName
+          : null,
       batchGeo: row.batchGeo,
       batchAffiliateNetwork: row.batchAffiliateNetwork,
       employeeName: row.employeeName,
@@ -453,6 +536,63 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
       total: Number(totalRow?.total ?? 0),
     },
   });
+});
+
+router.post("/production-live-campaigns", async (req, res): Promise<void> => {
+  const admin = await requireAdmin(req, res);
+  if (admin === null) return;
+
+  const parsed = productionLiveBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const body = parsed.data;
+  if ((await requireWorkspaceAccess(req, res, body.workspaceId)) === null) return;
+
+  try {
+    await assertProductionLiveCampaignPrerequisites(body);
+    const row = await insertProductionLiveCampaign(body);
+
+    await recordOperationalEvent({
+      workspaceId: body.workspaceId,
+      entityType: "campaign",
+      entityId: row.id,
+      eventType: "PRODUCTION_LIVE_CAMPAIGN_CREATED",
+      actorType: "employee",
+      actorId: admin.id,
+      source: "routes.campaigns",
+      payloadJson: {
+        campaignPurpose: body.campaignPurpose,
+        platform: body.platform,
+        trafficSourceId: body.trafficSourceId,
+        voluumCampaignId: row.voluumCampaignId,
+        parentCampaignId: body.parentCampaignId ?? null,
+      },
+    });
+
+    res.status(201).json(serialize(row));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (
+      message === "voluumCampaignId is required" ||
+      message === "campaignUrl is required" ||
+      message === "parentCampaignId is required for scaling campaigns" ||
+      message === "trafficSourceId does not belong to this workspace" ||
+      message === "affiliateNetworkId does not belong to this workspace" ||
+      message === "parentCampaignId not found in this workspace" ||
+      message === "parentCampaignId must reference a working campaign"
+    ) {
+      res.status(400).json({ error: message });
+      return;
+    }
+    if (message.includes("already linked to another campaign in this workspace")) {
+      res.status(409).json({ error: message });
+      return;
+    }
+    throw err;
+  }
 });
 
 router.get("/campaigns", async (req, res): Promise<void> => {
@@ -506,7 +646,9 @@ router.get("/campaigns", async (req, res): Promise<void> => {
 
   // Enrich with batch + traffic source + employee names for the
   // Live Campaigns page.
-  const batchIds = Array.from(new Set(rows.map((r) => r.batchId)));
+  const batchIds = Array.from(
+    new Set(rows.map((r) => r.batchId).filter((v): v is number => v != null)),
+  );
   const tsIds = Array.from(new Set(rows.map((r) => r.trafficSourceId).filter((v): v is number => v != null)));
 
   const [batches, tsources] = await Promise.all([
@@ -545,7 +687,7 @@ router.get("/campaigns", async (req, res): Promise<void> => {
 
   res.json(
     rows.map((r) => {
-      const b = batchMap.get(r.batchId);
+      const b = r.batchId != null ? batchMap.get(r.batchId) : undefined;
       return {
         ...serialize(r),
         batchName: b?.batchName ?? null,

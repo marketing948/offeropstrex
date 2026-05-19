@@ -326,12 +326,15 @@ export async function reconcileWorkspace(
       and(
         eq(campaignsTable.workspaceId, workspaceId),
         eq(campaignsTable.status, "ready"),
+        isNotNull(campaignsTable.batchId),
       ),
     )
     .groupBy(campaignsTable.batchId)
     .having(sql`count(*) >= 2`);
   if (readyPairs.length > 0) {
-    const readyBatchIds = readyPairs.map((r) => r.batchId);
+    const readyBatchIds = readyPairs
+      .map((r) => r.batchId)
+      .filter((id): id is number => id != null);
     const goLiveTasks = await db
       .select({ relatedBatchId: todoTasksTable.relatedBatchId })
       .from(todoTasksTable)

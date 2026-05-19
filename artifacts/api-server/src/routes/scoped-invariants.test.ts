@@ -22,6 +22,7 @@ import {
 } from "@workspace/db";
 import { registerHandler, _resetRegistryForTests } from "../engine/handlers.ts";
 import { _resetRulesGuardForTests, registerAllRules } from "../engine/rules/index.ts";
+import { ensureProductionLiveCampaignSchema } from "../test-utils/ensure-production-live-campaign-schema.ts";
 
 let server: Server;
 let baseUrl: string;
@@ -29,6 +30,7 @@ let createdWorkspaceIds: number[] = [];
 let createdEmployeeIds: number[] = [];
 
 before(async () => {
+  await ensureProductionLiveCampaignSchema();
   await db.execute(sql`
     ALTER TABLE employees
       ADD COLUMN IF NOT EXISTS active_workspace_id integer

@@ -8,17 +8,30 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Plus } from "lucide-react";
+import { useAuth } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace-context";
 import { authedJson } from "@/lib/api-fetch";
+import { ProductionLiveCampaignForm } from "@/components/production-live-campaign-form";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
+type CampaignPurpose = "testing" | "working" | "scaling";
+
 type Campaign = {
   id: number;
   workspaceId: number;
-  batchId: number;
+  batchId: number | null;
+  campaignPurpose: CampaignPurpose;
   platform: "ios" | "android";
   campaignName: string;
   status: "draft" | "ready" | "voluum_created" | "live" | "tested" | "closed";
@@ -72,6 +85,28 @@ function StatusBadge({ status }: { status: Campaign["status"] }) {
   );
 }
 
+const PURPOSE_LABELS: Record<CampaignPurpose, string> = {
+  testing: "Testing",
+  working: "Working",
+  scaling: "Scaling",
+};
+
+function PurposeBadge({ purpose }: { purpose: CampaignPurpose }) {
+  if (purpose === "testing") {
+    return (
+      <Badge variant="secondary" className="text-[10px] font-medium">
+        {PURPOSE_LABELS.testing}
+      </Badge>
+    );
+  }
+  const variant = purpose === "working" ? "default" : "outline";
+  return (
+    <Badge variant={variant} className="text-[10px] font-medium">
+      {PURPOSE_LABELS[purpose]}
+    </Badge>
+  );
+}
+
 function fmtMoney(v: string | null): string {
   if (v == null || v === "") return "—";
   const n = Number(v);
@@ -96,7 +131,10 @@ function toNextDate(value: string): string {
 }
 
 export default function LiveCampaigns() {
+  const { currentEmployee } = useAuth();
   const { activeWorkspaceId } = useWorkspace();
+  const isAdmin = currentEmployee?.role === "admin";
+  const [addOpen, setAddOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("live");
   const [platformFilter, setPlatformFilter] = useState<string>("all");
   const [trafficSourceFilter, setTrafficSourceFilter] = useState<string>("all");
@@ -191,7 +229,22 @@ export default function LiveCampaigns() {
     [optionCampaigns],
   );
   const batchOptions = useMemo(
-    () => Array.from(new Map(optionCampaigns.map((c) => [String(c.batchId), c.batchName ?? `Batch #${c.batchId}`])).entries()).sort((a, b) => a[1].localeCompare(b[1])),
+    () =>
+      Array.from(
+        new Map(
+          optionCampaigns
+            .filter((c) => c.batchId != null)
+            .map((c) => [String(c.batchId), c.batchName ?? `Batch #${c.batchId}`]),
+        ).entries(),
+      ).sort((a, b) => a[1].localeCompare(b[1])),
+    [optionCampaigns],
+  );
+
+  const workingParentCampaigns = useMemo(
+    () =>
+      optionCampaigns
+        .filter((c) => c.campaignPurpose === "working" && c.status === "live")
+        .map((c) => ({ id: c.id, campaignName: c.campaignName, campaignPurpose: c.campaignPurpose })),
     [optionCampaigns],
   );
 
@@ -217,9 +270,15 @@ export default function LiveCampaigns() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Live Campaigns</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Campaigns become live here only after the matching take-campaign-live task is completed.
+            Testing campaigns appear after take-campaign-live. Production working/scaling campaigns are added manually and skip CampaignOps.
           </p>
         </div>
+        {isAdmin && (
+          <Button size="sm" onClick={() => setAddOpen(true)}>
+            <Plus className="mr-1.5 h-4 w-4" />
+            Add production campaign
+          </Button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -314,6 +373,7 @@ export default function LiveCampaigns() {
           <TableHeader>
             <TableRow>
               <TableHead>Campaign</TableHead>
+              <TableHead>Purpose</TableHead>
               <TableHead>Platform</TableHead>
               <TableHead>Traffic source</TableHead>
               <TableHead>Network / GEO</TableHead>
@@ -328,11 +388,11 @@ export default function LiveCampaigns() {
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={11} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>
+              <TableRow><TableCell colSpan={12} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>
             ) : isError ? (
-              <TableRow><TableCell colSpan={11} className="text-center py-8 text-destructive">{errorMessage}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={12} className="text-center py-8 text-destructive">{errorMessage}</TableCell></TableRow>
             ) : filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={11} className="text-center py-8 text-muted-foreground">No campaigns match these filters.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={12} className="text-center py-8 text-muted-foreground">No campaigns match these filters.</TableCell></TableRow>
             ) : (
               filtered.map((c) => (
                 <TableRow key={c.id}>
@@ -340,6 +400,9 @@ export default function LiveCampaigns() {
                     <div>{c.campaignName}</div>
                     {c.batchName && <div className="text-[11px] text-muted-foreground">Batch: {c.batchName}{c.batchGeo ? ` • ${c.batchGeo}` : ""}</div>}
                     {c.voluumCampaignId && <div className="text-[11px] text-muted-foreground font-mono">Voluum: {c.voluumCampaignId}</div>}
+                  </TableCell>
+                  <TableCell>
+                    <PurposeBadge purpose={c.campaignPurpose ?? "testing"} />
                   </TableCell>
                   <TableCell><Badge variant="outline" className="uppercase text-[10px]">{c.platform}</Badge></TableCell>
                   <TableCell>{c.trafficSourceName ?? "—"}</TableCell>
@@ -385,6 +448,21 @@ export default function LiveCampaigns() {
           </button>
         </div>
       </div>
+
+      {isAdmin && (
+        <Dialog open={addOpen} onOpenChange={setAddOpen}>
+          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Add production live campaign</DialogTitle>
+            </DialogHeader>
+            <ProductionLiveCampaignForm
+              workingParents={workingParentCampaigns}
+              onCreated={() => setAddOpen(false)}
+              onCancel={() => setAddOpen(false)}
+            />
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

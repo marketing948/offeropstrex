@@ -629,7 +629,7 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
             batchId: campaignsTable.batchId,
             platform: campaignsTable.platform,
           });
-        if (!updated) continue;
+        if (!updated || updated.batchId == null) continue;
         await emitWithinTx(tx, {
           type: "CampaignStatusChanged",
           workspaceId: action.workspaceId,
@@ -1067,6 +1067,7 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
         });
       if (updated.length === 0) return;
       const row = updated[0]!;
+      if (row.batchId == null) return;
       // Chain-emit inside the parent tx so the downstream rule sees
       // the just-updated campaign row (committed only when the parent
       // tx commits).

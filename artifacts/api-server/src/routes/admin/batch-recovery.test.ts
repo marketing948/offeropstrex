@@ -19,6 +19,7 @@ import {
   workspacesTable,
   workspaceTrafficSourcesTable,
 } from "@workspace/db";
+import { ensureProductionLiveCampaignSchema } from "../../test-utils/ensure-production-live-campaign-schema.ts";
 
 let server: Server;
 let baseUrl: string;
@@ -26,6 +27,7 @@ let createdWorkspaceIds: number[] = [];
 let createdEmployeeIds: number[] = [];
 
 before(async () => {
+  await ensureProductionLiveCampaignSchema();
   server = app.listen(0);
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const address = server.address() as AddressInfo;
