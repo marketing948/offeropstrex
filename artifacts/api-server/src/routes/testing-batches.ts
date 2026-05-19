@@ -68,6 +68,99 @@ type EnrichmentMaps = {
   geos: Map<number, { code: string; name: string | null }>;
 };
 
+const GET_BATCH_INCLUDE_TRAFFIC_SOURCE_RUNS = "traffic_source_runs";
+
+type GetBatchIncludeFlags = {
+  trafficSourceRuns: boolean;
+  error?: string;
+};
+
+function parseGetBatchInclude(query: Record<string, unknown>): GetBatchIncludeFlags {
+  const raw = query["include"];
+  if (raw == null || raw === "") return { trafficSourceRuns: false };
+  const tokens = String(raw)
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  if (tokens.length === 0) return { trafficSourceRuns: false };
+  const unknown = tokens.filter((token) => token !== GET_BATCH_INCLUDE_TRAFFIC_SOURCE_RUNS);
+  if (unknown.length > 0) {
+    return {
+      trafficSourceRuns: false,
+      error: `Unknown include value(s): ${unknown.join(", ")}`,
+    };
+  }
+  return { trafficSourceRuns: tokens.includes(GET_BATCH_INCLUDE_TRAFFIC_SOURCE_RUNS) };
+}
+
+type TrafficSourceRunRow = {
+  id: number;
+  position: number;
+  status: string;
+  trafficSourceId: number;
+  trafficSourceName: string | null;
+  iosStatus: string;
+  androidStatus: string;
+  iosCampaignId: number | null;
+  androidCampaignId: number | null;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  createdAt: Date;
+};
+
+function serializeTrafficSourceRun(run: TrafficSourceRunRow) {
+  return {
+    id: run.id,
+    position: run.position,
+    status: run.status,
+    trafficSourceId: run.trafficSourceId,
+    trafficSourceName: run.trafficSourceName,
+    iosStatus: run.iosStatus,
+    androidStatus: run.androidStatus,
+    iosCampaignId: run.iosCampaignId,
+    androidCampaignId: run.androidCampaignId,
+    startedAt: run.startedAt ? run.startedAt.toISOString() : null,
+    completedAt: run.completedAt ? run.completedAt.toISOString() : null,
+    createdAt: run.createdAt.toISOString(),
+  };
+}
+
+async function loadTrafficSourceRunsForBatch(
+  workspaceId: number,
+  batchId: number,
+): Promise<TrafficSourceRunRow[]> {
+  return db
+    .select({
+      id: batchTrafficSourceRunsTable.id,
+      position: batchTrafficSourceRunsTable.position,
+      status: batchTrafficSourceRunsTable.status,
+      trafficSourceId: batchTrafficSourceRunsTable.trafficSourceId,
+      trafficSourceName: workspaceTrafficSourcesTable.name,
+      iosStatus: batchTrafficSourceRunsTable.iosStatus,
+      androidStatus: batchTrafficSourceRunsTable.androidStatus,
+      iosCampaignId: batchTrafficSourceRunsTable.iosCampaignId,
+      androidCampaignId: batchTrafficSourceRunsTable.androidCampaignId,
+      startedAt: batchTrafficSourceRunsTable.startedAt,
+      completedAt: batchTrafficSourceRunsTable.completedAt,
+      createdAt: batchTrafficSourceRunsTable.createdAt,
+    })
+    .from(batchTrafficSourceRunsTable)
+    .innerJoin(
+      workspaceTrafficSourcesTable,
+      and(
+        eq(workspaceTrafficSourcesTable.id, batchTrafficSourceRunsTable.trafficSourceId),
+        eq(workspaceTrafficSourcesTable.workspaceId, workspaceId),
+      ),
+    )
+    .where(
+      and(
+        eq(batchTrafficSourceRunsTable.workspaceId, workspaceId),
+        eq(batchTrafficSourceRunsTable.batchId, batchId),
+      ),
+    )
+    .orderBy(asc(batchTrafficSourceRunsTable.position));
+}
+
 function serializeBatch(
   batch: typeof testingBatchesTable.$inferSelect,
   enrich?: EnrichmentMaps,
@@ -439,8 +532,24 @@ router.get("/testing-batches/:id", async (req, res): Promise<void> => {
 
   if ((await requireWorkspaceAccess(req, res, batch.workspaceId)) === null) return;
 
+  const includes = parseGetBatchInclude(req.query as Record<string, unknown>);
+  if (includes.error) {
+    res.status(400).json({ error: includes.error });
+    return;
+  }
+
   const enrich = await buildEnrichment([batch]);
-  res.json(serializeBatch(batch, enrich));
+  const payload = serializeBatch(batch, enrich);
+  if (!includes.trafficSourceRuns) {
+    res.json(payload);
+    return;
+  }
+
+  const runs = await loadTrafficSourceRunsForBatch(batch.workspaceId, batch.id);
+  res.json({
+    ...payload,
+    trafficSourceRuns: runs.map(serializeTrafficSourceRun),
+  });
 });
 
 router.patch("/testing-batches/:id", async (req, res): Promise<void> => {
