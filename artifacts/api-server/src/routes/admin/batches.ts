@@ -14,6 +14,7 @@ import { Router, type IRouter } from "express";
 import { db, testingBatchesTable } from "@workspace/db";
 import { CreateManualBatchBody } from "@workspace/api-zod";
 import { requireAdmin, requireWorkspaceAccess } from "../../lib/workspace-access";
+import { recordBatchCreatedOperationalEvent } from "../../lib/campaignops-operational-events.ts";
 import { emit } from "../../engine/event-bus";
 
 const router: IRouter = Router();
@@ -38,6 +39,20 @@ router.post("/admin/batches/manual", async (req, res): Promise<void> => {
     .insert(testingBatchesTable)
     .values({ ...(parsed.data as typeof testingBatchesTable.$inferInsert), workspaceId: wsId })
     .returning();
+
+  const initialTrafficSourceId =
+    batch.currentWorkspaceTrafficSourceId ??
+    (typeof parsed.data.trafficSourceId === "number" ? parsed.data.trafficSourceId : null);
+
+  await recordBatchCreatedOperationalEvent({
+    workspaceId: wsId,
+    batchId: batch.id,
+    employeeId: batch.employeeId,
+    initialTrafficSourceId,
+    trafficSourceStep: batch.trafficSourceStep,
+    offerCount: batch.numberOfOffers ?? parsed.data.numberOfOffers ?? null,
+    source: "routes.admin.batches.manual",
+  });
 
   // Spec-correction: chain BatchCreated so manual batches go through
   // the same Phase-4 cascade as sync-imported ones. Failure to emit

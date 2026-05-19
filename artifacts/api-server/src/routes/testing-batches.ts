@@ -20,6 +20,7 @@ import {
   ListTestingBatchesQueryParams,
 } from "@workspace/api-zod";
 import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access";
+import { recordBatchCreatedOperationalEvent } from "../lib/campaignops-operational-events.ts";
 import { emit } from "../engine/event-bus.ts";
 import {
   executeDeleteBatch,
@@ -379,6 +380,19 @@ router.post("/testing-batches", async (req, res): Promise<void> => {
         }),
       );
     }
+
+    await recordBatchCreatedOperationalEvent(
+      {
+        workspaceId: wsId,
+        batchId: inserted.id,
+        employeeId: inserted.employeeId,
+        initialTrafficSourceId: body.trafficSourceId,
+        trafficSourceStep: inserted.trafficSourceStep,
+        offerCount: body.numberOfOffers ?? null,
+        source: "routes.testing-batches",
+      },
+      tx,
+    );
 
     return inserted;
   });

@@ -18,6 +18,11 @@ import { and, asc, eq, gt, ne, sql } from "drizzle-orm";
 import { emitWithinTx } from "./event-bus.ts";
 import type { Action, BatchStatus, Tx } from "./types.ts";
 import { assertNever } from "./types.ts";
+import {
+  isTerminalTrafficSourceRunStatus,
+  recordTrafficSourceRunActivatedOperationalEvent,
+  recordTrafficSourceRunTerminalOperationalEvent,
+} from "../lib/campaignops-operational-events.ts";
 import { recordOperationalEvent } from "../lib/operational-events.ts";
 
 type CreateBatchAction = Extract<Action, { type: "CreateBatch" }>;
@@ -117,6 +122,7 @@ export async function activateNextTrafficSourceRun(
     .select({
       id: batchTrafficSourceRunsTable.id,
       trafficSourceId: batchTrafficSourceRunsTable.trafficSourceId,
+      position: batchTrafficSourceRunsTable.position,
       status: batchTrafficSourceRunsTable.status,
     })
     .from(batchTrafficSourceRunsTable)
@@ -184,6 +190,17 @@ export async function activateNextTrafficSourceRun(
       startedAt: now,
     })
     .where(eq(batchTrafficSourceRunsTable.id, nextRun.id));
+
+  await recordTrafficSourceRunActivatedOperationalEvent(
+    {
+      workspaceId: action.workspaceId,
+      batchId: action.batchId,
+      runId: nextRun.id,
+      trafficSourceId: nextRun.trafficSourceId,
+      position: nextRun.position,
+    },
+    tx,
+  );
 
   await tx
     .update(testingBatchesTable)
@@ -793,6 +810,21 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
               }),
         })
         .where(eq(batchTrafficSourceRunsTable.id, run.id));
+
+      if (isTerminalTrafficSourceRunStatus(nextRunStatus)) {
+        await recordTrafficSourceRunTerminalOperationalEvent(
+          {
+            workspaceId: action.workspaceId,
+            batchId: action.batchId,
+            runId: run.id,
+            trafficSourceId: action.trafficSourceId,
+            status: nextRunStatus,
+            iosStatus: nextIosStatus,
+            androidStatus: nextAndroidStatus,
+          },
+          tx,
+        );
+      }
 
       if (shouldAdvanceTrafficSourceRun(nextIosStatus, nextAndroidStatus, nextRunStatus)) {
         await activateNextTrafficSourceRun(tx, action, run.position);

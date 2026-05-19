@@ -1,16 +1,21 @@
-import { afterEach, beforeEach, describe, test } from "node:test";
+import { after, afterEach, before, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import {
   batchTrafficSourceRunsTable,
   campaignsTable,
   db,
   employeesTable,
+  operationalEventsTable,
   testingBatchesTable,
   todoTasksTable,
   workspacesTable,
   workspaceTrafficSourcesTable,
 } from "@workspace/db";
+import {
+  TRAFFIC_SOURCE_RUN_ACTIVATED_PAYLOAD_KEYS,
+  TRAFFIC_SOURCE_RUN_TERMINAL_PAYLOAD_KEYS,
+} from "../lib/campaignops-operational-events.ts";
 import { emit } from "./event-bus.ts";
 import { activateNextTrafficSourceRun } from "./executor.ts";
 import { _resetRegistryForTests } from "./handlers.ts";
@@ -21,6 +26,60 @@ type PlatformOutcome = "success" | "failed";
 
 let createdWorkspaceIds: number[] = [];
 let createdEmployeeIds: number[] = [];
+
+before(async () => {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS operational_events (
+      id serial PRIMARY KEY,
+      workspace_id integer NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      entity_type text NOT NULL,
+      entity_id text NOT NULL,
+      event_type text NOT NULL,
+      actor_type text NOT NULL DEFAULT 'system',
+      actor_id text,
+      source text NOT NULL,
+      payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+});
+
+function assertSafeOperationalPayload(
+  payload: unknown,
+  allowedKeys: readonly string[],
+): void {
+  assert.ok(payload !== null && typeof payload === "object");
+  const record = payload as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    assert.ok(
+      (allowedKeys as readonly string[]).includes(key),
+      `unexpected payload key: ${key}`,
+    );
+    const value = record[key];
+    assert.ok(
+      typeof value === "number" || typeof value === "string",
+      `unexpected value type for ${key}`,
+    );
+  }
+}
+
+async function getOperationalEvents(
+  workspaceId: number,
+  eventType: string,
+  entityId?: string,
+) {
+  const conditions = [
+    eq(operationalEventsTable.workspaceId, workspaceId),
+    eq(operationalEventsTable.eventType, eventType),
+  ];
+  if (entityId !== undefined) {
+    conditions.push(eq(operationalEventsTable.entityId, entityId));
+  }
+  return db
+    .select()
+    .from(operationalEventsTable)
+    .where(and(...conditions));
+}
 
 beforeEach(() => {
   _resetRegistryForTests();
@@ -325,6 +384,63 @@ async function getTerminalTasks(batchId: number) {
 }
 
 describe("batch traffic source run state machine", { concurrency: false }, () => {
+  test("completing both platforms records TRAFFIC_SOURCE_RUN_TERMINAL once", async () => {
+    const seed = await seedRunMachine();
+    const [runOneBefore] = await getRuns(seed.batchId);
+
+    await completeFindWinners(seed, "ios", "success");
+    const midTerminal = await getOperationalEvents(
+      seed.workspaceId,
+      "TRAFFIC_SOURCE_RUN_TERMINAL",
+      String(runOneBefore.id),
+    );
+    assert.equal(midTerminal.length, 0);
+
+    await completeFindWinners(seed, "android", "success");
+
+    const terminal = await getOperationalEvents(
+      seed.workspaceId,
+      "TRAFFIC_SOURCE_RUN_TERMINAL",
+      String(runOneBefore.id),
+    );
+    assert.equal(terminal.length, 1);
+    assertSafeOperationalPayload(
+      terminal[0]?.payloadJson,
+      TRAFFIC_SOURCE_RUN_TERMINAL_PAYLOAD_KEYS,
+    );
+    assert.deepEqual(terminal[0]?.payloadJson, {
+      batchId: seed.batchId,
+      workspaceId: seed.workspaceId,
+      runId: runOneBefore.id,
+      trafficSourceId: seed.sourceOneId,
+      status: "completed",
+      iosStatus: "completed",
+      androidStatus: "completed",
+    });
+
+    const activated = await getOperationalEvents(
+      seed.workspaceId,
+      "TRAFFIC_SOURCE_RUN_ACTIVATED",
+    );
+    assert.equal(activated.length, 1);
+  });
+
+  test("duplicate platform completion does not record terminal twice", async () => {
+    const seed = await seedRunMachine();
+    const [runOneBefore] = await getRuns(seed.batchId);
+
+    await completeFindWinners(seed, "ios", "success");
+    await completeFindWinners(seed, "android", "success");
+    await completeFindWinners(seed, "ios", "success");
+
+    const terminal = await getOperationalEvents(
+      seed.workspaceId,
+      "TRAFFIC_SOURCE_RUN_TERMINAL",
+      String(runOneBefore.id),
+    );
+    assert.equal(terminal.length, 1);
+  });
+
   test("both success completes the run and activates the next source", async () => {
     const seed = await seedRunMachine();
 
@@ -477,6 +593,47 @@ describe("batch traffic source run state machine", { concurrency: false }, () =>
 
     const createTasks = await getCreateTasks(seed.batchId, seed.sourceTwoId);
     assert.equal(createTasks.length, 2);
+  });
+
+  test("activateNextTrafficSourceRun records TRAFFIC_SOURCE_RUN_ACTIVATED once", async () => {
+    const seed = await seedRunMachine();
+    const action = advanceFromRunOneAction(seed);
+    const [, nextBefore] = await getRuns(seed.batchId);
+
+    await db.transaction(async (tx) => {
+      await activateNextTrafficSourceRun(tx, action, 1);
+    });
+
+    const activated = await getOperationalEvents(
+      seed.workspaceId,
+      "TRAFFIC_SOURCE_RUN_ACTIVATED",
+      String(nextBefore.id),
+    );
+    assert.equal(activated.length, 1);
+    assert.equal(activated[0]?.entityType, "traffic_source_run");
+    assert.equal(activated[0]?.source, "engine");
+    assertSafeOperationalPayload(
+      activated[0]?.payloadJson,
+      TRAFFIC_SOURCE_RUN_ACTIVATED_PAYLOAD_KEYS,
+    );
+    assert.deepEqual(activated[0]?.payloadJson, {
+      batchId: seed.batchId,
+      workspaceId: seed.workspaceId,
+      runId: nextBefore.id,
+      trafficSourceId: seed.sourceTwoId,
+      position: 2,
+    });
+
+    await db.transaction(async (tx) => {
+      await activateNextTrafficSourceRun(tx, action, 1);
+    });
+
+    const activatedAgain = await getOperationalEvents(
+      seed.workspaceId,
+      "TRAFFIC_SOURCE_RUN_ACTIVATED",
+      String(nextBefore.id),
+    );
+    assert.equal(activatedAgain.length, 1);
   });
 
   test("activateNextTrafficSourceRun twice only activates and seeds tasks once", async () => {
