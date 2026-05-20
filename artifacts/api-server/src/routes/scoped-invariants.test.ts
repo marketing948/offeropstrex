@@ -379,8 +379,8 @@ describe("route scoped invariants", { concurrency: false }, () => {
       "create_voluum_campaign_ios",
     ]);
     assert.deepEqual(tasks.map((task) => task.title).sort(), [
-      `Create Voluum campaign for ${batchTag} Android`,
-      `Create Voluum campaign for ${batchTag} iOS`,
+      `Create Voluum campaign for ${created.json.batchName} Android`,
+      `Create Voluum campaign for ${created.json.batchName} iOS`,
     ]);
     assert.ok(tasks.every((task) => task.trafficSourceId === secondSource.id));
   });

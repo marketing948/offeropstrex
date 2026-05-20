@@ -8,6 +8,7 @@
 
 import { and, eq, inArray } from "drizzle-orm";
 import { testingBatchesTable, todoTasksTable } from "@workspace/db";
+import { formatCreateVoluumTaskTitle } from "../../lib/campaign-display-name.ts";
 import type { Action, EventInput, Tx } from "../types.ts";
 
 type BatchCreatedEvent = Extract<EventInput, { type: "BatchCreated" }>;
@@ -55,8 +56,8 @@ export async function handleBatchCreated(
     .limit(1);
   if (existing.length > 0) return [];
 
-  const taskBatchTag = batch.batchTag ?? payload.tag;
-  const batchName = taskBatchTag || batch.batchName || `Batch #${batch.id}`;
+  const batchLabel =
+    batch.batchName?.trim() || batch.batchTag || payload.tag || `Batch #${batch.id}`;
   return [
     {
       type: "CreateTask",
@@ -64,7 +65,7 @@ export async function handleBatchCreated(
       data: {
         employeeId: batch.employeeId,
         relatedBatchId: batch.id,
-        title: `Create Voluum campaign for ${taskBatchTag} iOS`,
+        title: formatCreateVoluumTaskTitle(batchLabel, "ios"),
         taskType: "create_voluum_campaign_ios",
         priority: "high",
         trafficSourceId: batch.currentWorkspaceTrafficSourceId,
@@ -76,7 +77,7 @@ export async function handleBatchCreated(
       data: {
         employeeId: batch.employeeId,
         relatedBatchId: batch.id,
-        title: `Create Voluum campaign for ${taskBatchTag} Android`,
+        title: formatCreateVoluumTaskTitle(batchLabel, "android"),
         taskType: "create_voluum_campaign_android",
         priority: "high",
         trafficSourceId: batch.currentWorkspaceTrafficSourceId,
@@ -90,7 +91,7 @@ export async function handleBatchCreated(
         batchId: batch.id,
         type: "NEW_BATCH_CREATED",
         severity: "info",
-        message: `New batch "${batchName}" — create iOS + Android Voluum campaigns.`,
+        message: `New batch "${batchLabel}" — create iOS + Android Voluum campaigns.`,
       },
     },
   ];

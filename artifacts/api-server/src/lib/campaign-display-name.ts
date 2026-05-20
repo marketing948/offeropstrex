@@ -42,3 +42,14 @@ export function resolveCampaignDisplayName(params: {
 export function formatTakeCampaignLiveTitle(displayName: string): string {
   return `Take "${displayName}" live`;
 }
+
+export function formatCreateVoluumTaskTitle(
+  batchLabel: string,
+  platform: "ios" | "android",
+): string {
+  return `Create Voluum campaign for ${batchLabel} ${platformDisplaySuffix(platform)}`;
+}
+
+export function formatFindWinnersTitle(displayName: string): string {
+  return `Find winners for "${displayName}"`;
+}

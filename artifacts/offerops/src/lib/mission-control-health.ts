@@ -27,7 +27,7 @@ export const RECOMMENDATION_LABELS: Record<BatchHealthRecommendationCode, string
   NO_ACTIVE_RUN: "No active run",
   ACTIVE_RUN_MISSING_CREATE_TASKS: "Missing create tasks",
   WAITING_FOR_SIBLING_PLATFORM: "Waiting on platform",
-  TERMINAL_RUN_NOT_ADVANCED: "Run not advanced",
+  TERMINAL_RUN_NOT_ADVANCED: "Ready to advance source",
   RECENT_RECONCILIATION_VIOLATION: "Reconciliation issue",
   HEALTHY: "All clear",
 };
@@ -40,7 +40,7 @@ export const RECOMMENDATION_TOOLTIPS: Record<BatchHealthRecommendationCode, stri
   WAITING_FOR_SIBLING_PLATFORM:
     "One platform finished; the other is still in progress on this traffic source.",
   TERMINAL_RUN_NOT_ADVANCED:
-    "Both platforms are terminal but the batch has not advanced to the next traffic source.",
+    "Both platforms finished on this traffic source. Advance the batch to the next source when ready.",
   RECENT_RECONCILIATION_VIOLATION:
     "A recent reconciliation pass flagged this batch. Review before taking action.",
   HEALTHY: "No operational issues detected for this batch.",
@@ -192,15 +192,18 @@ export function buildMissionControlRows(
   return batchList.map((batch) => {
     const health = healthByBatchId.get(batch.id);
     const meta = healthMetaByBatchId.get(batch.id);
-    const healthState = health
-      ? deriveMissionControlHealthState(health.recommendations)
-      : "healthy";
+    const healthError = meta?.error ?? false;
+    const healthState = healthError
+      ? "warning"
+      : health
+        ? deriveMissionControlHealthState(health.recommendations)
+        : "healthy";
     return {
       batch,
       health,
       healthState,
       healthLoading: meta?.loading ?? false,
-      healthError: meta?.error ?? false,
+      healthError,
     };
   });
 }

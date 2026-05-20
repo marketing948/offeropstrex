@@ -53,11 +53,21 @@ export function platformLabel(task: TodoTask): string | null {
   const type = task.taskType as string;
   if (type === "create_voluum_campaign_ios") return "iOS";
   if (type === "create_voluum_campaign_android") return "Android";
+  const fromTitle = task.title.match(/\b(iOS|Android)\b/);
+  if (fromTitle) return fromTitle[1]!;
   const device = (task as { device?: string | null }).device;
-  if (device === "ios" || device === "android") {
-    return device.toUpperCase();
-  }
+  if (device === "ios") return "iOS";
+  if (device === "android") return "Android";
   return null;
+}
+
+/** Prefer clean batch/platform headline over verbose internal task titles. */
+export function workerTaskHeadline(task: TodoTask): string {
+  const platform = platformLabel(task);
+  if (/^Create Voluum campaign/i.test(task.title) && task.batchName?.trim() && platform) {
+    return `${task.batchName.trim()} ${platform}`;
+  }
+  return task.title;
 }
 
 export function taskInstructions(task: TodoTask): string {

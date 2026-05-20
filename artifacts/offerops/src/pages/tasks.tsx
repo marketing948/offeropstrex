@@ -31,6 +31,7 @@ import {
   matchesWorkerFilter,
   platformLabel,
   taskInstructions,
+  workerTaskHeadline,
   type WorkerTaskFilter,
 } from "@/lib/worker-tasks";
 import { Badge } from "@/components/ui/badge";
@@ -335,7 +336,9 @@ function WorkerTaskCard({
               )}
             </div>
 
-            <h2 className="mt-2 text-base font-semibold leading-snug text-foreground">{task.title}</h2>
+            <h2 className="mt-2 text-base font-semibold leading-snug text-foreground">
+              {workerTaskHeadline(task)}
+            </h2>
 
             <p className="mt-1.5 text-sm text-muted-foreground line-clamp-2">{instructions}</p>
 

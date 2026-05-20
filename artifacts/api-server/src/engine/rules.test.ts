@@ -183,9 +183,13 @@ describe("rules: BatchCreated (Pivot Phase 4)", () => {
       assert.equal(t.status, "TODO");
       assert.equal(t.trafficSourceId, workspaceTrafficSourceAId);
     }
+    const [batch] = await db
+      .select({ batchName: testingBatchesTable.batchName })
+      .from(testingBatchesTable)
+      .where(eq(testingBatchesTable.id, batchId));
     assert.deepEqual(tasks.map((task) => task.title).sort(), [
-      `Create Voluum campaign for ${batchTag} Android`,
-      `Create Voluum campaign for ${batchTag} iOS`,
+      `Create Voluum campaign for ${batch!.batchName} Android`,
+      `Create Voluum campaign for ${batch!.batchName} iOS`,
     ]);
 
     // Idempotency: re-emit with same dedupe key is a no-op.

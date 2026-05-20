@@ -326,6 +326,8 @@ export type EventInput =
         campaignId: number;
         employeeId: number;
         campaignName: string;
+        /** Pre-resolved operator-facing title (avoids legacy polluted campaignName). */
+        taskTitle?: string;
       };
     };
 

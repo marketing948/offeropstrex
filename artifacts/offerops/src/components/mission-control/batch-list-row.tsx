@@ -28,7 +28,7 @@ export const BatchListRow = memo(function BatchListRow({
   isRefreshing,
   onSelect,
 }: BatchListRowProps) {
-  const { batch, health, healthState, healthLoading } = row;
+  const { batch, health, healthState, healthLoading, healthError } = row;
   const showSkeleton = healthLoading && !health;
 
   if (showSkeleton) {
@@ -95,6 +95,11 @@ export const BatchListRow = memo(function BatchListRow({
             <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
               {health?.flags.openTaskCount ?? "—"} open
             </span>
+            {healthError && (
+              <span className="shrink-0 rounded-md bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-800 dark:bg-slate-800 dark:text-slate-200">
+                Health unavailable
+              </span>
+            )}
             {overdue && (
               <span className="shrink-0 rounded-md bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800 dark:bg-red-950 dark:text-red-200">
                 Overdue
@@ -102,7 +107,7 @@ export const BatchListRow = memo(function BatchListRow({
             )}
             {stuck && (
               <span className="shrink-0 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900 dark:bg-amber-950 dark:text-amber-100">
-                Stuck run
+                Ready to advance
               </span>
             )}
           </div>

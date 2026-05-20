@@ -13,6 +13,10 @@ import { and, eq, isNotNull, lte } from "drizzle-orm";
 import { db, campaignsTable, todoTasksTable, testingBatchesTable } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { emit } from "../engine/event-bus";
+import {
+  formatFindWinnersTitle,
+  resolveCampaignDisplayName,
+} from "../lib/campaign-display-name.ts";
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const POLL_INTERVAL_MS = 15 * 60 * 1000; // 15 min
@@ -57,11 +61,20 @@ async function tick(): Promise<void> {
       if (existing) continue;
 
       const [batch] = await db
-        .select({ employeeId: testingBatchesTable.employeeId })
+        .select({
+          employeeId: testingBatchesTable.employeeId,
+          batchName: testingBatchesTable.batchName,
+        })
         .from(testingBatchesTable)
         .where(eq(testingBatchesTable.id, c.batchId))
         .limit(1);
       if (!batch || batch.employeeId == null) continue;
+
+      const displayName = resolveCampaignDisplayName({
+        campaignName: c.campaignName,
+        batchName: batch.batchName,
+        platform: c.platform,
+      });
 
       // Emit a synthetic event so the engine creates the task through the
       // normal action plane. We piggy-back on the existing TrafficSourceAdvanced
@@ -94,7 +107,8 @@ async function tick(): Promise<void> {
             batchId: c.batchId,
             campaignId: c.id,
             employeeId: batch.employeeId,
-            campaignName: c.campaignName,
+            campaignName: displayName,
+            taskTitle: formatFindWinnersTitle(displayName),
           },
           dedupeKey: `find_winners:${c.id}`,
         });

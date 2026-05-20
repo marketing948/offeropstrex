@@ -293,7 +293,23 @@ export function BatchHealthDrawer({
           )}
 
           {isError && (
-            <p className="text-sm text-destructive">Could not load batch health.</p>
+            <div className="rounded-lg border border-dashed border-destructive/40 bg-destructive/5 px-4 py-6 text-center">
+              <p className="text-sm font-medium text-destructive">Could not load batch health</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Check your connection or permissions, then retry.
+              </p>
+              {onHealthRefetch && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="mt-3"
+                  onClick={() => void onHealthRefetch()}
+                >
+                  Retry health
+                </Button>
+              )}
+            </div>
           )}
 
           {!isLoading && health && batchId != null && (
@@ -301,6 +317,8 @@ export function BatchHealthDrawer({
               <DrawerSection title="Quick links" icon={Link2}>
                 <div className="flex flex-wrap gap-2">
                   <QuickLinkButton href={`/testing-batches/${batchId}`}>Batch detail</QuickLinkButton>
+                  <QuickLinkButton href="/live-campaigns">Live campaigns</QuickLinkButton>
+                  <QuickLinkButton href="/tasks">All tasks</QuickLinkButton>
                   {health.openTasks.length > 0 && (
                     <QuickLinkButton href={`/tasks?open=${health.openTasks[0]!.id}`}>
                       First open task

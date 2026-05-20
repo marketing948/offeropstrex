@@ -20,7 +20,7 @@ export function handleFindWinnersDue(event: Ev): Action[] {
         employeeId: payload.employeeId,
         relatedBatchId: payload.batchId,
         relatedCampaignId: payload.campaignId,
-        title: `Find winners for "${payload.campaignName}"`,
+        title: payload.taskTitle ?? `Find winners for "${payload.campaignName}"`,
         taskType: "find_winners",
         priority: "high",
       },
