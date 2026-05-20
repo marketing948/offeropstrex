@@ -6,7 +6,7 @@
 // per-Campaign performance numbers (populated by the find_winners
 // task completion flow).
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useAuth } from "@/lib/auth";
@@ -195,12 +195,14 @@ export default function LiveCampaigns() {
   const [networkFilter, setNetworkFilter] = useState<string>("all");
   const [batchFilter, setBatchFilter] = useState<string>("all");
   const [liveDateFilter, setLiveDateFilter] = useState("");
-  const [metricsDate, setMetricsDate] = useState(yesterdayIsoDate);
+  const [metricsDate, setMetricsDate] = useState(() => yesterdayIsoDate());
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
   const [metricDrafts, setMetricDrafts] = useState<Record<number, MetricDraft>>({});
   const [saveState, setSaveState] = useState<Record<number, "idle" | "saving" | "saved" | "error">>({});
   const pageSize = 50;
+
+  const lastMetricsDraftSyncKey = useRef("");
 
   useEffect(() => {
     setStatusFilter("live");
@@ -213,6 +215,7 @@ export default function LiveCampaigns() {
     setMetricsDate(yesterdayIsoDate());
     setSearch("");
     setOffset(0);
+    lastMetricsDraftSyncKey.current = "";
   }, [activeWorkspaceId]);
 
   useEffect(() => {
@@ -262,7 +265,8 @@ export default function LiveCampaigns() {
     enabled: !!activeWorkspaceId,
     queryFn: () => authedJson(`/api/live-campaigns?${params.toString()}`),
   });
-  const campaigns = response?.items ?? [];
+  const campaignItems = response?.items;
+  const campaigns = campaignItems ?? [];
   const pagination = response?.pagination;
   const errorMessage = error instanceof Error ? error.message : "Unable to load live campaigns.";
 
@@ -277,23 +281,46 @@ export default function LiveCampaigns() {
     queryFn: () => authedJson(`/api/campaign-daily-metrics?${metricsParams.toString()}`),
   });
 
-  const metricsByCampaignId = useMemo(() => {
-    const map = new Map<number, DailyMetricRow>();
-    for (const row of metricsResponse?.items ?? []) {
-      map.set(row.campaignId, row);
-    }
-    return map;
-  }, [metricsResponse?.items]);
+  const metricItems = metricsResponse?.items;
+
+  const campaignIdsKey = useMemo(
+    () => (campaignItems ?? []).map((c) => c.id).join(","),
+    [campaignItems],
+  );
+
+  const metricsSnapshotKey = useMemo(
+    () =>
+      JSON.stringify(
+        (metricItems ?? []).map((m) => ({
+          id: m.campaignId,
+          cost: m.cost,
+          revenue: m.revenue,
+          conversions: m.conversions,
+          visits: m.visits,
+        })),
+      ),
+    [metricItems],
+  );
+
+  const metricsDraftSyncKey = `${metricsDate}|${campaignIdsKey}|${metricsSnapshotKey}`;
 
   useEffect(() => {
+    if (lastMetricsDraftSyncKey.current === metricsDraftSyncKey) return;
+    lastMetricsDraftSyncKey.current = metricsDraftSyncKey;
+
+    const savedByCampaign = new Map<number, DailyMetricRow>();
+    for (const row of metricItems ?? []) {
+      savedByCampaign.set(row.campaignId, row);
+    }
+
     const next: Record<number, MetricDraft> = {};
-    for (const c of campaigns) {
-      const saved = metricsByCampaignId.get(c.id);
+    for (const c of campaignItems ?? []) {
+      const saved = savedByCampaign.get(c.id);
       next[c.id] = saved ? draftFromMetric(saved) : defaultDraft();
     }
     setMetricDrafts(next);
     setSaveState({});
-  }, [campaigns, metricsByCampaignId, metricsDate]);
+  }, [metricsDraftSyncKey, campaignItems, metricItems]);
 
   async function saveMetricsForCampaign(campaignId: number) {
     if (!activeWorkspaceId) return;
