@@ -15,6 +15,7 @@ import EmployeeDetail from "@/pages/employee-detail";
 import TestingBatches from "@/pages/testing-batches";
 import TestingBatchDetail from "@/pages/testing-batch-detail";
 import Tasks from "@/pages/tasks";
+import Activity from "@/pages/activity";
 import DailyReports from "@/pages/daily-reports";
 import WeeklyReports from "@/pages/weekly-reports";
 import Settings from "@/pages/settings";
@@ -107,6 +108,10 @@ function Router() {
 
       <Route path="/tasks">
         {() => <ProtectedRoute component={Tasks} />}
+      </Route>
+
+      <Route path="/activity">
+        {() => <ProtectedRoute component={Activity} />}
       </Route>
 
       <Route path="/reports">

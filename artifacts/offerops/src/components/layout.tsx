@@ -16,6 +16,7 @@ import {
   Layers,
   Radio,
   FileBarChart,
+  History,
   User,
   ChevronsUpDown,
   Building2,
@@ -294,6 +295,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { href: "/live-campaigns", label: "Live Campaigns", icon: Radio },
     { href: "/performance", label: "Performance", icon: TrendingUp },
     { href: "/tasks", label: "Tasks", icon: CheckSquare },
+    { href: "/activity", label: "Activity", icon: History },
     { href: "/reports", label: "Reports", icon: FileBarChart },
     { href: "/employees", label: "Team", icon: Users },
   ] : [
@@ -303,6 +305,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { href: "/live-campaigns", label: "Live Campaigns", icon: Radio },
     { href: "/performance", label: "Performance", icon: TrendingUp },
     { href: "/tasks", label: "My Tasks", icon: CheckSquare },
+    { href: "/activity", label: "Activity", icon: History },
     { href: "/reports", label: "Reports", icon: FileBarChart },
   ];
 
