@@ -24,6 +24,14 @@ import {
   recordTrafficSourceRunTerminalOperationalEvent,
 } from "../lib/campaignops-operational-events.ts";
 import { recordOperationalEvent } from "../lib/operational-events.ts";
+import { appendOperationalActivity } from "../lib/operational-activity-feed.ts";
+import {
+  campaignLinkedTitle,
+  campaignLiveTitle,
+  taskCompletedTitle,
+  winnersAddedTitle,
+} from "../lib/operational-activity-titles.ts";
+import { resolveCampaignDisplayName } from "../lib/campaign-display-name.ts";
 import { insertCampaignWinnersTx } from "../lib/campaign-winners.ts";
 import { parseVoluumOfferIdsFromStrings } from "@workspace/voluum-offer-ids";
 
@@ -937,6 +945,41 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
                 detectedByEmployeeId: action.completedByEmployeeId,
                 notes: note,
               });
+              const [campRow] = await tx
+                .select({
+                  campaignName: campaignsTable.campaignName,
+                  batchId: campaignsTable.batchId,
+                })
+                .from(campaignsTable)
+                .where(
+                  and(
+                    eq(campaignsTable.id, campaignId),
+                    eq(campaignsTable.workspaceId, action.workspaceId),
+                  ),
+                )
+                .limit(1);
+              const [batchRow] =
+                campRow?.batchId != null
+                  ? await tx
+                      .select({ batchName: testingBatchesTable.batchName })
+                      .from(testingBatchesTable)
+                      .where(eq(testingBatchesTable.id, campRow.batchId))
+                      .limit(1)
+                  : [undefined];
+              const displayName = resolveCampaignDisplayName({
+                campaignName: campRow?.campaignName,
+                batchName: batchRow?.batchName,
+                platform: camp.platform,
+              });
+              await appendOperationalActivity(tx, {
+                workspaceId: action.workspaceId,
+                eventType: "winner_added",
+                entityType: "campaign",
+                entityId: campaignId,
+                actorEmployeeId: action.completedByEmployeeId,
+                title: winnersAddedTitle(displayName, ids.length),
+                metadata: { offerIds: ids, source: "target_reached_review" },
+              });
             }
             if (camp.status === "ready_for_winner_review") {
               await tx
@@ -1060,6 +1103,87 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
             completionKind: action.completion.kind,
           },
         }, tx);
+
+        await appendOperationalActivity(tx, {
+          workspaceId: action.workspaceId,
+          eventType: "task_completed",
+          entityType: "task",
+          entityId: updated.id,
+          actorEmployeeId: action.completedByEmployeeId,
+          title: taskCompletedTitle(updated.title),
+          metadata: {
+            taskType: updated.taskType,
+            completionKind: action.completion.kind,
+          },
+        });
+
+        if (linkedCampaign !== null) {
+          let campaignName = "Campaign";
+          if (action.completion.kind === "create_voluum_campaign") {
+            campaignName = action.completion.campaignName;
+          }
+          const [batchRow] = await tx
+            .select({ batchName: testingBatchesTable.batchName })
+            .from(testingBatchesTable)
+            .where(eq(testingBatchesTable.id, linkedCampaign.batchId))
+            .limit(1);
+          await appendOperationalActivity(tx, {
+            workspaceId: action.workspaceId,
+            eventType: "campaign_linked",
+            entityType: "campaign",
+            entityId: linkedCampaign.campaignId,
+            actorEmployeeId: action.completedByEmployeeId,
+            title: campaignLinkedTitle({
+              campaignName,
+              platform: linkedCampaign.platform,
+              batchName: batchRow?.batchName,
+            }),
+            metadata: {
+              batchId: linkedCampaign.batchId,
+              trafficSourceId: linkedCampaign.trafficSourceId,
+              taskId: updated.id,
+            },
+          });
+        }
+
+        if (takeCampaignLive !== null) {
+          const [liveCamp] = await tx
+            .select({
+              campaignName: campaignsTable.campaignName,
+              batchId: campaignsTable.batchId,
+              platform: campaignsTable.platform,
+            })
+            .from(campaignsTable)
+            .where(
+              and(
+                eq(campaignsTable.id, takeCampaignLive.campaignId),
+                eq(campaignsTable.workspaceId, action.workspaceId),
+              ),
+            )
+            .limit(1);
+          const [batchRow] =
+            liveCamp?.batchId != null
+              ? await tx
+                  .select({ batchName: testingBatchesTable.batchName })
+                  .from(testingBatchesTable)
+                  .where(eq(testingBatchesTable.id, liveCamp.batchId))
+                  .limit(1)
+              : [undefined];
+          const displayName = resolveCampaignDisplayName({
+            campaignName: liveCamp?.campaignName,
+            batchName: batchRow?.batchName,
+            platform: liveCamp?.platform ?? "ios",
+          });
+          await appendOperationalActivity(tx, {
+            workspaceId: action.workspaceId,
+            eventType: "campaign_live",
+            entityType: "campaign",
+            entityId: takeCampaignLive.campaignId,
+            actorEmployeeId: action.completedByEmployeeId,
+            title: campaignLiveTitle(displayName),
+            metadata: { taskId: updated.id },
+          });
+        }
       }
       return;
     }

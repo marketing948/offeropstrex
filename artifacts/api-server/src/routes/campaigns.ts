@@ -31,6 +31,9 @@ import {
 import { applyAction } from "../engine/executor.ts";
 import { emit } from "../engine/event-bus";
 import { recordOperationalEvent } from "../lib/operational-events.ts";
+import { appendOperationalActivity } from "../lib/operational-activity-feed.ts";
+import { campaignCreatedTitle } from "../lib/operational-activity-titles.ts";
+import { resolveCampaignDisplayName } from "../lib/campaign-display-name.ts";
 import {
   assertProductionLiveCampaignPrerequisites,
   insertProductionLiveCampaign,
@@ -707,6 +710,21 @@ router.post("/production-live-campaigns", async (req, res): Promise<void> => {
         voluumCampaignId: row.voluumCampaignId,
         parentCampaignId: resolved.parentCampaignId,
       },
+    });
+
+    void appendOperationalActivity(db, {
+      workspaceId: body.workspaceId,
+      eventType: "campaign_created",
+      entityType: "campaign",
+      entityId: row.id,
+      actorEmployeeId: admin.id,
+      title: campaignCreatedTitle(
+        resolveCampaignDisplayName({
+          campaignName: row.campaignName,
+          platform: row.platform,
+        }),
+      ),
+      metadata: { campaignPurpose: resolved.campaignPurpose },
     });
 
     res.status(201).json(serialize(row));

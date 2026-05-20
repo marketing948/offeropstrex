@@ -26,6 +26,7 @@ import campaignsRouter from "./campaigns";
 import batchResultsRouter from "./batch-results";
 import workerAffiliateNetworksRouter from "./worker-affiliate-networks";
 import operationalEventsRouter from "./operational-events";
+import operationalActivityRouter from "./operational-activity";
 import campaignWinnersReportRouter from "./campaign-winners-report";
 import campaignDailyMetricsRouter from "./campaign-daily-metrics";
 
@@ -93,6 +94,7 @@ router.use(campaignsRouter);
 router.use(batchResultsRouter);
 router.use(workerAffiliateNetworksRouter);
 router.use(operationalEventsRouter);
+router.use(operationalActivityRouter);
 router.use(campaignWinnersReportRouter);
 router.use(campaignDailyMetricsRouter);
 

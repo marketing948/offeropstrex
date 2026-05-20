@@ -12,6 +12,9 @@ import {
   appendLiveCampaignVisibilityConditions,
   testingBatchJoin,
 } from "../lib/live-campaign-scope.ts";
+import { appendOperationalActivity } from "../lib/operational-activity-feed.ts";
+import { manualMetricsSubmittedTitle } from "../lib/operational-activity-titles.ts";
+import { resolveCampaignDisplayName } from "../lib/campaign-display-name.ts";
 
 const router: IRouter = Router();
 
@@ -178,7 +181,12 @@ router.put("/campaign-daily-metrics", async (req, res): Promise<void> => {
   }
 
   const [campaign] = await db
-    .select({ workspaceId: campaignsTable.workspaceId })
+    .select({
+      workspaceId: campaignsTable.workspaceId,
+      campaignName: campaignsTable.campaignName,
+      platform: campaignsTable.platform,
+      batchId: campaignsTable.batchId,
+    })
     .from(campaignsTable)
     .where(and(eq(campaignsTable.id, campaignId), eq(campaignsTable.workspaceId, workspaceId)))
     .limit(1);
@@ -215,6 +223,29 @@ router.put("/campaign-daily-metrics", async (req, res): Promise<void> => {
       },
     })
     .returning();
+
+  const [batchRow] =
+    campaign.batchId != null
+      ? await db
+          .select({ batchName: testingBatchesTable.batchName })
+          .from(testingBatchesTable)
+          .where(eq(testingBatchesTable.id, campaign.batchId))
+          .limit(1)
+      : [undefined];
+  const displayName = resolveCampaignDisplayName({
+    campaignName: campaign.campaignName,
+    batchName: batchRow?.batchName,
+    platform: campaign.platform,
+  });
+  void appendOperationalActivity(db, {
+    workspaceId,
+    eventType: "manual_metrics_submitted",
+    entityType: "campaign",
+    entityId: campaignId,
+    actorEmployeeId: access.employee.id,
+    title: manualMetricsSubmittedTitle(displayName, date),
+    metadata: { date, cost, revenue, conversions, visits },
+  });
 
   res.json(serializeMetric(row));
 });

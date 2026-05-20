@@ -10,6 +10,11 @@ import {
 import { applyAction } from "../engine/executor.ts";
 import { checkWorkspaceAccess } from "./workspace-access.ts";
 import { recordOperationalEvent } from "./operational-events.ts";
+import { appendOperationalActivity } from "./operational-activity-feed.ts";
+import {
+  campaignClosedTitle,
+  winnersAddedTitle,
+} from "./operational-activity-titles.ts";
 import { resolveCampaignDisplayName } from "./campaign-display-name.ts";
 import { parseVoluumOfferIdsFromStrings } from "@workspace/voluum-offer-ids";
 import { insertCampaignWinnersTx } from "./campaign-winners.ts";
@@ -273,6 +278,20 @@ export async function manualCloseCampaign(
           detectedByEmployeeId: actorId,
           notes: input.note?.trim() || null,
         });
+        const winnerDisplayName = resolveCampaignDisplayName({
+          campaignName: row.campaignName,
+          batchName: batch?.batchName,
+          platform: row.platform,
+        });
+        await appendOperationalActivity(tx, {
+          workspaceId: row.workspaceId,
+          eventType: "winner_added",
+          entityType: "campaign",
+          entityId: row.id,
+          actorEmployeeId: actorId,
+          title: winnersAddedTitle(winnerDisplayName, winnerVoluumIds.length),
+          metadata: { offerIds: winnerVoluumIds, source: "manual_close" },
+        });
       }
 
       const displayName = resolveCampaignDisplayName({
@@ -340,6 +359,31 @@ export async function manualCloseCampaign(
         followUpTaskIds.push(createdFollowUp.id);
       }
     }
+
+    let closeBatchName: string | undefined;
+    if (row.batchId != null) {
+      const [closeBatch] = await tx
+        .select({ batchName: testingBatchesTable.batchName })
+        .from(testingBatchesTable)
+        .where(eq(testingBatchesTable.id, row.batchId))
+        .limit(1);
+      closeBatchName = closeBatch?.batchName;
+    }
+    const closedDisplayName = resolveCampaignDisplayName({
+      campaignName: row.campaignName,
+      batchName: closeBatchName,
+      platform: row.platform,
+    });
+    await appendOperationalActivity(tx, {
+      workspaceId: row.workspaceId,
+      eventType: "campaign_closed",
+      entityType: "campaign",
+      entityId: row.id,
+      actorEmployeeId: actorId,
+      title: campaignClosedTitle(closedDisplayName, input.reason),
+      description: input.note?.trim() || null,
+      metadata: { reason: input.reason },
+    });
 
     return row;
   });
