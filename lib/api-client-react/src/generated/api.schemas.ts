@@ -702,6 +702,11 @@ export interface TodoTask {
   /** @nullable */
   device?: string | null;
   createdAt: string;
+  /**
+   * ISO 8601 timestamp when the task was marked DONE
+   * @nullable
+   */
+  completedAt?: string | null;
   /** @nullable */
   employeeName?: string | null;
   /** @nullable */
@@ -1614,10 +1619,24 @@ export type ListPerformanceParams = {
 export type ListTodoTasksParams = {
   employee_id?: number;
   status?: string;
+  /**
+ * Task completion scope. active = open tasks (TODO, IN_PROGRESS, BLOCKED); completed = DONE only; all = no completion filter. Omitted = all (backward compatible).
+
+ */
+  status_filter?: ListTodoTasksStatusFilter;
   priority?: string;
   task_type?: ListTodoTasksTaskType;
   workspace_id?: number;
 };
+
+export type ListTodoTasksStatusFilter =
+  (typeof ListTodoTasksStatusFilter)[keyof typeof ListTodoTasksStatusFilter];
+
+export const ListTodoTasksStatusFilter = {
+  active: "active",
+  completed: "completed",
+  all: "all",
+} as const;
 
 export type ListTodoTasksTaskType =
   (typeof ListTodoTasksTaskType)[keyof typeof ListTodoTasksTaskType];

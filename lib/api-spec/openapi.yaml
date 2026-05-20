@@ -1377,6 +1377,14 @@ paths:
           in: query
           schema:
             type: string
+        - name: status_filter
+          in: query
+          description: >
+            Task completion scope. active = open tasks (TODO, IN_PROGRESS, BLOCKED);
+            completed = DONE only; all = no completion filter. Omitted = all (backward compatible).
+          schema:
+            type: string
+            enum: [active, completed, all]
         - name: priority
           in: query
           schema:
@@ -3173,6 +3181,9 @@ components:
           type: ["string", "null"]
         createdAt:
           type: string
+        completedAt:
+          type: ["string", "null"]
+          description: ISO 8601 timestamp when the task was marked DONE
         employeeName:
           type: ["string", "null"]
         batchName:

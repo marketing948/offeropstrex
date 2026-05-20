@@ -12,10 +12,17 @@ export const CAMPAIGN_OPS_TASK_TYPES = new Set([
 
 export type WorkerTaskFilter = "all" | "campaignops" | "manual" | "overdue" | "blocked";
 
+/** Server query param for GET /todo-tasks completion scope. */
+export type WorkerTaskStatusFilter = "active" | "completed" | "all";
+
 const OPEN_STATUSES = new Set(["TODO", "IN_PROGRESS", "BLOCKED"]);
 
 export function isOpenWorkerTask(task: TodoTask): boolean {
   return OPEN_STATUSES.has(task.status);
+}
+
+export function isCompletedWorkerTask(task: TodoTask): boolean {
+  return task.status === "DONE";
 }
 
 export function isCampaignOpsTask(task: TodoTask): boolean {
@@ -115,4 +122,18 @@ export function compareWorkerTasks(a: TodoTask, b: TodoTask): number {
   if (pa !== pb) return pa - pb;
 
   return a.title.localeCompare(b.title);
+}
+
+/** Mixed open + completed lists: open tasks first, then completed newest-first. */
+export function compareWorkerTasksForList(a: TodoTask, b: TodoTask): number {
+  const doneA = a.status === "DONE" ? 1 : 0;
+  const doneB = b.status === "DONE" ? 1 : 0;
+  if (doneA !== doneB) return doneA - doneB;
+  if (a.status === "DONE" && b.status === "DONE") {
+    const ca = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+    const cb = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+    if (ca !== cb) return cb - ca;
+    return b.id - a.id;
+  }
+  return compareWorkerTasks(a, b);
 }

@@ -1537,6 +1537,12 @@ export const DeletePerformanceResponse = zod.object({
 export const ListTodoTasksQueryParams = zod.object({
   employee_id: zod.coerce.number().optional(),
   status: zod.coerce.string().optional(),
+  status_filter: zod
+    .enum(["active", "completed", "all"])
+    .optional()
+    .describe(
+      "Task completion scope. active = open tasks (TODO, IN_PROGRESS, BLOCKED); completed = DONE only; all = no completion filter. Omitted = all (backward compatible).\n",
+    ),
   priority: zod.coerce.string().optional(),
   task_type: zod
     .enum([
@@ -1586,6 +1592,10 @@ export const ListTodoTasksResponseItem = zod.object({
   trafficSourceName: zod.string().nullish(),
   device: zod.string().nullish(),
   createdAt: zod.string(),
+  completedAt: zod
+    .string()
+    .nullish()
+    .describe("ISO 8601 timestamp when the task was marked DONE"),
   employeeName: zod.string().nullish(),
   batchName: zod.string().nullish(),
 });
@@ -1681,6 +1691,10 @@ export const GetTodoTaskResponse = zod.object({
   trafficSourceName: zod.string().nullish(),
   device: zod.string().nullish(),
   createdAt: zod.string(),
+  completedAt: zod
+    .string()
+    .nullish()
+    .describe("ISO 8601 timestamp when the task was marked DONE"),
   employeeName: zod.string().nullish(),
   batchName: zod.string().nullish(),
 });
@@ -1752,6 +1766,10 @@ export const UpdateTodoTaskResponse = zod.object({
   trafficSourceName: zod.string().nullish(),
   device: zod.string().nullish(),
   createdAt: zod.string(),
+  completedAt: zod
+    .string()
+    .nullish()
+    .describe("ISO 8601 timestamp when the task was marked DONE"),
   employeeName: zod.string().nullish(),
   batchName: zod.string().nullish(),
 });

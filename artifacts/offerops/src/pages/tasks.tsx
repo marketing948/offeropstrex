@@ -22,17 +22,18 @@ import { useQueryClient } from "@tanstack/react-query";
 import { TaskDetailDrawer } from "@/components/task-detail-drawer";
 import { getTaskTypeVisual } from "@/lib/task-type-visuals";
 import {
-  compareWorkerTasks,
+  compareWorkerTasksForList,
   formatDueDate,
   isCampaignOpsTask,
+  isCompletedWorkerTask,
   isManualTask,
-  isOpenWorkerTask,
   isOverdueTask,
   matchesWorkerFilter,
   platformLabel,
   taskInstructions,
   workerTaskHeadline,
   type WorkerTaskFilter,
+  type WorkerTaskStatusFilter,
 } from "@/lib/worker-tasks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -47,8 +48,14 @@ const STATUS_LABEL: Record<TodoTaskStatus, string> = {
   DONE: "Done",
 };
 
-const FILTER_OPTIONS: { key: WorkerTaskFilter; label: string }[] = [
+const STATUS_FILTER_OPTIONS: { key: WorkerTaskStatusFilter; label: string }[] = [
+  { key: "active", label: "Active / Open" },
+  { key: "completed", label: "Completed" },
   { key: "all", label: "All" },
+];
+
+const CATEGORY_FILTER_OPTIONS: { key: WorkerTaskFilter; label: string }[] = [
+  { key: "all", label: "All types" },
   { key: "campaignops", label: "CampaignOps" },
   { key: "manual", label: "Manual" },
   { key: "overdue", label: "Overdue" },
@@ -78,8 +85,11 @@ export default function Tasks() {
   const isAdmin = currentEmployee?.role === "admin";
   const [createManualOpen, setCreateManualOpen] = useState(false);
 
+  const [statusFilter, setStatusFilter] = useState<WorkerTaskStatusFilter>("active");
+
   const taskParams = {
     workspace_id: activeWorkspaceId ?? 0,
+    status_filter: statusFilter,
     ...(employeeId ? { employee_id: employeeId } : {}),
   };
 
@@ -104,7 +114,7 @@ export default function Tasks() {
 
   const updateTask = useUpdateTodoTask();
   const [selectedTask, setSelectedTask] = useState<TodoTask | null>(null);
-  const [filter, setFilter] = useState<WorkerTaskFilter>("all");
+  const [categoryFilter, setCategoryFilter] = useState<WorkerTaskFilter>("all");
   const [deepLinkTaskId] = useState(() => parseOpenTaskIdFromUrl());
 
   const { data: deepLinkedTask } = useGetTodoTask(deepLinkTaskId ?? 0, {
@@ -118,32 +128,38 @@ export default function Tasks() {
     if (deepLinkedTask) setSelectedTask(deepLinkedTask);
   }, [deepLinkedTask]);
 
-  const openTasks = useMemo(
-    () => (tasks ?? []).filter(isOpenWorkerTask),
-    [tasks],
-  );
+  const listedTasks = useMemo(() => tasks ?? [], [tasks]);
 
   const filtered = useMemo(() => {
-    return openTasks
-      .filter((t) => matchesWorkerFilter(t, filter))
-      .sort(compareWorkerTasks);
-  }, [openTasks, filter]);
+    return listedTasks
+      .filter((t) => matchesWorkerFilter(t, categoryFilter))
+      .sort(compareWorkerTasksForList);
+  }, [listedTasks, categoryFilter]);
+
+  const openCount = useMemo(
+    () => listedTasks.filter((t) => t.status !== "DONE").length,
+    [listedTasks],
+  );
 
   const counts = useMemo(() => {
     const c: Record<WorkerTaskFilter, number> = {
-      all: openTasks.length,
-      campaignops: openTasks.filter(isCampaignOpsTask).length,
-      manual: openTasks.filter(isManualTask).length,
-      overdue: openTasks.filter((t) => isOverdueTask(t)).length,
-      blocked: openTasks.filter((t) => t.status === "BLOCKED").length,
+      all: listedTasks.length,
+      campaignops: listedTasks.filter(isCampaignOpsTask).length,
+      manual: listedTasks.filter(isManualTask).length,
+      overdue: listedTasks.filter((t) => isOverdueTask(t)).length,
+      blocked: listedTasks.filter((t) => t.status === "BLOCKED").length,
     };
     return c;
-  }, [openTasks]);
+  }, [listedTasks]);
 
   async function invalidateTasks() {
     if (!activeWorkspaceId) return;
     await queryClient.invalidateQueries({
-      queryKey: getListTodoTasksQueryKey({ workspace_id: activeWorkspaceId, employee_id: employeeId }),
+      queryKey: getListTodoTasksQueryKey({
+        workspace_id: activeWorkspaceId,
+        status_filter: statusFilter,
+        employee_id: employeeId,
+      }),
     });
   }
 
@@ -164,10 +180,18 @@ export default function Tasks() {
         <p className="mt-1 text-sm text-muted-foreground">{todayHeading()}</p>
         {!isLoading && (
           <p className="mt-2 text-sm font-medium text-foreground">
-            {openTasks.length === 0
-              ? "Nothing assigned right now."
-              : `${openTasks.length} open task${openTasks.length === 1 ? "" : "s"}`}
-            {counts.overdue > 0 && (
+            {statusFilter === "completed"
+              ? filtered.length === 0
+                ? "No completed tasks in this view."
+                : `${filtered.length} completed task${filtered.length === 1 ? "" : "s"}`
+              : statusFilter === "all"
+                ? filtered.length === 0
+                  ? "No tasks in this view."
+                  : `${openCount} open · ${filtered.length - openCount} completed`
+                : openCount === 0
+                  ? "Nothing assigned right now."
+                  : `${openCount} open task${openCount === 1 ? "" : "s"}`}
+            {statusFilter === "active" && counts.overdue > 0 && (
               <span className="ml-2 text-red-600">· {counts.overdue} overdue</span>
             )}
           </p>
@@ -190,16 +214,28 @@ export default function Tasks() {
         <CreateManualTaskDialog open={createManualOpen} onOpenChange={setCreateManualOpen} />
       )}
 
-      <div className="flex flex-wrap gap-2">
-        {FILTER_OPTIONS.map(({ key, label }) => (
-          <FilterChip
-            key={key}
-            label={label}
-            count={counts[key]}
-            active={filter === key}
-            onClick={() => setFilter(key)}
-          />
-        ))}
+      <div className="space-y-3">
+        <div className="flex flex-wrap gap-2">
+          {STATUS_FILTER_OPTIONS.map(({ key, label }) => (
+            <FilterChip
+              key={key}
+              label={label}
+              active={statusFilter === key}
+              onClick={() => setStatusFilter(key)}
+            />
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {CATEGORY_FILTER_OPTIONS.map(({ key, label }) => (
+            <FilterChip
+              key={key}
+              label={label}
+              count={counts[key]}
+              active={categoryFilter === key}
+              onClick={() => setCategoryFilter(key)}
+            />
+          ))}
+        </div>
       </div>
 
       {isLoading ? (
@@ -209,13 +245,14 @@ export default function Tasks() {
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <EmptyState filter={filter} />
+        <EmptyState statusFilter={statusFilter} categoryFilter={categoryFilter} />
       ) : (
         <div className="space-y-3">
           {filtered.map((task) => (
             <WorkerTaskCard
               key={task.id}
               task={task}
+              readOnly={isCompletedWorkerTask(task)}
               trafficSourceNames={trafficSourceNames}
               onOpen={() => setSelectedTask(task)}
               onStart={() => markInProgress(task)}
@@ -241,7 +278,7 @@ function FilterChip({
   onClick,
 }: {
   label: string;
-  count: number;
+  count?: number;
   active: boolean;
   onClick: () => void;
 }) {
@@ -254,7 +291,7 @@ function FilterChip({
       }`}
     >
       <span>{label}</span>
-      {count > 0 && (
+      {count != null && count > 0 && (
         <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-muted-foreground">
           {count}
         </span>
@@ -265,12 +302,14 @@ function FilterChip({
 
 function WorkerTaskCard({
   task,
+  readOnly,
   trafficSourceNames,
   onOpen,
   onStart,
   starting,
 }: {
   task: TodoTask;
+  readOnly: boolean;
   trafficSourceNames: Map<number, string>;
   onOpen: () => void;
   onStart: () => void;
@@ -286,7 +325,7 @@ function WorkerTaskCard({
     task.trafficSourceName ??
     (trafficSourceId != null ? trafficSourceNames.get(trafficSourceId) : null);
   const instructions = taskInstructions(task);
-  const canStart = task.status === "TODO";
+  const canStart = !readOnly && task.status === "TODO";
   const isBlocked = task.status === "BLOCKED";
   const blockedReason = (task as { blockedReason?: string | null }).blockedReason;
 
@@ -398,8 +437,8 @@ function WorkerTaskCard({
               Start
             </Button>
           )}
-          <Button type="button" size="sm" className="gap-1.5" onClick={onOpen}>
-            {task.status === "IN_PROGRESS" ? "Continue" : "Open"}
+          <Button type="button" size="sm" variant={readOnly ? "outline" : "default"} className="gap-1.5" onClick={onOpen}>
+            {readOnly ? "View" : task.status === "IN_PROGRESS" ? "Continue" : "Open"}
             <ChevronRight className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -410,11 +449,13 @@ function WorkerTaskCard({
 
 function StatusPill({ status }: { status: TodoTaskStatus }) {
   const styles =
-    status === "IN_PROGRESS"
-      ? "bg-blue-50 text-blue-800 border-blue-200"
-      : status === "BLOCKED"
-        ? "bg-amber-50 text-amber-900 border-amber-200"
-        : "bg-slate-50 text-slate-700 border-slate-200";
+    status === "DONE"
+      ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+      : status === "IN_PROGRESS"
+        ? "bg-blue-50 text-blue-800 border-blue-200"
+        : status === "BLOCKED"
+          ? "bg-amber-50 text-amber-900 border-amber-200"
+          : "bg-slate-50 text-slate-700 border-slate-200";
   return (
     <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${styles}`}>
       {STATUS_LABEL[status]}
@@ -422,19 +463,37 @@ function StatusPill({ status }: { status: TodoTaskStatus }) {
   );
 }
 
-function EmptyState({ filter }: { filter: WorkerTaskFilter }) {
-  const messages: Record<WorkerTaskFilter, string> = {
-    all: "You have no open tasks assigned. Check back later or ask your lead for work.",
-    campaignops: "No open CampaignOps tasks right now.",
-    manual: "No manual reminders assigned.",
+function EmptyState({
+  statusFilter,
+  categoryFilter,
+}: {
+  statusFilter: WorkerTaskStatusFilter;
+  categoryFilter: WorkerTaskFilter;
+}) {
+  const categoryMessages: Record<WorkerTaskFilter, string> = {
+    all: "Try another filter or check back later.",
+    campaignops: "No CampaignOps tasks match this filter.",
+    manual: "No manual reminders match this filter.",
     overdue: "Nothing overdue — nice work.",
     blocked: "No blocked tasks.",
   };
+  const headline =
+    statusFilter === "completed"
+      ? "No completed tasks"
+      : statusFilter === "all"
+        ? "No tasks"
+        : "All clear";
+  const body =
+    statusFilter === "completed"
+      ? "Completed work will show up here after you finish tasks."
+      : statusFilter === "active" && categoryFilter === "all"
+        ? "You have no open tasks assigned. Check back later or ask your lead for work."
+        : categoryMessages[categoryFilter];
   return (
     <div className="rounded-xl border border-dashed border-border bg-muted/20 px-6 py-14 text-center">
       <CheckSquare className="mx-auto mb-3 h-10 w-10 text-muted-foreground/35" />
-      <p className="text-sm font-medium text-foreground">All clear</p>
-      <p className="mt-1 text-sm text-muted-foreground">{messages[filter]}</p>
+      <p className="text-sm font-medium text-foreground">{headline}</p>
+      <p className="mt-1 text-sm text-muted-foreground">{body}</p>
     </div>
   );
 }

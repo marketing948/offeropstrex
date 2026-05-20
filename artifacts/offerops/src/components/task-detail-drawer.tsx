@@ -123,6 +123,8 @@ export function TaskDetailDrawer({
 
   if (!task) return null;
 
+  const isCompleted = task.status === "DONE";
+
   const platform = platformFromTaskType(task.taskType);
   const visual = getTaskTypeVisual(task.taskType as string);
   const VisualIcon = visual.icon;
@@ -159,7 +161,9 @@ export function TaskDetailDrawer({
           </div>
         </SheetHeader>
         <div className="px-6 pb-6">
-          {(task.taskType as string) === "create_voluum_campaign_ios" || (task.taskType as string) === "create_voluum_campaign_android" ? (
+          {isCompleted ? (
+            <CompletedTaskReadOnly task={task} onClose={onClose} />
+          ) : (task.taskType as string) === "create_voluum_campaign_ios" || (task.taskType as string) === "create_voluum_campaign_android" ? (
             <CreateVoluumCampaignForm task={task} platform={(task.taskType as string) === "create_voluum_campaign_ios" ? "ios" : "android"} onCompleted={() => { invalidate(); onClose(); }} />
           ) : (task.taskType as string) === "take_campaign_live" ? (
             <TakeCampaignLiveForm task={task} onCompleted={() => { invalidate(); onClose(); }} />
@@ -912,6 +916,40 @@ function WinnerHandoffPanel({
         ) : (
           <p className="text-sm text-muted-foreground">No winner IDs recorded at close — confirm IDs in Voluum.</p>
         )}
+      </div>
+    </div>
+  );
+}
+
+function CompletedTaskReadOnly({ task, onClose }: { task: TodoTask; onClose: () => void }) {
+  const completedLabel = task.completedAt
+    ? new Date(task.completedAt).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
+
+  return (
+    <div className="space-y-4">
+      <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-100">
+        This task is completed. Details are read-only.
+      </p>
+      {task.description?.trim() && (
+        <p className="text-sm text-muted-foreground whitespace-pre-wrap">{task.description.trim()}</p>
+      )}
+      {completedLabel && (
+        <p className="text-xs text-muted-foreground">
+          <span className="font-medium text-foreground/80">Completed: </span>
+          {completedLabel}
+        </p>
+      )}
+      <div className="flex justify-end pt-2">
+        <Button type="button" variant="outline" size="sm" onClick={onClose}>
+          Close
+        </Button>
       </div>
     </div>
   );

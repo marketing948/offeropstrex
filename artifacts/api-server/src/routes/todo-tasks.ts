@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, ne } from "drizzle-orm";
 import { db, todoTasksTable, employeesTable, testingBatchesTable, employeeWorkspaceAssignmentsTable } from "@workspace/db";
 import { z } from "zod/v4";
 import {
@@ -22,6 +22,16 @@ import { getEmployeeFromToken } from "./auth";
 import { composeCampaignDisplayName } from "../lib/campaign-display-name.ts";
 
 const router: IRouter = Router();
+
+const TODO_TASK_STATUS_FILTER = ["active", "completed", "all"] as const;
+type TodoTaskStatusFilter = (typeof TODO_TASK_STATUS_FILTER)[number];
+
+function parseTodoTaskStatusFilter(raw: unknown): TodoTaskStatusFilter | null | undefined {
+  if (raw == null || raw === "") return undefined;
+  const value = String(raw);
+  if (!TODO_TASK_STATUS_FILTER.includes(value as TodoTaskStatusFilter)) return null;
+  return value as TodoTaskStatusFilter;
+}
 
 const CAMPAIGN_OPS_TASK_TYPES = new Set<string>([
   "create_voluum_campaign_ios",
@@ -84,6 +94,14 @@ router.get("/todo-tasks", async (req, res): Promise<void> => {
     return;
   }
 
+  const statusFilter = parseTodoTaskStatusFilter(req.query["status_filter"]);
+  if (statusFilter === null) {
+    res.status(400).json({
+      error: `status_filter must be one of: ${TODO_TASK_STATUS_FILTER.join(", ")}`,
+    });
+    return;
+  }
+
   const conditions = [eq(todoTasksTable.workspaceId, workspaceId)];
   if (params.data.employee_id) {
     conditions.push(eq(todoTasksTable.employeeId, params.data.employee_id));
@@ -91,6 +109,10 @@ router.get("/todo-tasks", async (req, res): Promise<void> => {
   type TaskRow = typeof todoTasksTable.$inferSelect;
   if (params.data.status) {
     conditions.push(eq(todoTasksTable.status, params.data.status as TaskRow["status"]));
+  } else if (statusFilter === "active") {
+    conditions.push(ne(todoTasksTable.status, "DONE"));
+  } else if (statusFilter === "completed") {
+    conditions.push(eq(todoTasksTable.status, "DONE"));
   }
   if (params.data.priority) {
     conditions.push(eq(todoTasksTable.priority, params.data.priority as TaskRow["priority"]));
