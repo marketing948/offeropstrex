@@ -27,4 +27,5 @@ export * from "./campaigns";
 export * from "./batch-results";
 export * from "./batch-traffic-source-runs";
 export * from "./campaign-winners";
+export * from "./campaign-daily-metrics";
 export * from "./worker-affiliate-networks";
