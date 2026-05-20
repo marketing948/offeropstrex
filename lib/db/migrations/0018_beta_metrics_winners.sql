@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS campaign_winners (
   campaign_id integer NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
   traffic_source_id integer REFERENCES workspace_traffic_sources(id) ON DELETE SET NULL,
   platform campaign_platform NOT NULL,
-  offer_id integer NOT NULL,
+      offer_id text NOT NULL,
   source campaign_winner_source NOT NULL,
   detected_by_employee_id integer REFERENCES employees(id) ON DELETE SET NULL,
   detected_at timestamp with time zone NOT NULL DEFAULT now(),

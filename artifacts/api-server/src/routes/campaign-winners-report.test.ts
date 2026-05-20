@@ -104,7 +104,7 @@ describe("GET /reports/campaign-winners", { concurrency: false }, () => {
       campaignId: campaign.id,
       trafficSourceId: sourceId,
       platform: "ios",
-      offerId: 999001,
+      offerId: "cafe0001-0002-4003-8004-000000099001",
       source: "manual_close",
       detectedByEmployeeId: adminId,
       notes: "from test",
@@ -113,9 +113,9 @@ describe("GET /reports/campaign-winners", { concurrency: false }, () => {
     const { response, json } = await getReport(adminId, workspaceId);
     assert.equal(response.status, 200);
     assert.ok(Array.isArray(json));
-    const rows = json as { offerId: number; sourceLabel: string; campaignName: string }[];
+    const rows = json as { offerId: string; sourceLabel: string; campaignName: string }[];
     assert.equal(rows.length, 1);
-    assert.equal(rows[0]!.offerId, 999001);
+    assert.equal(rows[0]!.offerId, "cafe0001-0002-4003-8004-000000099001");
     assert.equal(rows[0]!.sourceLabel, "Manual close");
     assert.equal(rows[0]!.campaignName, "CW Campaign");
   });

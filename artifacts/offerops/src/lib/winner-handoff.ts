@@ -1,3 +1,5 @@
+import { coerceWinnerHandoffOfferIdsFromJson } from "@workspace/voluum-offer-ids";
+
 export const WINNER_HANDOFF_CONTEXT_MARKER = "---offerops-winner-handoff---";
 
 export type WinnerHandoffContext = {
@@ -8,7 +10,7 @@ export type WinnerHandoffContext = {
   trafficSourceId: number | null;
   targetWorkingCampaignId: number | null;
   missingWorkingCampaign: boolean;
-  winnerOfferIds: number[];
+  winnerOfferIds: string[];
   manualCloseReason: "winners_found";
 };
 
@@ -25,9 +27,7 @@ export function parseWinnerHandoffContext(description: string | null | undefined
     if (!Number.isInteger(parsed.testingCampaignId)) return null;
     return {
       ...parsed,
-      winnerOfferIds: Array.isArray(parsed.winnerOfferIds)
-        ? parsed.winnerOfferIds.filter((id) => Number.isInteger(id) && id > 0)
-        : [],
+      winnerOfferIds: coerceWinnerHandoffOfferIdsFromJson(parsed.winnerOfferIds),
     };
   } catch {
     return null;

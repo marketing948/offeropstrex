@@ -12,6 +12,10 @@ import {
 } from "@workspace/api-zod";
 import { requireWorkspaceFromQuery, requireWorkspaceAccess, requireAdmin } from "../lib/workspace-access";
 import { requireWorkspaceFromBody } from "../lib/require-workspace";
+import {
+  INVALID_VOLUUM_OFFER_ID_FORMAT_MESSAGE,
+  parseVoluumOfferIdsFromStrings,
+} from "@workspace/voluum-offer-ids";
 import { emit } from "../engine/event-bus.ts";
 import type { TaskCompletionDetails } from "../engine/types.ts";
 import { getEmployeeFromToken } from "./auth";
@@ -391,7 +395,7 @@ const findWinnersSchema = z.union([findWinnersSuccessSchema, findWinnersFailureS
 const reviewWinnersTargetSchema = z.discriminatedUnion("outcome", [
   z.object({
     outcome: z.literal("winners"),
-    winnerOfferIds: z.array(z.number().int().positive()).min(1),
+    winnerOfferIds: z.array(z.string()).min(1),
     notes: z.string().nullable().optional(),
   }),
   z.object({
@@ -519,10 +523,23 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
+    let winnerOfferIds: string[] | undefined;
+    if (parsed.data.outcome === "winners") {
+      const idRes = parseVoluumOfferIdsFromStrings(parsed.data.winnerOfferIds);
+      if ("error" in idRes) {
+        res.status(400).json({ error: idRes.error });
+        return;
+      }
+      winnerOfferIds = idRes.ok;
+      if (winnerOfferIds.length === 0) {
+        res.status(400).json({ error: "winnerOfferIds required when outcome is winners" });
+        return;
+      }
+    }
     completion = {
       kind: "review_winners_target",
       outcome: parsed.data.outcome === "winners" ? "winners" : "no_winners",
-      winnerOfferIds: parsed.data.outcome === "winners" ? parsed.data.winnerOfferIds : undefined,
+      winnerOfferIds,
       notes: parsed.data.notes ?? null,
     };
   } else if (task.taskType === "all_traffic_sources_tested") {
@@ -570,7 +587,7 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       message === "Task is missing relatedBatchId" ||
       message === "Task missing relatedCampaignId" ||
       message === "voluumCampaignId is required" ||
-      message === "winnerOfferIds required when outcome is winners" ||
+      message === INVALID_VOLUUM_OFFER_ID_FORMAT_MESSAGE ||
       message.startsWith("review_winners_target task missing") ||
       message === "Task type mismatch for review_winners_target completion" ||
       message === "Traffic source run not found for winner review task"

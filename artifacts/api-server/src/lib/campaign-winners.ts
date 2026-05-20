@@ -1,5 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { campaignWinnersTable, testingBatchesTable } from "@workspace/db";
+import { VOLUUM_OFFER_ID_UUID_REGEX } from "@workspace/voluum-offer-ids";
 import type { Tx } from "../engine/types.ts";
 
 export type CampaignWinnerSource = "manual_close" | "target_reached_review";
@@ -13,13 +14,15 @@ export async function insertCampaignWinnersTx(
     campaignId: number;
     trafficSourceId: number | null;
     platform: "ios" | "android";
-    offerIds: number[];
+    offerIds: string[];
     source: CampaignWinnerSource;
     detectedByEmployeeId: number;
     notes?: string | null;
   },
 ): Promise<void> {
-  const uniq = [...new Set(params.offerIds)].filter((id) => Number.isInteger(id) && id > 0);
+  const uniq = [...new Set(params.offerIds)].filter(
+    (id) => typeof id === "string" && id.length > 0 && VOLUUM_OFFER_ID_UUID_REGEX.test(id),
+  );
   if (uniq.length === 0) return;
 
   const existing = await tx

@@ -25,6 +25,7 @@ import {
 } from "../lib/campaignops-operational-events.ts";
 import { recordOperationalEvent } from "../lib/operational-events.ts";
 import { insertCampaignWinnersTx } from "../lib/campaign-winners.ts";
+import { parseVoluumOfferIdsFromStrings } from "@workspace/voluum-offer-ids";
 
 type CreateBatchAction = Extract<Action, { type: "CreateBatch" }>;
 type PlatformRunStatus = "pending" | "active" | "completed" | "failed" | "skipped";
@@ -874,10 +875,14 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
           }
 
           const out = action.completion.outcome;
-          const rawIds = action.completion.winnerOfferIds ?? [];
-          const ids = [...new Set(rawIds)].filter((n) => Number.isInteger(n) && n > 0);
-          if (out === "winners" && ids.length === 0) {
-            throw new Error("winnerOfferIds required when outcome is winners");
+          let ids: string[] = [];
+          if (out === "winners") {
+            const parsedIds = parseVoluumOfferIdsFromStrings(action.completion.winnerOfferIds ?? []);
+            if ("error" in parsedIds) throw new Error(parsedIds.error);
+            ids = parsedIds.ok;
+            if (ids.length === 0) {
+              throw new Error("winnerOfferIds required when outcome is winners");
+            }
           }
 
           const [run] = await tx

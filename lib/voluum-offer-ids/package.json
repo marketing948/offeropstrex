@@ -1,0 +1,16 @@
+{
+  "name": "@workspace/voluum-offer-ids",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsx": "catalog:"
+  },
+  "scripts": {
+    "test": "tsx --test 'src/**/*.test.ts'"
+  }
+}

@@ -21,7 +21,8 @@ export const campaignWinnersTable = pgTable("campaign_winners", {
     onDelete: "set null",
   }),
   platform: campaignPlatformEnum("platform").notNull(),
-  offerId: integer("offer_id").notNull(),
+  /** Voluum external offer id (canonical hyphenated lowercase UUID string). */
+  offerId: text("offer_id").notNull(),
   source: campaignWinnerSourceEnum("source").notNull(),
   detectedByEmployeeId: integer("detected_by_employee_id").references(() => employeesTable.id, {
     onDelete: "set null",

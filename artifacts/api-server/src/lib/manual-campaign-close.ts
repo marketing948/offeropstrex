@@ -11,6 +11,7 @@ import { applyAction } from "../engine/executor.ts";
 import { checkWorkspaceAccess } from "./workspace-access.ts";
 import { recordOperationalEvent } from "./operational-events.ts";
 import { resolveCampaignDisplayName } from "./campaign-display-name.ts";
+import { parseVoluumOfferIdsFromStrings } from "@workspace/voluum-offer-ids";
 import { insertCampaignWinnersTx } from "./campaign-winners.ts";
 import {
   buildWinnerHandoffDescription,
@@ -30,7 +31,7 @@ export type ManualCloseReason = (typeof MANUAL_CLOSE_REASONS)[number];
 export type ManualCloseInput = {
   reason: ManualCloseReason;
   note?: string | null;
-  winnerOfferIds?: number[] | null;
+  winnerOfferIds?: string[] | null;
 };
 
 export type ManualCloseResult = {
@@ -183,6 +184,13 @@ export async function manualCloseCampaign(
     throw new ManualCloseError("Campaign is already closed", 409);
   }
 
+  let winnerVoluumIds: string[] = [];
+  if (input.reason === "winners_found") {
+    const idParse = parseVoluumOfferIdsFromStrings(input.winnerOfferIds ?? null);
+    if ("error" in idParse) throw new ManualCloseError(idParse.error, 400);
+    winnerVoluumIds = idParse.ok;
+  }
+
   const now = new Date();
   const followUpTaskIds: number[] = [];
   let missingWorkingCampaign = false;
@@ -252,17 +260,15 @@ export async function manualCloseCampaign(
       missingWorkingCampaign = targetWorkingCampaignId == null;
 
       const assigneeId = batch?.employeeId ?? actorId;
-      const winnerIds =
-        input.winnerOfferIds?.filter((id) => Number.isInteger(id) && id > 0) ?? [];
 
-      if (winnerIds.length > 0) {
+      if (winnerVoluumIds.length > 0) {
         await insertCampaignWinnersTx(tx, {
           workspaceId: row.workspaceId,
           batchId: row.batchId,
           campaignId: row.id,
           trafficSourceId: row.trafficSourceId,
           platform: row.platform,
-          offerIds: winnerIds,
+          offerIds: winnerVoluumIds,
           source: "manual_close",
           detectedByEmployeeId: actorId,
           notes: input.note?.trim() || null,
@@ -283,7 +289,7 @@ export async function manualCloseCampaign(
         trafficSourceId: row.trafficSourceId,
         targetWorkingCampaignId,
         missingWorkingCampaign,
-        winnerOfferIds: winnerIds,
+        winnerOfferIds: winnerVoluumIds,
         manualCloseReason: input.reason,
       };
 
@@ -354,10 +360,7 @@ export async function manualCloseCampaign(
       platform: updated.platform,
       trafficSourceId: updated.trafficSourceId,
       reason: input.reason,
-      winnerOfferIds:
-        input.reason === "winners_found"
-          ? input.winnerOfferIds?.filter((id) => Number.isInteger(id) && id > 0) ?? []
-          : undefined,
+      winnerOfferIds: input.reason === "winners_found" ? winnerVoluumIds : undefined,
       followUpTaskIds,
       missingWorkingCampaign,
       targetWorkingCampaignId,

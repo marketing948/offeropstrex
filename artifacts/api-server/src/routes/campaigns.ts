@@ -436,7 +436,7 @@ router.patch("/campaigns/:id", async (req, res): Promise<void> => {
 const manualCloseBodySchema = z.object({
   reason: z.enum(MANUAL_CLOSE_REASONS),
   note: z.string().nullable().optional(),
-  winnerOfferIds: z.array(z.number().int().positive()).optional(),
+  winnerOfferIds: z.array(z.string()).optional(),
 });
 
 router.post("/campaigns/:id/manual-close", async (req, res): Promise<void> => {

@@ -60,7 +60,7 @@ export type TaskCompletionDetails =
   | {
       kind: "review_winners_target";
       outcome: "winners" | "no_winners";
-      winnerOfferIds?: number[];
+      winnerOfferIds?: string[];
       notes?: string | null;
     };
 

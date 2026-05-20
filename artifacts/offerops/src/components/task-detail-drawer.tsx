@@ -48,6 +48,10 @@ import { wsQueryOpts } from "@/lib/ws-query";
 import { useToast } from "@/hooks/use-toast";
 import { authedJson } from "@/lib/api-fetch";
 import {
+  INVALID_VOLUUM_OFFER_ID_FORMAT_MESSAGE,
+  parseVoluumOfferIdsFromText,
+} from "@workspace/voluum-offer-ids";
+import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -717,18 +721,19 @@ function ReviewWinnersTargetForm({ task, onCompleted }: { task: TodoTask; onComp
 
   async function submit() {
     if (mode === "winners") {
-      const ids = offerIdsRaw
-        .split(/[\s,]+/)
-        .map((s) => Number(s.trim()))
-        .filter((n) => Number.isInteger(n) && n > 0);
-      if (ids.length === 0) {
+      const idRes = parseVoluumOfferIdsFromText(offerIdsRaw);
+      if ("error" in idRes) {
+        toast({ title: INVALID_VOLUUM_OFFER_ID_FORMAT_MESSAGE, variant: "destructive" });
+        return;
+      }
+      if (idRes.ok.length === 0) {
         toast({ title: "Enter at least one offer ID", variant: "destructive" });
         return;
       }
       setPending(true);
       const ok = await complete(task.id, {
         outcome: "winners",
-        winnerOfferIds: ids,
+        winnerOfferIds: idRes.ok,
         notes: notes.trim() || null,
       });
       setPending(false);
@@ -766,7 +771,7 @@ function ReviewWinnersTargetForm({ task, onCompleted }: { task: TodoTask; onComp
             className="mt-1 min-h-[72px] text-sm font-mono"
             value={offerIdsRaw}
             onChange={(e) => setOfferIdsRaw(e.target.value)}
-            placeholder="e.g. 101, 205, 310"
+            placeholder="e.g. 3d1ef3ff-01e2-4340-a029-ec28275f50b4 (comma or newline separated)"
           />
         </div>
       )}

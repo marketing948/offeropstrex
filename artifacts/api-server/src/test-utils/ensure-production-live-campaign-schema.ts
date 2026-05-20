@@ -121,13 +121,32 @@ async function runEnsureOnce(): Promise<void> {
       campaign_id integer NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
       traffic_source_id integer REFERENCES workspace_traffic_sources(id) ON DELETE SET NULL,
       platform campaign_platform NOT NULL,
-      offer_id integer NOT NULL,
+      offer_id text NOT NULL,
       source campaign_winner_source NOT NULL,
       detected_by_employee_id integer REFERENCES employees(id) ON DELETE SET NULL,
       detected_at timestamp with time zone NOT NULL DEFAULT now(),
       notes text,
       created_at timestamp with time zone NOT NULL DEFAULT now()
     )
+  `);
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns c
+        WHERE c.table_schema = 'public'
+          AND c.table_name = 'campaign_winners'
+          AND c.column_name = 'offer_id'
+          AND c.data_type = 'integer'
+      ) THEN
+        EXECUTE '
+          ALTER TABLE campaign_winners
+            ALTER COLUMN offer_id TYPE text
+            USING offer_id::text
+        ';
+      END IF;
+    END $$;
   `);
   await db.execute(sql`
     CREATE UNIQUE INDEX IF NOT EXISTS campaign_winners_workspace_campaign_offer_unique

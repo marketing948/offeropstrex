@@ -22,6 +22,9 @@ import {
   workspaceTrafficSourcesTable,
 } from "@workspace/db";
 
+const SAMPLE_WIN_A = "3d1ef3ff-01e2-4340-a029-ec28275f50b4";
+const SAMPLE_WIN_B = "aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee";
+
 let server: Server;
 let baseUrl: string;
 let createdWorkspaceIds: number[] = [];
@@ -228,7 +231,7 @@ describe("POST /campaigns/:id/manual-close", { concurrency: false }, () => {
 
     const { response, json } = await request("POST", `/campaigns/${campaign.id}/manual-close`, seed.adminId, {
       reason: "winners_found",
-      winnerOfferIds: [101, 102],
+      winnerOfferIds: [SAMPLE_WIN_A, SAMPLE_WIN_B],
     });
 
     assert.equal(response.status, 200);
@@ -241,15 +244,42 @@ describe("POST /campaigns/:id/manual-close", { concurrency: false }, () => {
     assert.equal(tasks.length, 1);
     assert.match(tasks[0]!.title, /Move winners from .+ to working campaign/);
     assert.match(tasks[0]!.description ?? "", /---offerops-winner-handoff---/);
-    assert.match(tasks[0]!.description ?? "", /"winnerOfferIds":\[101,102\]/);
+    assert.match(
+      tasks[0]!.description ?? "",
+      new RegExp(
+        `"winnerOfferIds":\\["${SAMPLE_WIN_A}","${SAMPLE_WIN_B}"\\]`,
+      ),
+    );
 
     const cw = await db.select().from(campaignWinnersTable).where(eq(campaignWinnersTable.campaignId, campaign.id));
     assert.equal(cw.length, 2);
-    assert.ok(cw.some((w) => w.offerId === 101));
-    assert.ok(cw.some((w) => w.offerId === 102));
+    assert.ok(cw.some((w) => w.offerId === SAMPLE_WIN_A));
+    assert.ok(cw.some((w) => w.offerId === SAMPLE_WIN_B));
     assert.ok(cw.every((w) => w.source === "manual_close"));
   });
 
+  test("winners_found rejects invalid Voluum offer ID format before closing", async () => {
+    const seed = await seedWorkspaceBundle();
+    const { campaign } = await seedTestingCampaign(seed);
+    await createWorkingCampaign(seed, `vc-invalid-offer-${Date.now()}`);
+
+    const before = await db.select({ status: campaignsTable.status }).from(campaignsTable).where(eq(campaignsTable.id, campaign.id));
+    assert.equal(before[0]?.status, "live");
+
+    const { response, json } = await request("POST", `/campaigns/${campaign.id}/manual-close`, seed.adminId, {
+      reason: "winners_found",
+      winnerOfferIds: [SAMPLE_WIN_A, "not-a-uuid"],
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(json?.error, "Invalid Voluum offer ID format");
+
+    const after = await db.select({ status: campaignsTable.status }).from(campaignsTable).where(eq(campaignsTable.id, campaign.id));
+    assert.equal(after[0]?.status, "live");
+
+    const cw = await db.select().from(campaignWinnersTable).where(eq(campaignWinnersTable.campaignId, campaign.id));
+    assert.equal(cw.length, 0);
+  });
   test("winners_found signals missing working campaign and creates setup task", async () => {
     const seed = await seedWorkspaceBundle();
     const { campaign } = await seedTestingCampaign(seed);

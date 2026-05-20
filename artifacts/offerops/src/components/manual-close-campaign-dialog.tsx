@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { authedJson } from "@/lib/api-fetch";
 import { useToast } from "@/hooks/use-toast";
-import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -17,7 +16,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import {
+  INVALID_VOLUUM_OFFER_ID_FORMAT_MESSAGE,
+  parseVoluumOfferIdsFromText,
+} from "@workspace/voluum-offer-ids";
 
 const REASONS = [
   { value: "opened_by_mistake", label: "Opened by mistake" },
@@ -49,24 +52,26 @@ export function ManualCloseCampaignDialog({
   const [winnerOfferIds, setWinnerOfferIds] = useState("");
   const [pending, setPending] = useState(false);
 
-  function parseWinnerOfferIds(raw: string): number[] {
-    return raw
-      .split(/[,\n\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((s) => Number(s))
-      .filter((n) => Number.isInteger(n) && n > 0);
-  }
-
   async function submit() {
-    const parsedWinnerIds = parseWinnerOfferIds(winnerOfferIds);
-    if (reason === "winners_found" && parsedWinnerIds.length === 0) {
-      toast({
-        title: "Winner offer IDs required",
-        description: "Enter at least one winning Voluum/offer ID before closing.",
-        variant: "destructive",
-      });
-      return;
+    let canonicalWinnerIds: string[] = [];
+    if (reason === "winners_found") {
+      const parsed = parseVoluumOfferIdsFromText(winnerOfferIds);
+      if ("error" in parsed) {
+        toast({
+          title: INVALID_VOLUUM_OFFER_ID_FORMAT_MESSAGE,
+          variant: "destructive",
+        });
+        return;
+      }
+      if (parsed.ok.length === 0) {
+        toast({
+          title: "Winner offer IDs required",
+          description: "Enter at least one winning Voluum offer UUID before closing.",
+          variant: "destructive",
+        });
+        return;
+      }
+      canonicalWinnerIds = parsed.ok;
     }
 
     setPending(true);
@@ -76,7 +81,7 @@ export function ManualCloseCampaignDialog({
         note: note.trim() || null,
       };
       if (reason === "winners_found") {
-        body.winnerOfferIds = parsedWinnerIds;
+        body.winnerOfferIds = canonicalWinnerIds;
       }
 
       const result = await authedJson<{
@@ -150,12 +155,12 @@ export function ManualCloseCampaignDialog({
               <Label className="text-xs">Winner offer IDs *</Label>
               <Textarea
                 className="mt-1 min-h-[4rem] font-mono text-sm"
-                placeholder="e.g. 12, 34, 56 (comma or newline separated)"
+                placeholder="UUID per line or comma-separated, e.g. 3d1ef3ff-01e2-4340-a029-ec28275f50b4"
                 value={winnerOfferIds}
                 onChange={(e) => setWinnerOfferIds(e.target.value)}
               />
               <p className="mt-1 text-[11px] text-muted-foreground">
-                Enter the winning Voluum/offer IDs to move to the working campaign.
+                Enter winning Voluum offer IDs (hyphenated UUID format).
               </p>
             </div>
           )}
