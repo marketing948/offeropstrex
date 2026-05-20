@@ -24,6 +24,7 @@ import {
   recordTrafficSourceRunTerminalOperationalEvent,
 } from "../lib/campaignops-operational-events.ts";
 import { recordOperationalEvent } from "../lib/operational-events.ts";
+import { insertCampaignWinnersTx } from "../lib/campaign-winners.ts";
 
 type CreateBatchAction = Extract<Action, { type: "CreateBatch" }>;
 type PlatformRunStatus = "pending" | "active" | "completed" | "failed" | "skipped";
@@ -860,6 +861,101 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
             clicks: action.completion.clicks ?? null,
             conversions: action.completion.conversions ?? null,
             notes: action.completion.notes ?? null,
+          };
+          break;
+        }
+
+        case "review_winners_target": {
+          if (task.taskType !== "review_winners_target") {
+            throw new Error("Task type mismatch for review_winners_target completion");
+          }
+          if (task.relatedBatchId == null || task.trafficSourceId == null) {
+            throw new Error("review_winners_target task missing batch or traffic source link");
+          }
+
+          const out = action.completion.outcome;
+          const rawIds = action.completion.winnerOfferIds ?? [];
+          const ids = [...new Set(rawIds)].filter((n) => Number.isInteger(n) && n > 0);
+          if (out === "winners" && ids.length === 0) {
+            throw new Error("winnerOfferIds required when outcome is winners");
+          }
+
+          const [run] = await tx
+            .select({
+              iosCampaignId: batchTrafficSourceRunsTable.iosCampaignId,
+              androidCampaignId: batchTrafficSourceRunsTable.androidCampaignId,
+            })
+            .from(batchTrafficSourceRunsTable)
+            .where(
+              and(
+                eq(batchTrafficSourceRunsTable.workspaceId, action.workspaceId),
+                eq(batchTrafficSourceRunsTable.batchId, task.relatedBatchId),
+                eq(batchTrafficSourceRunsTable.trafficSourceId, task.trafficSourceId),
+              ),
+            )
+            .limit(1);
+          if (!run) {
+            throw new Error("Traffic source run not found for winner review task");
+          }
+
+          const note = action.completion.notes?.trim() || null;
+          const campaignIds = [run.iosCampaignId, run.androidCampaignId].filter(
+            (cid): cid is number => cid != null,
+          );
+
+          for (const campaignId of campaignIds) {
+            const [camp] = await tx
+              .select({
+                platform: campaignsTable.platform,
+                status: campaignsTable.status,
+              })
+              .from(campaignsTable)
+              .where(
+                and(
+                  eq(campaignsTable.id, campaignId),
+                  eq(campaignsTable.workspaceId, action.workspaceId),
+                ),
+              )
+              .limit(1);
+            if (!camp) {
+              throw new Error("Campaign not found");
+            }
+            if (out === "winners" && ids.length > 0) {
+              await insertCampaignWinnersTx(tx, {
+                workspaceId: action.workspaceId,
+                batchId: task.relatedBatchId,
+                campaignId,
+                trafficSourceId: task.trafficSourceId,
+                platform: camp.platform,
+                offerIds: ids,
+                source: "target_reached_review",
+                detectedByEmployeeId: action.completedByEmployeeId,
+                notes: note,
+              });
+            }
+            if (camp.status === "ready_for_winner_review") {
+              await tx
+                .update(campaignsTable)
+                .set({
+                  status: "tested",
+                  notes: note,
+                  updatedAt: new Date(),
+                })
+                .where(
+                  and(
+                    eq(campaignsTable.id, campaignId),
+                    eq(campaignsTable.workspaceId, action.workspaceId),
+                    eq(campaignsTable.status, "ready_for_winner_review"),
+                  ),
+                );
+            }
+          }
+
+          resolvedCampaignId = campaignIds[0] ?? resolvedCampaignId;
+          completionPayload = {
+            outcome: out,
+            winnerOfferIds: out === "winners" ? ids : [],
+            notes: note,
           };
           break;
         }

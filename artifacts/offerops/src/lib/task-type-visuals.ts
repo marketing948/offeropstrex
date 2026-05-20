@@ -13,6 +13,7 @@ import {
   TrendingUp,
   ListChecks,
   ClipboardList,
+  BadgeCheck,
   type LucideIcon,
 } from "lucide-react";
 
@@ -73,6 +74,17 @@ const ACTIVE: Record<string, TaskTypeVisual> = {
     iconFg: "text-amber-700 dark:text-amber-300",
     badgeBg: "bg-amber-100 dark:bg-amber-900/40",
     badgeFg: "text-amber-800 dark:text-amber-200",
+    isLegacy: false,
+  },
+  review_winners_target: {
+    icon: BadgeCheck,
+    label: "Review winners (traffic target)",
+    subtext: "Traffic target reached — enter offer IDs or no winners",
+    accentBar: "bg-teal-500",
+    iconBg: "bg-teal-100 dark:bg-teal-900/40",
+    iconFg: "text-teal-700 dark:text-teal-300",
+    badgeBg: "bg-teal-100 dark:bg-teal-900/40",
+    badgeFg: "text-teal-800 dark:text-teal-200",
     isLegacy: false,
   },
   all_traffic_sources_tested: {
@@ -165,5 +177,6 @@ export const ACTIVE_TASK_TYPES: ReadonlyArray<{ key: string; visual: TaskTypeVis
   "create_voluum_campaign_android",
   "take_campaign_live",
   "find_winners",
+  "review_winners_target",
   "all_traffic_sources_tested",
 ].map((key) => ({ key, visual: ACTIVE[key] }));

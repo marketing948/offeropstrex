@@ -39,6 +39,10 @@ export const batchTrafficSourceRunsTable = pgTable("batch_traffic_source_runs", 
   androidCompletedAt: timestamp("android_completed_at", { withTimezone: true }),
   startedAt: timestamp("started_at", { withTimezone: true }),
   completedAt: timestamp("completed_at", { withTimezone: true }),
+  /** Target visits per offer for this run slot; used with offer_count to detect traffic target met. */
+  targetAvgVisitsPerOffer: integer("target_avg_visits_per_offer"),
+  /** Snapshot of offer count when run was created (from batch.number_of_offers). */
+  offerCount: integer("offer_count"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   uniqBatchTrafficSource: unique("batch_traffic_source_runs_batch_source_unique").on(t.batchId, t.trafficSourceId),

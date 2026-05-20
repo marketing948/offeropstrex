@@ -161,6 +161,8 @@ export function TaskDetailDrawer({
             <TakeCampaignLiveForm task={task} onCompleted={() => { invalidate(); onClose(); }} />
           ) : (task.taskType as string) === "find_winners" ? (
             <FindWinnersForm task={task} onCompleted={() => { invalidate(); onClose(); }} />
+          ) : (task.taskType as string) === "review_winners_target" ? (
+            <ReviewWinnersTargetForm task={task} onCompleted={() => { invalidate(); onClose(); }} />
           ) : (task.taskType as string) === "all_traffic_sources_tested" ? (
             <AllTrafficSourcesTestedForm task={task} onCompleted={() => { invalidate(); onClose(); }} />
           ) : platform ? (
@@ -700,6 +702,82 @@ function FindWinnersForm({ task, onCompleted }: { task: TodoTask; onCompleted: (
       </div>
       <div className="flex justify-end gap-2 pt-2">
         <Button size="sm" onClick={submit} disabled={pending}>{pending ? "Saving…" : "Save results"}</Button>
+      </div>
+    </div>
+  );
+}
+
+function ReviewWinnersTargetForm({ task, onCompleted }: { task: TodoTask; onCompleted: () => void }) {
+  const complete = useCompleteTask();
+  const { toast } = useToast();
+  const [mode, setMode] = useState<"winners" | "no_winners">("winners");
+  const [offerIdsRaw, setOfferIdsRaw] = useState("");
+  const [notes, setNotes] = useState("");
+  const [pending, setPending] = useState(false);
+
+  async function submit() {
+    if (mode === "winners") {
+      const ids = offerIdsRaw
+        .split(/[\s,]+/)
+        .map((s) => Number(s.trim()))
+        .filter((n) => Number.isInteger(n) && n > 0);
+      if (ids.length === 0) {
+        toast({ title: "Enter at least one offer ID", variant: "destructive" });
+        return;
+      }
+      setPending(true);
+      const ok = await complete(task.id, {
+        outcome: "winners",
+        winnerOfferIds: ids,
+        notes: notes.trim() || null,
+      });
+      setPending(false);
+      if (ok) onCompleted();
+      return;
+    }
+    setPending(true);
+    const ok = await complete(task.id, {
+      outcome: "no_winners",
+      notes: notes.trim() || null,
+    });
+    setPending(false);
+    if (ok) onCompleted();
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Traffic for this batch × source reached the target volume per offer. Record which offers won for reporting, or explicitly confirm there were no winners.
+      </p>
+      <div className="flex gap-4 text-sm">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="rw-outcome" checked={mode === "winners"} onChange={() => setMode("winners")} />
+          Winners found
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="rw-outcome" checked={mode === "no_winners"} onChange={() => setMode("no_winners")} />
+          No winners
+        </label>
+      </div>
+      {mode === "winners" && (
+        <div>
+          <Label className="text-xs">Winner offer IDs *</Label>
+          <Textarea
+            className="mt-1 min-h-[72px] text-sm font-mono"
+            value={offerIdsRaw}
+            onChange={(e) => setOfferIdsRaw(e.target.value)}
+            placeholder="e.g. 101, 205, 310"
+          />
+        </div>
+      )}
+      <div>
+        <Label className="text-xs">Notes</Label>
+        <Textarea className="mt-1 min-h-[52px] text-sm" value={notes} onChange={(e) => setNotes(e.target.value)} />
+      </div>
+      <div className="flex justify-end gap-2 pt-2">
+        <Button size="sm" onClick={submit} disabled={pending}>
+          {pending ? "Saving…" : "Complete review"}
+        </Button>
       </div>
     </div>
   );

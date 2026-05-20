@@ -25,6 +25,7 @@ const CAMPAIGN_OPS_TASK_TYPES = new Set<string>([
   "take_campaign_live",
   "find_winners",
   "all_traffic_sources_tested",
+  "review_winners_target",
 ]);
 
 function serializeTask(
@@ -387,6 +388,18 @@ const findWinnersFailureSchema = z.object({
 });
 const findWinnersSchema = z.union([findWinnersSuccessSchema, findWinnersFailureSchema]);
 
+const reviewWinnersTargetSchema = z.discriminatedUnion("outcome", [
+  z.object({
+    outcome: z.literal("winners"),
+    winnerOfferIds: z.array(z.number().int().positive()).min(1),
+    notes: z.string().nullable().optional(),
+  }),
+  z.object({
+    outcome: z.literal("no_winners"),
+    notes: z.string().nullable().optional(),
+  }),
+]);
+
 async function resolveTaskTrafficSourceId(
   task: Pick<
     typeof todoTasksTable.$inferSelect,
@@ -500,6 +513,18 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       return;
     }
     completion = { kind: "find_winners", ...parsed.data };
+  } else if (task.taskType === "review_winners_target") {
+    const parsed = reviewWinnersTargetSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+    completion = {
+      kind: "review_winners_target",
+      outcome: parsed.data.outcome === "winners" ? "winners" : "no_winners",
+      winnerOfferIds: parsed.data.outcome === "winners" ? parsed.data.winnerOfferIds : undefined,
+      notes: parsed.data.notes ?? null,
+    };
   } else if (task.taskType === "all_traffic_sources_tested") {
     completion = { kind: "all_traffic_sources_tested" };
   } else if (task.taskType === "MANUAL") {
@@ -544,7 +569,11 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       message === "trafficSourceId does not belong to this workspace" ||
       message === "Task is missing relatedBatchId" ||
       message === "Task missing relatedCampaignId" ||
-      message === "voluumCampaignId is required"
+      message === "voluumCampaignId is required" ||
+      message === "winnerOfferIds required when outcome is winners" ||
+      message.startsWith("review_winners_target task missing") ||
+      message === "Task type mismatch for review_winners_target completion" ||
+      message === "Traffic source run not found for winner review task"
     ) {
       res.status(400).json({ error: message });
       return;

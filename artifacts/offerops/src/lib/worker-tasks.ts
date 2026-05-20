@@ -6,6 +6,7 @@ export const CAMPAIGN_OPS_TASK_TYPES = new Set([
   "create_voluum_campaign_android",
   "take_campaign_live",
   "find_winners",
+  "review_winners_target",
   "all_traffic_sources_tested",
 ]);
 

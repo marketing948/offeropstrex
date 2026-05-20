@@ -2,11 +2,20 @@ import { sql } from "drizzle-orm";
 import { db } from "@workspace/db";
 
 let ensured = false;
+/** Serializes concurrent `ensureProductionLiveCampaignSchema()` calls (parallel test files). */
+let ensureChain: Promise<void> = Promise.resolve();
 
 /** Applies migration 0015 DDL for route tests (idempotent). */
 export async function ensureProductionLiveCampaignSchema(): Promise<void> {
-  if (ensured) return;
+  ensureChain = ensureChain.then(() => runEnsureOnce());
+  await ensureChain;
+}
 
+async function runEnsureOnce(): Promise<void> {
+  if (ensured) return;
+  await db.execute(sql`SELECT pg_advisory_lock(948273001)`);
+  try {
+    if (ensured) return;
   await db.execute(sql`
     DO $$
     BEGIN
@@ -74,5 +83,74 @@ export async function ensureProductionLiveCampaignSchema(): Promise<void> {
       ADD COLUMN IF NOT EXISTS manual_closed_by_employee_id integer REFERENCES employees(id) ON DELETE SET NULL
   `);
 
-  ensured = true;
+  // ── Beta metrics + winners (migration 0018) — idempotent for route tests ──
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      ALTER TYPE campaign_status ADD VALUE 'ready_for_winner_review';
+    EXCEPTION
+      WHEN duplicate_object THEN NULL;
+    END $$;
+  `);
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      ALTER TYPE task_type ADD VALUE 'review_winners_target';
+    EXCEPTION
+      WHEN duplicate_object THEN NULL;
+    END $$;
+  `);
+  await db.execute(sql`
+    ALTER TABLE batch_traffic_source_runs
+      ADD COLUMN IF NOT EXISTS target_avg_visits_per_offer integer,
+      ADD COLUMN IF NOT EXISTS offer_count integer
+  `);
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      CREATE TYPE campaign_winner_source AS ENUM ('manual_close', 'target_reached_review');
+    EXCEPTION
+      WHEN duplicate_object THEN NULL;
+    END $$;
+  `);
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS campaign_winners (
+      id serial PRIMARY KEY,
+      workspace_id integer NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      batch_id integer REFERENCES testing_batches(id) ON DELETE SET NULL,
+      campaign_id integer NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+      traffic_source_id integer REFERENCES workspace_traffic_sources(id) ON DELETE SET NULL,
+      platform campaign_platform NOT NULL,
+      offer_id integer NOT NULL,
+      source campaign_winner_source NOT NULL,
+      detected_by_employee_id integer REFERENCES employees(id) ON DELETE SET NULL,
+      detected_at timestamp with time zone NOT NULL DEFAULT now(),
+      notes text,
+      created_at timestamp with time zone NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS campaign_winners_workspace_campaign_offer_unique
+      ON campaign_winners (workspace_id, campaign_id, offer_id)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS campaign_winners_workspace_created_idx
+      ON campaign_winners (workspace_id, created_at DESC)
+  `);
+  await db.execute(sql`
+    DROP INDEX IF EXISTS todo_tasks_open_review_winners_target_unique
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS todo_tasks_open_review_winners_target_unique
+      ON todo_tasks (workspace_id, related_batch_id, traffic_source_id, task_type)
+      WHERE status IN ('TODO', 'IN_PROGRESS')
+        AND task_type = 'review_winners_target'
+        AND related_batch_id IS NOT NULL
+        AND traffic_source_id IS NOT NULL
+  `);
+
+    ensured = true;
+  } finally {
+    await db.execute(sql`SELECT pg_advisory_unlock(948273001)`);
+  }
 }

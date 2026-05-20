@@ -56,6 +56,12 @@ export type TaskCompletionDetails =
     }
   | {
       kind: "all_traffic_sources_tested";
+    }
+  | {
+      kind: "review_winners_target";
+      outcome: "winners" | "no_winners";
+      winnerOfferIds?: number[];
+      notes?: string | null;
     };
 
 // ── Events ────────────────────────────────────────────────────────────
@@ -189,6 +195,7 @@ export type EventInput =
           | "take_campaign_live"
           | "find_winners"
           | "all_traffic_sources_tested"
+          | "review_winners_target"
           | "MANUAL";
         relatedBatchId: number | null;
         // CampaignOps redesign — set when the completed task references
@@ -236,6 +243,7 @@ export type EventInput =
           | "take_campaign_live"
           | "find_winners"
           | "all_traffic_sources_tested"
+          | "review_winners_target"
           | "MANUAL";
         relatedBatchId: number | null;
         title: string;
@@ -257,8 +265,23 @@ export type EventInput =
         campaignId: number;
         batchId: number;
         platform: "ios" | "android";
-        from: "draft" | "ready" | "voluum_created" | "live" | "tested" | "closed" | null;
-        to: "draft" | "ready" | "voluum_created" | "live" | "tested" | "closed";
+        from:
+          | "draft"
+          | "ready"
+          | "voluum_created"
+          | "live"
+          | "ready_for_winner_review"
+          | "tested"
+          | "closed"
+          | null;
+        to:
+          | "draft"
+          | "ready"
+          | "voluum_created"
+          | "live"
+          | "ready_for_winner_review"
+          | "tested"
+          | "closed";
       };
     }
   | {
@@ -393,7 +416,9 @@ export type Action =
           | "create_voluum_campaign_android"
           | "take_campaign_live"
           | "find_winners"
-          | "all_traffic_sources_tested";
+          | "all_traffic_sources_tested"
+          | "review_winners_target"
+          | "MANUAL";
         priority?: "low" | "medium" | "high";
         trackerCampaignDevice?: "ios" | "android" | null;
         trafficSourceId?: number | null;
@@ -432,8 +457,22 @@ export type Action =
       type: "UpdateCampaignStatus";
       workspaceId: number;
       campaignId: number;
-      from: "draft" | "ready" | "voluum_created" | "live" | "tested" | "closed";
-      to: "draft" | "ready" | "voluum_created" | "live" | "tested" | "closed";
+      from:
+        | "draft"
+        | "ready"
+        | "voluum_created"
+        | "live"
+        | "ready_for_winner_review"
+        | "tested"
+        | "closed";
+      to:
+        | "draft"
+        | "ready"
+        | "voluum_created"
+        | "live"
+        | "ready_for_winner_review"
+        | "tested"
+        | "closed";
     }
   | {
       type: "ChangeBatchStatus";

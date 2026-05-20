@@ -22,6 +22,7 @@ import {
   todoTasksTable,
   campaignsTable,
   testingBatchesTable,
+  batchTrafficSourceRunsTable,
 } from "@workspace/db";
 import {
   formatTakeCampaignLiveTitle,
@@ -156,6 +157,50 @@ export async function handleTaskCompleted(
         failureReason,
       },
     ];
+  }
+
+  if (taskType === "review_winners_target") {
+    const [taskRow] = await tx
+      .select({ trafficSourceId: todoTasksTable.trafficSourceId })
+      .from(todoTasksTable)
+      .where(
+        and(eq(todoTasksTable.id, payload.taskId), eq(todoTasksTable.workspaceId, workspaceId)),
+      )
+      .limit(1);
+    if (taskRow?.trafficSourceId == null) return [];
+
+    const [run] = await tx
+      .select({
+        iosCampaignId: batchTrafficSourceRunsTable.iosCampaignId,
+        androidCampaignId: batchTrafficSourceRunsTable.androidCampaignId,
+      })
+      .from(batchTrafficSourceRunsTable)
+      .where(
+        and(
+          eq(batchTrafficSourceRunsTable.workspaceId, workspaceId),
+          eq(batchTrafficSourceRunsTable.batchId, relatedBatchId),
+          eq(batchTrafficSourceRunsTable.trafficSourceId, taskRow.trafficSourceId),
+        ),
+      )
+      .limit(1);
+    if (!run) return [];
+
+    const actions: Action[] = [];
+    for (const platform of ["ios", "android"] as const) {
+      const cid = platform === "ios" ? run.iosCampaignId : run.androidCampaignId;
+      if (cid == null) continue;
+      actions.push({
+        type: "CompleteTrafficSourceRunPlatform",
+        workspaceId,
+        batchId: relatedBatchId,
+        trafficSourceId: taskRow.trafficSourceId,
+        platform,
+        campaignId: cid,
+        outcome: "completed",
+        failureReason: null,
+      });
+    }
+    return actions;
   }
 
   // take_campaign_live: no engine action — the 7-day cron schedules

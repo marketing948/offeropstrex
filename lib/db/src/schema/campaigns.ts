@@ -24,6 +24,7 @@ export const campaignStatusEnum = pgEnum("campaign_status", [
   "ready",
   "voluum_created",
   "live",
+  "ready_for_winner_review",
   "tested",
   "closed",
 ]);

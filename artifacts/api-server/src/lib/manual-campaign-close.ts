@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { Request } from "express";
 import type { Tx } from "../engine/types.ts";
 import {
@@ -11,6 +11,7 @@ import { applyAction } from "../engine/executor.ts";
 import { checkWorkspaceAccess } from "./workspace-access.ts";
 import { recordOperationalEvent } from "./operational-events.ts";
 import { resolveCampaignDisplayName } from "./campaign-display-name.ts";
+import { insertCampaignWinnersTx } from "./campaign-winners.ts";
 import {
   buildWinnerHandoffDescription,
   buildWinnerHandoffTitle,
@@ -254,6 +255,20 @@ export async function manualCloseCampaign(
       const winnerIds =
         input.winnerOfferIds?.filter((id) => Number.isInteger(id) && id > 0) ?? [];
 
+      if (winnerIds.length > 0) {
+        await insertCampaignWinnersTx(tx, {
+          workspaceId: row.workspaceId,
+          batchId: row.batchId,
+          campaignId: row.id,
+          trafficSourceId: row.trafficSourceId,
+          platform: row.platform,
+          offerIds: winnerIds,
+          source: "manual_close",
+          detectedByEmployeeId: actorId,
+          notes: input.note?.trim() || null,
+        });
+      }
+
       const displayName = resolveCampaignDisplayName({
         campaignName: row.campaignName,
         batchName: batch?.batchName,
@@ -283,24 +298,40 @@ export async function manualCloseCampaign(
         note: input.note,
       });
 
-      const [task] = await tx
-        .insert(todoTasksTable)
-        .values({
+      await applyAction(
+        {
+          type: "CreateTask",
           workspaceId: row.workspaceId,
-          employeeId: assigneeId,
-          relatedBatchId: row.batchId,
-          relatedCampaignId: row.id,
-          trafficSourceId: row.trafficSourceId,
-          title,
-          description,
-          taskType: "MANUAL",
-          priority: "high",
-          status: "TODO",
-        })
-        .returning({ id: todoTasksTable.id });
+          data: {
+            employeeId: assigneeId,
+            relatedBatchId: row.batchId,
+            relatedCampaignId: row.id,
+            trafficSourceId: row.trafficSourceId,
+            title,
+            description,
+            taskType: "MANUAL",
+            priority: "high",
+          },
+        },
+        tx,
+      );
 
-      if (task) {
-        followUpTaskIds.push(task.id);
+      const [createdFollowUp] = await tx
+        .select({ id: todoTasksTable.id })
+        .from(todoTasksTable)
+        .where(
+          and(
+            eq(todoTasksTable.workspaceId, row.workspaceId),
+            eq(todoTasksTable.relatedCampaignId, row.id),
+            eq(todoTasksTable.taskType, "MANUAL"),
+            eq(todoTasksTable.title, title),
+          ),
+        )
+        .orderBy(desc(todoTasksTable.id))
+        .limit(1);
+
+      if (createdFollowUp) {
+        followUpTaskIds.push(createdFollowUp.id);
       }
     }
 

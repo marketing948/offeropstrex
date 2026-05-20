@@ -31,6 +31,7 @@ export const taskTypeEnum = pgEnum("task_type", [
   "take_campaign_live",
   "find_winners",
   "all_traffic_sources_tested",
+  "review_winners_target",
   // Human / ops reminders only — never wired to CampaignOps rules.
   "MANUAL",
 ]);

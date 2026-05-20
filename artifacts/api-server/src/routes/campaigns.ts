@@ -42,10 +42,19 @@ import {
   ManualCloseError,
   manualCloseCampaign,
 } from "../lib/manual-campaign-close.ts";
+import { maybeMarkRunReadyForWinnerReview } from "../lib/winner-traffic-target.ts";
 
 const router: IRouter = Router();
 
-const VALID_STATUSES = ["draft", "ready", "voluum_created", "live", "tested", "closed"] as const;
+const VALID_STATUSES = [
+  "draft",
+  "ready",
+  "voluum_created",
+  "live",
+  "ready_for_winner_review",
+  "tested",
+  "closed",
+] as const;
 type CampaignStatus = (typeof VALID_STATUSES)[number];
 const LIVE_CAMPAIGN_STATUSES = ["live", "tested", "closed"] as const;
 type LiveCampaignStatus = (typeof LIVE_CAMPAIGN_STATUSES)[number];
@@ -68,6 +77,8 @@ const patchBodySchema = z.object({
   trafficSourceId: z.number().int().positive().nullable().optional(),
   campaignUrl: z.string().nullable().optional(),
   status: z.enum(VALID_STATUSES).optional(),
+  /** Beta: manual visits/clicks for testing `live` campaigns; can trigger traffic-target winner review. */
+  clicks: z.number().int().nonnegative().nullable().optional(),
 });
 
 const productionLiveBodySchema = z
@@ -300,18 +311,20 @@ router.patch("/campaigns/:id", async (req, res): Promise<void> => {
     });
     return;
   }
-  const { campaignName, trafficSourceId, campaignUrl, status } = parsed.data;
+  const { campaignName, trafficSourceId, campaignUrl, status, clicks: clicksPatch } = parsed.data;
   const fieldUpdates: Partial<typeof campaignsTable.$inferInsert> = {
     updatedAt: new Date(),
   };
   if (campaignName !== undefined) fieldUpdates.campaignName = campaignName;
   if (trafficSourceId !== undefined) fieldUpdates.trafficSourceId = trafficSourceId;
   if (campaignUrl !== undefined) fieldUpdates.campaignUrl = campaignUrl;
+  if (clicksPatch !== undefined) fieldUpdates.clicks = clicksPatch;
 
   const hasFieldUpdates =
     campaignName !== undefined
     || trafficSourceId !== undefined
-    || campaignUrl !== undefined;
+    || campaignUrl !== undefined
+    || clicksPatch !== undefined;
   const statusChanging = status !== undefined && status !== existing.status;
 
   if (existing.campaignPurpose !== "testing" && statusChanging) {
@@ -327,12 +340,35 @@ router.patch("/campaigns/:id", async (req, res): Promise<void> => {
       return;
     }
 
-    const [row] = await db
-      .update(campaignsTable)
-      .set(fieldUpdates)
-      .where(and(eq(campaignsTable.id, id), eq(campaignsTable.workspaceId, existing.workspaceId)))
-      .returning();
-    res.json(serialize(row));
+    try {
+      const row = await db.transaction(async (tx) => {
+        const [updated] = await tx
+          .update(campaignsTable)
+          .set(fieldUpdates)
+          .where(and(eq(campaignsTable.id, id), eq(campaignsTable.workspaceId, existing.workspaceId)))
+          .returning();
+        if (!updated) {
+          throw new Error("Campaign not found");
+        }
+        if (
+          clicksPatch !== undefined
+          && updated.campaignPurpose === "testing"
+          && updated.status === "live"
+        ) {
+          await maybeMarkRunReadyForWinnerReview(tx, updated.workspaceId, updated.id);
+        }
+        return updated;
+      });
+
+      res.json(serialize(row));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === "Campaign not found") {
+        res.status(404).json({ error: message });
+        return;
+      }
+      throw err;
+    }
     return;
   }
 

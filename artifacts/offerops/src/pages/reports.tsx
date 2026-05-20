@@ -23,6 +23,7 @@ import type {
 } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/lib/auth";
+import { authedJson } from "@/lib/api-fetch";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   AreaChart, Area, Cell,
@@ -31,6 +32,7 @@ import {
   BarChart3, Download, TrendingUp, TrendingDown,
   Users, Globe, Network, Target, Trophy, Rocket,
   ChevronUp, ChevronDown, ArrowRight, Minus,
+  Copy,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
@@ -160,7 +162,20 @@ const STATUS_LABEL: Record<string, string> = {
   COMPLETED:                     "Completed",
 };
 
-type ReportTab = "batches" | "sources" | "networks" | "employees" | "ops";
+type ReportTab = "batches" | "sources" | "networks" | "employees" | "ops" | "winners";
+
+type CampaignWinnerReportRow = {
+  detectedAt: string;
+  batchName: string | null;
+  trafficSourceName: string | null;
+  platform: string;
+  campaignName: string;
+  offerId: number;
+  source: string;
+  sourceLabel: string;
+  enteredBy: string | null;
+  notes: string | null;
+};
 
 // ─────────────────────────────────────────────
 // Main component
@@ -190,6 +205,8 @@ export default function Reports() {
   }, [activeWorkspaceId]);
 
   const [tab, setTab] = useState<ReportTab>("batches");
+  const [winnerRows, setWinnerRows] = useState<CampaignWinnerReportRow[]>([]);
+  const [winnersLoading, setWinnersLoading] = useState(false);
 
   // Data
   const wsParams = { workspace_id: activeWorkspaceId ?? 0 };
@@ -203,6 +220,28 @@ export default function Reports() {
   const { data: offers = [] }   = useListOffers(wsParams, wsQueryOpts(activeWorkspaceId, getListOffersQueryKey(wsParams)));
   const { data: tasks = [] }    = useListTodoTasks(wsParams, wsQueryOpts(activeWorkspaceId, getListTodoTasksQueryKey(wsParams)));
   const { data: employees = [] } = useListEmployees(wsParams, wsQueryOpts(activeWorkspaceId, getListEmployeesQueryKey(wsParams)));
+
+  useEffect(() => {
+    if (tab !== "winners" || !activeWorkspaceId) {
+      setWinnerRows([]);
+      return;
+    }
+    let cancelled = false;
+    setWinnersLoading(true);
+    authedJson<CampaignWinnerReportRow[]>(`/api/reports/campaign-winners?workspace_id=${activeWorkspaceId}`)
+      .then((data) => {
+        if (!cancelled) setWinnerRows(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setWinnerRows([]);
+      })
+      .finally(() => {
+        if (!cancelled) setWinnersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, activeWorkspaceId]);
 
   // Build batch perf lookup: batchId → aggregated perf
   const perfByBatch = useMemo(() => {
@@ -431,6 +470,7 @@ export default function Reports() {
     { id: "sources",   label: "Traffic Sources", icon: Globe },
     { id: "networks",  label: "Networks & GEOs", icon: Network },
     { id: "employees", label: "Employees",       icon: Users },
+    { id: "winners",   label: "Winners",         icon: Trophy },
   ];
 
   const selFilter = "h-8 text-sm px-2 rounded-md border border-input bg-background w-full";
@@ -1036,6 +1076,67 @@ export default function Reports() {
                 </tbody>
               </table>
             </div>
+          </Card>
+        </div>
+      )}
+
+      {tab === "winners" && (
+        <div className="space-y-4">
+          <Card className="border border-border shadow-sm overflow-hidden">
+            <CardHeader className="pb-2 flex flex-row items-center justify-between flex-wrap gap-2">
+              <CardTitle className="text-sm font-semibold">Campaign winners</CardTitle>
+              <button
+                type="button"
+                onClick={() => {
+                  const ids = [...new Set(winnerRows.map((r) => r.offerId))].join(", ");
+                  void navigator.clipboard.writeText(ids);
+                }}
+                className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground border border-border rounded-md px-2 py-1"
+                disabled={winnerRows.length === 0}
+              >
+                <Copy size={12} /> Copy offer IDs
+              </button>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {winnersLoading ? (
+                <p className="text-sm text-muted-foreground py-6">Loading…</p>
+              ) : winnerRows.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-6">No winner rows recorded yet.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="border-b border-border bg-muted/30">
+                      <tr>
+                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Date</th>
+                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Batch</th>
+                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Traffic source</th>
+                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Platform</th>
+                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Campaign</th>
+                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Offer ID</th>
+                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Source</th>
+                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Entered by</th>
+                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {winnerRows.map((r, i) => (
+                        <tr key={`${r.offerId}-${i}`} className="border-b border-border/60 hover:bg-muted/20">
+                          <td className="py-2 px-2 text-muted-foreground whitespace-nowrap">{r.detectedAt.slice(0, 10)}</td>
+                          <td className="py-2 px-2">{r.batchName ?? "—"}</td>
+                          <td className="py-2 px-2">{r.trafficSourceName ?? "—"}</td>
+                          <td className="py-2 px-2">{r.platform}</td>
+                          <td className="py-2 px-2 max-w-[200px] truncate" title={r.campaignName}>{r.campaignName}</td>
+                          <td className="py-2 px-2 font-mono tabular-nums">{r.offerId}</td>
+                          <td className="py-2 px-2">{r.sourceLabel}</td>
+                          <td className="py-2 px-2">{r.enteredBy ?? "—"}</td>
+                          <td className="py-2 px-2 text-muted-foreground max-w-[180px] truncate" title={r.notes ?? ""}>{r.notes ?? "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
           </Card>
         </div>
       )}

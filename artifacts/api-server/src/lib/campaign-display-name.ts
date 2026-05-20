@@ -53,3 +53,10 @@ export function formatCreateVoluumTaskTitle(
 export function formatFindWinnersTitle(displayName: string): string {
   return `Find winners for "${displayName}"`;
 }
+
+/** Title for post–traffic-target winner review (human enters offer IDs). */
+export function formatReviewWinnersTitle(batchName: string, trafficSourceName: string): string {
+  const b = batchName.trim() || "Batch";
+  const t = trafficSourceName.trim() || "Traffic source";
+  return `Review winners for "${b} — ${t}"`;
+}

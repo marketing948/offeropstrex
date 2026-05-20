@@ -26,6 +26,7 @@ import campaignsRouter from "./campaigns";
 import batchResultsRouter from "./batch-results";
 import workerAffiliateNetworksRouter from "./worker-affiliate-networks";
 import operationalEventsRouter from "./operational-events";
+import campaignWinnersReportRouter from "./campaign-winners-report";
 
 const router: IRouter = Router();
 
@@ -91,5 +92,6 @@ router.use(campaignsRouter);
 router.use(batchResultsRouter);
 router.use(workerAffiliateNetworksRouter);
 router.use(operationalEventsRouter);
+router.use(campaignWinnersReportRouter);
 
 export default router;

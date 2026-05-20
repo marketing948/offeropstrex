@@ -8,6 +8,7 @@ import { ensureProductionLiveCampaignSchema } from "../test-utils/ensure-product
 import {
   affiliateNetworksTable,
   batchTrafficSourceRunsTable,
+  campaignWinnersTable,
   campaignsTable,
   db,
   employeeWorkspaceAssignmentsTable,
@@ -241,6 +242,12 @@ describe("POST /campaigns/:id/manual-close", { concurrency: false }, () => {
     assert.match(tasks[0]!.title, /Move winners from .+ to working campaign/);
     assert.match(tasks[0]!.description ?? "", /---offerops-winner-handoff---/);
     assert.match(tasks[0]!.description ?? "", /"winnerOfferIds":\[101,102\]/);
+
+    const cw = await db.select().from(campaignWinnersTable).where(eq(campaignWinnersTable.campaignId, campaign.id));
+    assert.equal(cw.length, 2);
+    assert.ok(cw.some((w) => w.offerId === 101));
+    assert.ok(cw.some((w) => w.offerId === 102));
+    assert.ok(cw.every((w) => w.source === "manual_close"));
   });
 
   test("winners_found signals missing working campaign and creates setup task", async () => {

@@ -465,10 +465,12 @@ router.post("/testing-batches", async (req, res): Promise<void> => {
             batchId: inserted.id,
             trafficSourceId: source.id,
             position: source.position,
-            status: isSelectedSource ? "active" as const : "pending" as const,
-            iosStatus: isSelectedSource ? "active" as const : "pending" as const,
-            androidStatus: isSelectedSource ? "active" as const : "pending" as const,
+            status: isSelectedSource ? ("active" as const) : ("pending" as const),
+            iosStatus: isSelectedSource ? ("active" as const) : ("pending" as const),
+            androidStatus: isSelectedSource ? ("active" as const) : ("pending" as const),
             startedAt: isSelectedSource ? now : null,
+            targetAvgVisitsPerOffer: inserted.averageVisitsThresholdPerOffer,
+            offerCount: inserted.numberOfOffers,
           };
         }),
       );
