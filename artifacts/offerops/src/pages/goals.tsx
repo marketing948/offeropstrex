@@ -12,6 +12,12 @@ import {
   RANK_COLORS, DEFAULT_CONFIG,
 } from "@/lib/goals-config";
 import type { EmployeeScores } from "@/lib/goals-config";
+import {
+  EXP_POINTS_THIS_MONTH,
+  expComboReward,
+  expLeaderboardTotal,
+  expRankThreshold,
+} from "@/lib/exp-labels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -115,7 +121,7 @@ export default function Goals() {
                 <div>
                   <p className={`text-xs font-bold uppercase tracking-widest ${myColors.text}`}>{myRank.name}</p>
                   <p className="text-4xl font-black leading-none">{myScore.total.toLocaleString()}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">points this month</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{EXP_POINTS_THIS_MONTH}</p>
                 </div>
               </div>
 
@@ -132,7 +138,8 @@ export default function Goals() {
                     })()}
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    <span className="font-semibold text-foreground">{myNextRank.minScore - myScore.total}</span> points to {myNextRank.name}
+                    <span className="font-semibold text-foreground">{(myNextRank.minScore - myScore.total).toLocaleString()}</span>{" "}
+                    EXP Points to {myNextRank.name}
                   </p>
                 </div>
               ) : (
@@ -152,7 +159,7 @@ export default function Goals() {
               </div>
             )}
             {myScore.comboBonus > 0 && (
-              <p className="text-xs text-amber-700 mt-1.5 font-medium">+{myScore.comboBonus} combo bonus included</p>
+              <p className="text-xs text-amber-700 mt-1.5 font-medium">+{myScore.comboBonus} combo EXP bonus included</p>
             )}
           </CardContent>
         </Card>
@@ -208,7 +215,7 @@ export default function Goals() {
                       <span className={`text-[10px] font-semibold ${col.text}`}>{rank.name}</span>
                     </div>
                     <div className="text-right">
-                      <p className="text-sm font-bold">{s.total.toLocaleString()}</p>
+                      <p className="text-sm font-bold">{expLeaderboardTotal(s.total)}</p>
                       <p className="text-[10px] text-muted-foreground">{s.winners}W · {s.scaleTasks} scaled</p>
                     </div>
                   </div>
@@ -233,7 +240,7 @@ export default function Goals() {
                 <div key={cb.id} className={`rounded-lg border p-3 ${earned ? "border-amber-300 bg-amber-50" : "border-border bg-card"}`}>
                   <div className="flex items-center justify-between mb-1">
                     <span className={`text-sm font-semibold ${earned ? "text-amber-800" : ""}`}>{cb.name}</span>
-                    <span className={`text-xs font-bold ${earned ? "text-amber-700" : "text-primary"}`}>+{cb.rewardPoints} pts</span>
+                    <span className={`text-xs font-bold ${earned ? "text-amber-700" : "text-primary"}`}>{expComboReward(cb.rewardPoints)}</span>
                   </div>
                   <p className="text-xs text-muted-foreground">{cb.description}</p>
                   {earned && <p className="text-xs font-semibold text-amber-700 mt-1.5 flex items-center gap-1"><Star size={10} /> Earned!</p>}
@@ -259,7 +266,7 @@ export default function Goals() {
                 <div key={r.id} className={`rounded-lg border text-center p-3 ${isCurrent ? `${col.border} border-2 ${col.bg}` : "border-border bg-muted/20"}`}>
                   <Ic size={20} className={`mx-auto mb-1 ${col.text}`} />
                   <p className={`text-xs font-bold ${col.text}`}>{r.name}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">{r.minScore.toLocaleString()}+ pts</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{expRankThreshold(r.minScore)}</p>
                   {isCurrent && <p className="text-[10px] font-bold text-primary mt-1">← You</p>}
                 </div>
               );
@@ -282,7 +289,7 @@ export default function Goals() {
               <table className="w-full">
                 <thead className="border-b bg-muted/30">
                   <tr>
-                    {["Employee","Score","Rank","Batches","Winners","Scale","Opts","Combo Pts","Projected $"].map(h => (
+                    {["Employee","Score","Rank","Batches","Winners","Scale","Opts","Combo EXP","Projected $"].map(h => (
                       <th key={h} className="text-left text-xs font-semibold text-muted-foreground py-2 px-3 whitespace-nowrap">{h}</th>
                     ))}
                   </tr>

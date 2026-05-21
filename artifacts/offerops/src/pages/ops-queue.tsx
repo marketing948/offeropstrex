@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { wsQueryOpts } from "@/lib/ws-query";
+import { expLeaderboardTotal } from "@/lib/exp-labels";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useGetQueues, useGoLiveBatch, useMarkBatchReady, useStartOptimization,
@@ -869,7 +870,7 @@ export default function OpsQueue() {
                         <span className={`text-[10px] font-semibold ${s.rankColor.text}`}>{s.rank.name}</span>
                       </div>
                       <div className="text-right flex-shrink-0">
-                        <p className="text-sm font-black">{s.total.toLocaleString()}<span className="text-[10px] text-muted-foreground ml-0.5">pts</span></p>
+                        <p className="text-sm font-black">{expLeaderboardTotal(s.total)}</p>
                         <div className="flex items-center justify-end gap-2 text-[10px] text-muted-foreground">
                           {s.winners > 0 && <span className="text-green-600 font-medium flex items-center gap-0.5"><Trophy size={9} />{s.winners}</span>}
                           <span>{s.batches}B</span>
