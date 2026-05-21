@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
-import { eq, and, gte, lt, sql } from "drizzle-orm";
-import { db, performanceTable, testingBatchesTable, batchResultsTable } from "@workspace/db";
+import { and, eq, sql } from "drizzle-orm";
+import { db, performanceTable, testingBatchesTable } from "@workspace/db";
 import {
   CreatePerformanceBody,
   UpdatePerformanceBody,
@@ -9,6 +9,10 @@ import {
   ListPerformanceQueryParams,
 } from "@workspace/api-zod";
 import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access";
+import {
+  queryPerformanceListRows,
+  resolveMetricsDateRange,
+} from "../lib/campaign-daily-metrics-aggregate.ts";
 
 const router: IRouter = Router();
 
@@ -25,24 +29,8 @@ function serializePerf(perf: typeof performanceTable.$inferSelect) {
   };
 }
 
-// Pivot Phase 6 (Task #29): GET /performance now sources its rows
-// from `batch_results` (the manual P&L table) instead of the legacy
-// Voluum-derived `performance` table. The Performance shape is kept
-// intact so existing callers (ops-queue, reports, performance pages)
-// continue to work unchanged — only the data origin changes.
-//
-// Mapping per row:
-//   id          → batch_results.id
-//   batchId     → batch_results.batch_id
-//   date        → DATE(batch_results.created_at) as text (YYYY-MM-DD)
-//   spend       → batch_results.cost
-//   clicks      → batch_results.clicks
-//   conversions → batch_results.conversions
-//   revenue     → batch_results.revenue
-//   profit      → revenue - cost (computed)
-//   roi         → batch_results.roi
-//   cpa, epc,
-//   cvr         → derived (cost/conv, revenue/clicks, conv/clicks)
+// GET /performance reads imported Voluum daily metrics (campaign_daily_metrics).
+// Visits are exposed as `clicks` for backward-compatible API shape.
 router.get("/performance", async (req, res): Promise<void> => {
   const workspaceId = await requireWorkspaceFromQuery(req, res);
   if (workspaceId === null) return;
@@ -53,59 +41,20 @@ router.get("/performance", async (req, res): Promise<void> => {
     return;
   }
 
-  const conditions = [eq(batchResultsTable.workspaceId, workspaceId)];
-  if (params.data.batch_id) {
-    conditions.push(eq(batchResultsTable.batchId, params.data.batch_id));
-  }
-  if (params.data.date_from) {
-    conditions.push(gte(batchResultsTable.createdAt, new Date(`${params.data.date_from}T00:00:00.000Z`)));
-  }
-  if (params.data.date_to) {
-    const next = new Date(`${params.data.date_to}T00:00:00.000Z`);
-    next.setUTCDate(next.getUTCDate() + 1);
-    conditions.push(lt(batchResultsTable.createdAt, next));
+  const range = resolveMetricsDateRange(params.data.date_from, params.data.date_to);
+  if ("error" in range) {
+    res.status(400).json({ error: range.error });
+    return;
   }
 
-  const rows = await db
-    .select({
-      id: batchResultsTable.id,
-      batchId: batchResultsTable.batchId,
-      date: sql<string>`to_char(${batchResultsTable.createdAt}, 'YYYY-MM-DD')`,
-      cost: batchResultsTable.cost,
-      clicks: batchResultsTable.clicks,
-      conversions: batchResultsTable.conversions,
-      revenue: batchResultsTable.revenue,
-      roi: batchResultsTable.roi,
-    })
-    .from(batchResultsTable)
-    .innerJoin(testingBatchesTable, eq(batchResultsTable.batchId, testingBatchesTable.id))
-    .where(and(...conditions))
-    .orderBy(batchResultsTable.createdAt);
+  const rows = await queryPerformanceListRows({
+    workspaceId,
+    dateFrom: range.dateFrom,
+    dateTo: range.dateTo,
+    batchId: params.data.batch_id,
+  });
 
-  res.json(rows.map(r => {
-    const cost = Number(r.cost ?? 0);
-    const revenue = Number(r.revenue ?? 0);
-    const profit = revenue - cost;
-    const clicks = r.clicks ?? 0;
-    const conversions = r.conversions ?? 0;
-    const cpa = conversions > 0 ? cost / conversions : null;
-    const epc = clicks > 0 ? revenue / clicks : null;
-    const cvr = clicks > 0 ? (conversions / clicks) * 100 : null;
-    return {
-      id: r.id,
-      batchId: r.batchId,
-      date: r.date,
-      spend: cost,
-      clicks,
-      conversions,
-      revenue,
-      profit,
-      roi: r.roi != null ? Number(r.roi) : null,
-      cpa,
-      epc,
-      cvr,
-    };
-  }));
+  res.json(rows);
 });
 
 router.post("/performance", async (req, res): Promise<void> => {

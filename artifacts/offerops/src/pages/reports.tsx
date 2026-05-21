@@ -481,7 +481,9 @@ export default function Reports() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Reports</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Historical analysis, employee performance, and business insights</p>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Historical analysis from imported Voluum daily metrics (date range below).
+          </p>
         </div>
       </div>
 
@@ -672,7 +674,7 @@ export default function Reports() {
             <button
               onClick={() => exportCSV(
                 "batches-report.csv",
-                ["Batch", "Network", "GEO", "Source", "Employee", "Status", "Clicks", "Spend", "Revenue", "Profit", "ROI%", "Conversions", "Winners", "Losers", "Days Running"],
+                ["Batch", "Network", "GEO", "Source", "Employee", "Status", "Visits", "Spend", "Revenue", "Profit", "ROI%", "Conversions", "Winners", "Losers", "Days Running"],
                 sortedBatches.map(r => [r.batchName, r.network, r.geo, r.trafficSource, r.employee, r.status, r.clicks, fmt$(r.spend), fmt$(r.revenue), fmt$(r.profit), r.roi.toFixed(1), r.conversions, r.winners, r.losers, r.daysRunning])
               )}
               className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground border border-border rounded-md px-2.5 py-1.5 hover:bg-muted/50 transition-colors"
@@ -692,7 +694,7 @@ export default function Reports() {
                     <ThSort label="Source" col="trafficSource" sort={batchSort} onToggle={batchSort.toggle} />
                     {isAdmin && <ThSort label="Employee" col="employee" sort={batchSort} onToggle={batchSort.toggle} />}
                     <th className="text-left text-xs font-semibold text-muted-foreground py-2 px-3">Status</th>
-                    <ThSort label="Clicks" col="clicks" sort={batchSort} onToggle={batchSort.toggle} />
+                    <ThSort label="Visits" col="clicks" sort={batchSort} onToggle={batchSort.toggle} />
                     <ThSort label="Spend" col="spend" sort={batchSort} onToggle={batchSort.toggle} />
                     <ThSort label="Revenue" col="revenue" sort={batchSort} onToggle={batchSort.toggle} />
                     <ThSort label="Profit" col="profit" sort={batchSort} onToggle={batchSort.toggle} />
@@ -804,7 +806,7 @@ export default function Reports() {
             <button
               onClick={() => exportCSV(
                 "traffic-sources-report.csv",
-                ["Traffic Source", "Batches", "Clicks", "Spend", "Revenue", "Profit", "ROI%", "Conversions", "Winners", "Losers", "Win Rate%"],
+                ["Traffic Source", "Batches", "Visits", "Spend", "Revenue", "Profit", "ROI%", "Conversions", "Winners", "Losers", "Win Rate%"],
                 sortedSrc.map(r => [r.source, r.batches, r.clicks, fmt$(r.spend), fmt$(r.revenue), fmt$(r.profit), r.roi.toFixed(1), r.conversions, r.winners, r.losers, r.winnerRate.toFixed(1)])
               )}
               className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground border border-border rounded-md px-2.5 py-1.5 hover:bg-muted/50 transition-colors"
@@ -820,7 +822,7 @@ export default function Reports() {
                   <tr>
                     <ThSort label="Traffic Source" col="source" sort={srcSort} onToggle={srcSort.toggle} />
                     <ThSort label="Batches" col="batches" sort={srcSort} onToggle={srcSort.toggle} />
-                    <ThSort label="Clicks" col="clicks" sort={srcSort} onToggle={srcSort.toggle} />
+                    <ThSort label="Visits" col="clicks" sort={srcSort} onToggle={srcSort.toggle} />
                     <ThSort label="Spend" col="spend" sort={srcSort} onToggle={srcSort.toggle} />
                     <ThSort label="Revenue" col="revenue" sort={srcSort} onToggle={srcSort.toggle} />
                     <ThSort label="Profit" col="profit" sort={srcSort} onToggle={srcSort.toggle} />
@@ -891,7 +893,7 @@ export default function Reports() {
             <button
               onClick={() => exportCSV(
                 "network-geo-report.csv",
-                ["Network", "GEO", "Batches", "Clicks", "Spend", "Revenue", "Profit", "ROI%", "Conversions", "Winners", "Win Rate%", "Best Source"],
+                ["Network", "GEO", "Batches", "Visits", "Spend", "Revenue", "Profit", "ROI%", "Conversions", "Winners", "Win Rate%", "Best Source"],
                 sortedNet.map(r => [r.network, r.geo, r.batches, r.clicks, fmt$(r.spend), fmt$(r.revenue), fmt$(r.profit), r.roi.toFixed(1), r.conversions, r.winners, r.winnerRate.toFixed(1), r.bestSource])
               )}
               className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground border border-border rounded-md px-2.5 py-1.5 hover:bg-muted/50 transition-colors"
@@ -908,7 +910,7 @@ export default function Reports() {
                     <ThSort label="Network" col="network" sort={netSort} onToggle={netSort.toggle} />
                     <ThSort label="GEO" col="geo" sort={netSort} onToggle={netSort.toggle} />
                     <ThSort label="Batches" col="batches" sort={netSort} onToggle={netSort.toggle} />
-                    <ThSort label="Clicks" col="clicks" sort={netSort} onToggle={netSort.toggle} />
+                    <ThSort label="Visits" col="clicks" sort={netSort} onToggle={netSort.toggle} />
                     <ThSort label="Spend" col="spend" sort={netSort} onToggle={netSort.toggle} />
                     <ThSort label="Revenue" col="revenue" sort={netSort} onToggle={netSort.toggle} />
                     <ThSort label="Profit" col="profit" sort={netSort} onToggle={netSort.toggle} />

@@ -23,6 +23,11 @@ import {
   GetGoalProgressQueryParams,
 } from "@workspace/api-zod";
 import { requireWorkspaceFromQuery } from "../lib/workspace-access";
+import {
+  queryDashboardBreakdowns,
+  queryWorkspaceMetricTotals,
+  resolveMetricsDateRange,
+} from "../lib/campaign-daily-metrics-aggregate.ts";
 
 const router: IRouter = Router();
 
@@ -227,11 +232,18 @@ router.get("/dashboard/admin-summary", async (req, res): Promise<void> => {
       ),
     );
 
-  // If an explicit date range is supplied, prefer it over the weekly
-  // window so admin filters drive every KPI in the response.
-  const periodStart = dateFromRaw ?? weekStart;
-  const periodEnd = dateToRaw;
-  const week = await computeProgress(workspaceId, employeeId, periodStart, periodEnd);
+  const metricsRange = resolveMetricsDateRange(dateFromRaw, dateToRaw);
+  if ("error" in metricsRange) {
+    res.status(400).json({ error: metricsRange.error });
+    return;
+  }
+
+  const week = await computeProgress(
+    workspaceId,
+    employeeId,
+    metricsRange.dateFrom,
+    metricsRange.dateTo,
+  );
 
   // Open tasks (workspace-wide unless scoped to an employee).
   const [openTasks] = await db
@@ -245,46 +257,21 @@ router.get("/dashboard/admin-summary", async (req, res): Promise<void> => {
       ),
     );
 
-  // P&L: aggregate batch_results joined to batches so we can apply the
-  // employee/geo/network/traffic-source filters that already live on the
-  // batch row. date_from/date_to scope batch_results.created_at when
-  // present (interpreted as the period the result was recorded).
-  const dateFrom = dateFromRaw ? startOfDay(dateFromRaw) : undefined;
-  const dateToExclusive = dateToRaw
-    ? new Date(startOfDay(dateToRaw).getTime() + 24 * 60 * 60 * 1000)
-    : undefined;
+  const metricTotals = await queryWorkspaceMetricTotals({
+    workspaceId,
+    dateFrom: metricsRange.dateFrom,
+    dateTo: metricsRange.dateTo,
+    employeeId,
+    geo,
+    affiliateNetwork,
+    trafficSource,
+  });
 
-  const [perf] = await db
-    .select({
-      cost: sum(batchResultsTable.cost),
-      revenue: sum(batchResultsTable.revenue),
-    })
-    .from(batchResultsTable)
-    .innerJoin(
-      testingBatchesTable,
-      eq(batchResultsTable.batchId, testingBatchesTable.id),
-    )
-    .where(
-      and(
-        eq(batchResultsTable.workspaceId, workspaceId),
-        ...(employeeId ? [eq(testingBatchesTable.employeeId, employeeId)] : []),
-        ...(geo ? [eq(testingBatchesTable.geo, geo)] : []),
-        ...(affiliateNetwork
-          ? [eq(testingBatchesTable.affiliateNetwork, affiliateNetwork)]
-          : []),
-        ...(trafficSource
-          ? [eq(testingBatchesTable.trafficSource, trafficSource)]
-          : []),
-        ...(dateFrom ? [gte(batchResultsTable.createdAt, dateFrom)] : []),
-        ...(dateToExclusive ? [lt(batchResultsTable.createdAt, dateToExclusive)] : []),
-      ),
-    );
-
-  const totalCost = Number(perf?.cost ?? 0);
-  const totalRevenue = Number(perf?.revenue ?? 0);
-  const totalProfit = totalRevenue - totalCost;
-  const averageRoi = totalCost > 0
-    ? Math.round((totalProfit / totalCost) * 100)
+  const totalCost = metricTotals.cost;
+  const totalRevenue = metricTotals.revenue;
+  const totalProfit = metricTotals.profit;
+  const averageRoi = metricTotals.roi != null
+    ? Math.round(metricTotals.roi * 100)
     : 0;
 
   // Phase 6 manual-workflow KPIs: total batches created (lifetime),
@@ -296,10 +283,9 @@ router.get("/dashboard/admin-summary", async (req, res): Promise<void> => {
     .from(testingBatchesTable)
     .where(eq(testingBatchesTable.workspaceId, workspaceId));
 
-  const winnersStart = startOfDay(periodStart);
-  const winnersEnd = periodEnd
-    ? new Date(startOfDay(periodEnd).getTime() + 24 * 60 * 60 * 1000)
-    : undefined;
+  const winnersStart = startOfDay(metricsRange.dateFrom);
+  const winnersEndExclusive = new Date(`${metricsRange.dateTo}T00:00:00.000Z`);
+  winnersEndExclusive.setUTCDate(winnersEndExclusive.getUTCDate() + 1);
   const [winnersRow] = await db
     .select({ s: sum(batchResultsTable.winnersCount) })
     .from(batchResultsTable)
@@ -308,7 +294,7 @@ router.get("/dashboard/admin-summary", async (req, res): Promise<void> => {
       and(
         eq(batchResultsTable.workspaceId, workspaceId),
         gte(batchResultsTable.createdAt, winnersStart),
-        ...(winnersEnd ? [lt(batchResultsTable.createdAt, winnersEnd)] : []),
+        lt(batchResultsTable.createdAt, winnersEndExclusive),
         ...(employeeId ? [eq(testingBatchesTable.employeeId, employeeId)] : []),
       ),
     );
@@ -572,139 +558,21 @@ router.get("/dashboard/goal-progress", async (req, res): Promise<void> => {
   res.json(result);
 });
 
-// Phase 6: four breakdown views over manual data — by worker, by
-// traffic source, by GEO, by affiliate network. Metrics aggregated
-// from batch_results per group; batch counts and winner totals come
-// from the batch row + result row directly.
+// Breakdown financial metrics from campaign_daily_metrics (default: current week).
 router.get("/dashboard/breakdowns", async (req, res): Promise<void> => {
   const workspaceId = await requireWorkspaceFromQuery(req, res);
   if (workspaceId === null) return;
 
-  // One pass over batches (LEFT JOIN batch_results) so groups with no
-  // results still appear with zeroed metrics.
-  const rows = await db
-    .select({
-      batchId: testingBatchesTable.id,
-      employeeId: testingBatchesTable.employeeId,
-      employeeName: employeesTable.name,
-      trafficSource: testingBatchesTable.trafficSource,
-      geo: testingBatchesTable.geo,
-      affiliateNetwork: testingBatchesTable.affiliateNetwork,
-      status: testingBatchesTable.status,
-      clicks: batchResultsTable.clicks,
-      cost: batchResultsTable.cost,
-      revenue: batchResultsTable.revenue,
-      conversions: batchResultsTable.conversions,
-      winnersCount: batchResultsTable.winnersCount,
-      hasResult: sql<number>`CASE WHEN ${batchResultsTable.id} IS NOT NULL THEN 1 ELSE 0 END`,
-    })
-    .from(testingBatchesTable)
-    .leftJoin(
-      employeesTable,
-      eq(testingBatchesTable.employeeId, employeesTable.id),
-    )
-    .leftJoin(
-      batchResultsTable,
-      eq(batchResultsTable.batchId, testingBatchesTable.id),
-    )
-    .where(eq(testingBatchesTable.workspaceId, workspaceId));
-
-  type Bucket = {
-    key: string;
-    label: string;
-    batches: number;
-    tested: number;
-    clicks: number;
-    cost: number;
-    revenue: number;
-    conversions: number;
-    winners: number;
-  };
-
-  function makeBucket(key: string, label: string): Bucket {
-    return {
-      key,
-      label,
-      batches: 0,
-      tested: 0,
-      clicks: 0,
-      cost: 0,
-      revenue: 0,
-      conversions: 0,
-      winners: 0,
-    };
+  const dateFromRaw = req.query.date_from as string | undefined;
+  const dateToRaw = req.query.date_to as string | undefined;
+  const range = resolveMetricsDateRange(dateFromRaw, dateToRaw);
+  if ("error" in range) {
+    res.status(400).json({ error: range.error });
+    return;
   }
 
-  const byWorker = new Map<string, Bucket>();
-  const byTrafficSource = new Map<string, Bucket>();
-  const byGeo = new Map<string, Bucket>();
-  const byNetwork = new Map<string, Bucket>();
-
-  function add(map: Map<string, Bucket>, key: string, label: string, r: typeof rows[number]) {
-    let b = map.get(key);
-    if (!b) {
-      b = makeBucket(key, label);
-      map.set(key, b);
-    }
-    b.batches += 1;
-    if (r.hasResult) {
-      b.tested += 1;
-      b.clicks += Number(r.clicks ?? 0);
-      b.cost += Number(r.cost ?? 0);
-      b.revenue += Number(r.revenue ?? 0);
-      b.conversions += Number(r.conversions ?? 0);
-      b.winners += Number(r.winnersCount ?? 0);
-    }
-  }
-
-  for (const r of rows) {
-    add(
-      byWorker,
-      String(r.employeeId),
-      r.employeeName ?? `Employee #${r.employeeId}`,
-      r,
-    );
-    add(
-      byTrafficSource,
-      r.trafficSource || "(unset)",
-      r.trafficSource || "(unset)",
-      r,
-    );
-    add(byGeo, r.geo || "(unset)", r.geo || "(unset)", r);
-    add(
-      byNetwork,
-      r.affiliateNetwork || "(unset)",
-      r.affiliateNetwork || "(unset)",
-      r,
-    );
-  }
-
-  function finalize(map: Map<string, Bucket>) {
-    return Array.from(map.values()).map(b => {
-      const profit = b.revenue - b.cost;
-      const roi = b.cost > 0 ? Math.round((profit / b.cost) * 100) : 0;
-      return {
-        key: b.key,
-        label: b.label,
-        batches: b.batches,
-        tested: b.tested,
-        clicks: b.clicks,
-        cost: b.cost,
-        revenue: b.revenue,
-        profit,
-        roi,
-        conversions: b.conversions,
-        winners: b.winners,
-      };
-    });
-  }
-
-  res.json({
-    byWorker: finalize(byWorker),
-    byTrafficSource: finalize(byTrafficSource),
-    byGeo: finalize(byGeo),
-    byNetwork: finalize(byNetwork),
-  });
+  const breakdowns = await queryDashboardBreakdowns(workspaceId, range);
+  res.json(breakdowns);
 });
 
 export default router;

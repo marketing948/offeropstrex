@@ -455,7 +455,7 @@ function BreakdownTable({
                   <Th col="label" align="left">{keyLabel}</Th>
                   <Th col="batches">Batches</Th>
                   <Th col="tested">Tested</Th>
-                  <Th col="clicks">Clicks</Th>
+                  <Th col="clicks">Visits</Th>
                   <Th col="cost">Spend</Th>
                   <Th col="revenue">Revenue</Th>
                   <Th col="profit">Profit</Th>
