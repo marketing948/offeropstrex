@@ -178,7 +178,7 @@ export interface EmployeeScores extends EmployeeMetrics {
   total: number;
 }
 
-function getActionPoints(cfg: GoalsConfig, actionId: string): number {
+export function getActionPoints(cfg: GoalsConfig, actionId: string): number {
   const action = cfg.pointActions.find(a => a.id === actionId && a.enabled);
   if (!action) return 0;
   let pts = action.points;

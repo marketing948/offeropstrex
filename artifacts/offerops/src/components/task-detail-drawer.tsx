@@ -68,6 +68,8 @@ import {
   winnerHandoffHumanDescription,
 } from "@/lib/winner-handoff";
 import { Copy } from "lucide-react";
+import { useExpFeedback } from "@/components/exp-feedback/exp-feedback-context";
+import type { TaskCompletionExpOptions } from "@/lib/exp-task-points";
 
 type Platform = "ios" | "android";
 
@@ -91,6 +93,7 @@ export function TaskDetailDrawer({
   const qc = useQueryClient();
 
   const updateTask = useUpdateTodoTask();
+  const { celebrateTaskCompletion } = useExpFeedback();
 
   function invalidate() {
     if (!activeWorkspaceId) return;
@@ -117,7 +120,7 @@ export function TaskDetailDrawer({
       throw e;
     }
     invalidate();
-    toast({ title: "Task marked done" });
+    celebrateTaskCompletion(task);
     onClose();
   }
 
@@ -541,15 +544,20 @@ function MoveWinnersForm({ onDone, onCancel }: { onDone: () => Promise<void>; on
 // CampaignOps redesign — task completion forms.
 // ─────────────────────────────────────────────────────────────────
 
-function useCompleteTask() {
+function useCompleteTask(task: TodoTask) {
   const { toast } = useToast();
-  return async function complete(taskId: number, body: unknown) {
+  const { celebrateTaskCompletion } = useExpFeedback();
+  return async function complete(
+    taskId: number,
+    body: unknown,
+    expOpts?: TaskCompletionExpOptions,
+  ) {
     try {
       await authedJson(`/api/todo-tasks/${taskId}/complete`, {
         method: "POST",
         body: JSON.stringify(body),
       });
-      toast({ title: "Task completed" });
+      celebrateTaskCompletion(task, expOpts);
       return true;
     } catch (e: unknown) {
       toast({
@@ -563,7 +571,7 @@ function useCompleteTask() {
 }
 
 function CreateVoluumCampaignForm({ task, platform, onCompleted }: { task: TodoTask; platform: Platform; onCompleted: () => void }) {
-  const complete = useCompleteTask();
+  const complete = useCompleteTask(task);
   const { toast } = useToast();
   const [voluumCampaignId, setVoluumCampaignId] = useState("");
   const [campaignUrl, setCampaignUrl] = useState("");
@@ -622,7 +630,7 @@ function CreateVoluumCampaignForm({ task, platform, onCompleted }: { task: TodoT
 }
 
 function TakeCampaignLiveForm({ task, onCompleted }: { task: TodoTask; onCompleted: () => void }) {
-  const complete = useCompleteTask();
+  const complete = useCompleteTask(task);
   const [tsCampaignId, setTsCampaignId] = useState("");
   const [pending, setPending] = useState(false);
 
@@ -653,7 +661,7 @@ function TakeCampaignLiveForm({ task, onCompleted }: { task: TodoTask; onComplet
 }
 
 function FindWinnersForm({ task, onCompleted }: { task: TodoTask; onCompleted: () => void }) {
-  const complete = useCompleteTask();
+  const complete = useCompleteTask(task);
   const [winners, setWinners] = useState("0");
   const [revenue, setRevenue] = useState("");
   const [cost, setCost] = useState("");
@@ -665,14 +673,19 @@ function FindWinnersForm({ task, onCompleted }: { task: TodoTask; onCompleted: (
   async function submit() {
     if (revenue === "" || cost === "") return;
     setPending(true);
-    const ok = await complete(task.id, {
-      winnersCount: Number(winners) || 0,
-      revenue: Number(revenue),
-      cost: Number(cost),
-      clicks: clicks ? Number(clicks) : null,
-      conversions: conversions ? Number(conversions) : null,
-      notes: notes.trim() || null,
-    });
+    const winnerCount = Number(winners) || 0;
+    const ok = await complete(
+      task.id,
+      {
+        winnersCount: winnerCount,
+        revenue: Number(revenue),
+        cost: Number(cost),
+        clicks: clicks ? Number(clicks) : null,
+        conversions: conversions ? Number(conversions) : null,
+        notes: notes.trim() || null,
+      },
+      { winnerAward: winnerCount > 0 },
+    );
     setPending(false);
     if (ok) onCompleted();
   }
@@ -716,7 +729,7 @@ function FindWinnersForm({ task, onCompleted }: { task: TodoTask; onCompleted: (
 }
 
 function ReviewWinnersTargetForm({ task, onCompleted }: { task: TodoTask; onCompleted: () => void }) {
-  const complete = useCompleteTask();
+  const complete = useCompleteTask(task);
   const { toast } = useToast();
   const [mode, setMode] = useState<"winners" | "no_winners">("winners");
   const [offerIdsRaw, setOfferIdsRaw] = useState("");
@@ -735,11 +748,15 @@ function ReviewWinnersTargetForm({ task, onCompleted }: { task: TodoTask; onComp
         return;
       }
       setPending(true);
-      const ok = await complete(task.id, {
-        outcome: "winners",
-        winnerOfferIds: idRes.ok,
-        notes: notes.trim() || null,
-      });
+      const ok = await complete(
+        task.id,
+        {
+          outcome: "winners",
+          winnerOfferIds: idRes.ok,
+          notes: notes.trim() || null,
+        },
+        { winnerAward: true },
+      );
       setPending(false);
       if (ok) onCompleted();
       return;
@@ -793,7 +810,7 @@ function ReviewWinnersTargetForm({ task, onCompleted }: { task: TodoTask; onComp
 }
 
 function AllTrafficSourcesTestedForm({ task, onCompleted }: { task: TodoTask; onCompleted: () => void }) {
-  const complete = useCompleteTask();
+  const complete = useCompleteTask(task);
   const [pending, setPending] = useState(false);
   async function submit() {
     setPending(true);
@@ -821,7 +838,7 @@ function ManualTaskForm({
   onCompleted: () => void;
 }) {
   const { toast } = useToast();
-  const complete = useCompleteTask();
+  const complete = useCompleteTask(task);
   const [pending, setPending] = useState(false);
   const handoff = parseWinnerHandoffContext(task.description);
   const humanDescription = winnerHandoffHumanDescription(task.description);

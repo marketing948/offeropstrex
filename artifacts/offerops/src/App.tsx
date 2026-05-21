@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { WorkspaceProvider } from "@/lib/workspace-context";
+import { ExpFeedbackProvider } from "@/components/exp-feedback/exp-feedback-context";
 import { Layout } from "@/components/layout";
 
 import Login from "@/pages/login";
@@ -157,9 +158,11 @@ function App() {
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
           <AuthProvider>
             <WorkspaceProvider>
-              <Layout>
-                <Router />
-              </Layout>
+              <ExpFeedbackProvider>
+                <Layout>
+                  <Router />
+                </Layout>
+              </ExpFeedbackProvider>
             </WorkspaceProvider>
           </AuthProvider>
         </WouterRouter>
