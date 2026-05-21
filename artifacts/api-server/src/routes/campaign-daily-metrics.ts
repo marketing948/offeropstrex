@@ -7,13 +7,17 @@ import {
   assertCanUpsertCampaignDailyMetrics,
   CampaignDailyMetricsError,
 } from "../lib/campaign-daily-metrics-access.ts";
-import { deriveProfitAndRoi } from "../lib/campaign-daily-metrics-math.ts";
+import { deriveCampaignMetricFields } from "../lib/campaign-daily-metrics-math.ts";
+import {
+  confirmVoluumMetricsImport,
+  previewVoluumMetricsImport,
+} from "../lib/voluum-metrics-import.ts";
+import { appendOperationalActivity } from "../lib/operational-activity-feed.ts";
 import {
   appendLiveCampaignVisibilityConditions,
   testingBatchJoin,
 } from "../lib/live-campaign-scope.ts";
-import { appendOperationalActivity } from "../lib/operational-activity-feed.ts";
-import { manualMetricsSubmittedTitle } from "../lib/operational-activity-titles.ts";
+import { manualMetricsSubmittedTitle, voluumMetricsImportedTitle } from "../lib/operational-activity-titles.ts";
 import { resolveCampaignDisplayName } from "../lib/campaign-display-name.ts";
 
 const router: IRouter = Router();
@@ -68,7 +72,7 @@ function parseMetricDateQuery(raw: unknown, res: Response): string | null {
 }
 
 function serializeMetric(row: typeof campaignDailyMetricsTable.$inferSelect) {
-  const derived = deriveProfitAndRoi(row.cost, row.revenue);
+  const derived = deriveCampaignMetricFields(row.cost, row.revenue, row.visits);
   return {
     id: row.id,
     workspaceId: row.workspaceId,
@@ -81,10 +85,17 @@ function serializeMetric(row: typeof campaignDailyMetricsTable.$inferSelect) {
     visits: row.visits,
     profit: derived.profit,
     roi: derived.roi,
+    epc: derived.epc,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
 }
+
+const voluumImportBodySchema = z.object({
+  workspaceId: z.number().int().positive(),
+  date: z.string().regex(METRIC_DATE_RE, "date must be YYYY-MM-DD"),
+  csvText: z.string().min(1),
+});
 
 router.get("/campaign-daily-metrics", async (req, res): Promise<void> => {
   const wsId = Number(req.query["workspace_id"]);
@@ -248,6 +259,80 @@ router.put("/campaign-daily-metrics", async (req, res): Promise<void> => {
   });
 
   res.json(serializeMetric(row));
+});
+
+router.post("/campaign-daily-metrics/voluum-import/preview", async (req, res): Promise<void> => {
+  const parsed = voluumImportBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const access = await checkWorkspaceAccess(req, parsed.data.workspaceId);
+  if (!access.allowed) {
+    res.status(access.status).json({ error: access.reason });
+    return;
+  }
+
+  const result = await previewVoluumMetricsImport({
+    workspaceId: parsed.data.workspaceId,
+    date: parsed.data.date,
+    csvText: parsed.data.csvText,
+    access,
+  });
+
+  if ("error" in result) {
+    res.status(result.status).json({ error: result.error });
+    return;
+  }
+
+  res.json(result);
+});
+
+router.post("/campaign-daily-metrics/voluum-import/confirm", async (req, res): Promise<void> => {
+  const parsed = voluumImportBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const access = await checkWorkspaceAccess(req, parsed.data.workspaceId);
+  if (!access.allowed) {
+    res.status(access.status).json({ error: access.reason });
+    return;
+  }
+
+  const result = await confirmVoluumMetricsImport({
+    workspaceId: parsed.data.workspaceId,
+    date: parsed.data.date,
+    csvText: parsed.data.csvText,
+    access,
+  });
+
+  if ("error" in result) {
+    res.status(result.status).json({ error: result.error });
+    return;
+  }
+
+  if (result.imported + result.updated > 0) {
+    void appendOperationalActivity(db, {
+      workspaceId: parsed.data.workspaceId,
+      eventType: "voluum_metrics_imported",
+      entityType: "workspace",
+      entityId: parsed.data.workspaceId,
+      actorEmployeeId: access.employee.id,
+      title: voluumMetricsImportedTitle(parsed.data.date, result.imported, result.updated),
+      metadata: {
+        date: parsed.data.date,
+        imported: result.imported,
+        updated: result.updated,
+        skipped: result.skipped,
+        duplicateCampaignIdsInCsv: result.duplicateCampaignIdsInCsv,
+      },
+    });
+  }
+
+  res.json(result);
 });
 
 export default router;

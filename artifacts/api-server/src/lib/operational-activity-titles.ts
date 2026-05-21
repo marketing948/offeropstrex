@@ -34,6 +34,10 @@ export function manualMetricsSubmittedTitle(campaignName: string, date: string):
   return `Submitted daily metrics for ${campaignName.trim() || "campaign"} (${date})`;
 }
 
+export function voluumMetricsImportedTitle(date: string, imported: number, updated: number): string {
+  return `Imported Voluum CSV metrics for ${date} (${imported} new, ${updated} updated)`;
+}
+
 export function campaignClosedTitle(campaignName: string, reason: string): string {
   const label = MANUAL_CLOSE_LABELS[reason] ?? reason.replace(/_/g, " ");
   return `Closed campaign: ${campaignName.trim() || "Campaign"} (${label})`;

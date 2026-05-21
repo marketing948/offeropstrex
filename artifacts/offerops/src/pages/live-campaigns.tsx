@@ -6,9 +6,10 @@
 // per-Campaign performance numbers (populated by the find_winners
 // task completion flow).
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { Plus, Upload } from "lucide-react";
+import { VoluumMetricsImportDialog } from "@/components/voluum-metrics-import-dialog";
 import { useAuth } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace-context";
 import { authedJson } from "@/lib/api-fetch";
@@ -145,41 +146,8 @@ type DailyMetricRow = {
   visits: number;
   profit: string;
   roi: string | null;
+  epc: string | null;
 };
-
-type MetricDraft = {
-  cost: string;
-  revenue: string;
-  conversions: string;
-  visits: string;
-};
-
-function deriveProfitRoi(cost: string, revenue: string): { profit: string; roi: string | null } {
-  const c = Number(cost);
-  const r = Number(revenue);
-  if (!Number.isFinite(c) || !Number.isFinite(r)) {
-    return { profit: "—", roi: null };
-  }
-  const profit = r - c;
-  const roi = c > 0 ? profit / c : null;
-  return {
-    profit: profit.toFixed(2),
-    roi: roi != null ? String(roi) : null,
-  };
-}
-
-function defaultDraft(): MetricDraft {
-  return { cost: "0", revenue: "0", conversions: "0", visits: "0" };
-}
-
-function draftFromMetric(m: DailyMetricRow): MetricDraft {
-  return {
-    cost: m.cost,
-    revenue: m.revenue,
-    conversions: String(m.conversions),
-    visits: String(m.visits),
-  };
-}
 
 export default function LiveCampaigns() {
   const { currentEmployee } = useAuth();
@@ -187,6 +155,7 @@ export default function LiveCampaigns() {
   const queryClient = useQueryClient();
   const isAdmin = currentEmployee?.role === "admin";
   const [addOpen, setAddOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [closeTarget, setCloseTarget] = useState<{ id: number; name: string } | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("live");
   const [platformFilter, setPlatformFilter] = useState<string>("all");
@@ -198,11 +167,7 @@ export default function LiveCampaigns() {
   const [metricsDate, setMetricsDate] = useState(() => yesterdayIsoDate());
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
-  const [metricDrafts, setMetricDrafts] = useState<Record<number, MetricDraft>>({});
-  const [saveState, setSaveState] = useState<Record<number, "idle" | "saving" | "saved" | "error">>({});
   const pageSize = 50;
-
-  const lastMetricsDraftSyncKey = useRef("");
 
   useEffect(() => {
     setStatusFilter("live");
@@ -215,7 +180,6 @@ export default function LiveCampaigns() {
     setMetricsDate(yesterdayIsoDate());
     setSearch("");
     setOffset(0);
-    lastMetricsDraftSyncKey.current = "";
   }, [activeWorkspaceId]);
 
   useEffect(() => {
@@ -281,81 +245,13 @@ export default function LiveCampaigns() {
     queryFn: () => authedJson(`/api/campaign-daily-metrics?${metricsParams.toString()}`),
   });
 
-  const metricItems = metricsResponse?.items;
-
-  const campaignIdsKey = useMemo(
-    () => (campaignItems ?? []).map((c) => c.id).join(","),
-    [campaignItems],
-  );
-
-  const metricsSnapshotKey = useMemo(
-    () =>
-      JSON.stringify(
-        (metricItems ?? []).map((m) => ({
-          id: m.campaignId,
-          cost: m.cost,
-          revenue: m.revenue,
-          conversions: m.conversions,
-          visits: m.visits,
-        })),
-      ),
-    [metricItems],
-  );
-
-  const metricsDraftSyncKey = `${metricsDate}|${campaignIdsKey}|${metricsSnapshotKey}`;
-
-  useEffect(() => {
-    if (lastMetricsDraftSyncKey.current === metricsDraftSyncKey) return;
-    lastMetricsDraftSyncKey.current = metricsDraftSyncKey;
-
-    const savedByCampaign = new Map<number, DailyMetricRow>();
-    for (const row of metricItems ?? []) {
-      savedByCampaign.set(row.campaignId, row);
+  const metricsByCampaignId = useMemo(() => {
+    const map = new Map<number, DailyMetricRow>();
+    for (const row of metricsResponse?.items ?? []) {
+      map.set(row.campaignId, row);
     }
-
-    const next: Record<number, MetricDraft> = {};
-    for (const c of campaignItems ?? []) {
-      const saved = savedByCampaign.get(c.id);
-      next[c.id] = saved ? draftFromMetric(saved) : defaultDraft();
-    }
-    setMetricDrafts(next);
-    setSaveState({});
-  }, [metricsDraftSyncKey, campaignItems, metricItems]);
-
-  async function saveMetricsForCampaign(campaignId: number) {
-    if (!activeWorkspaceId) return;
-    const draft = metricDrafts[campaignId] ?? defaultDraft();
-    setSaveState((s) => ({ ...s, [campaignId]: "saving" }));
-    try {
-      await authedJson("/api/campaign-daily-metrics", {
-        method: "PUT",
-        body: JSON.stringify({
-          workspaceId: activeWorkspaceId,
-          campaignId,
-          date: metricsDate,
-          cost: draft.cost,
-          revenue: draft.revenue,
-          conversions: Number(draft.conversions),
-          visits: Number(draft.visits),
-        }),
-      });
-      setSaveState((s) => ({ ...s, [campaignId]: "saved" }));
-      void queryClient.invalidateQueries({ queryKey: ["campaign-daily-metrics"] });
-      window.setTimeout(() => {
-        setSaveState((s) => (s[campaignId] === "saved" ? { ...s, [campaignId]: "idle" } : s));
-      }, 2000);
-    } catch {
-      setSaveState((s) => ({ ...s, [campaignId]: "error" }));
-    }
-  }
-
-  function updateDraft(campaignId: number, patch: Partial<MetricDraft>) {
-    setMetricDrafts((prev) => ({
-      ...prev,
-      [campaignId]: { ...(prev[campaignId] ?? defaultDraft()), ...patch },
-    }));
-    setSaveState((s) => (s[campaignId] === "saved" ? { ...s, [campaignId]: "idle" } : s));
-  }
+    return map;
+  }, [metricsResponse?.items]);
 
   const trafficSourceOptions = useMemo(
     () =>
@@ -419,14 +315,21 @@ export default function LiveCampaigns() {
           <h1 className="text-3xl font-bold tracking-tight">Live Campaigns</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Testing campaigns appear after take-campaign-live. Production working/scaling campaigns are added manually and skip CampaignOps.
+            Daily campaign metrics are loaded via Voluum CSV import for the selected metrics date.
           </p>
         </div>
-        {isAdmin && (
-          <Button size="sm" onClick={() => setAddOpen(true)}>
-            <Plus className="mr-1.5 h-4 w-4" />
-            Add production campaign
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
+            <Upload className="mr-1.5 h-4 w-4" />
+            Import Voluum CSV
           </Button>
-        )}
+          {isAdmin && (
+            <Button size="sm" onClick={() => setAddOpen(true)}>
+              <Plus className="mr-1.5 h-4 w-4" />
+              Add production campaign
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -516,6 +419,9 @@ export default function LiveCampaigns() {
             value={metricsDate}
             onChange={(e) => setMetricsDate(e.target.value)}
           />
+          <p className="text-[10px] text-muted-foreground mt-1">
+            Use Import Voluum CSV to add or update metrics for this date.
+          </p>
         </div>
       </div>
 
@@ -536,13 +442,15 @@ export default function LiveCampaigns() {
               <TableHead>Network / GEO</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Live since</TableHead>
-              <TableHead className="text-right min-w-[72px]">Cost</TableHead>
+              <TableHead className="text-right min-w-[72px]" title={`Daily metrics for ${metricsDate}`}>
+                Cost
+              </TableHead>
               <TableHead className="text-right min-w-[72px]">Revenue</TableHead>
               <TableHead className="text-right min-w-[56px]">Conv.</TableHead>
               <TableHead className="text-right min-w-[56px]">Visits</TableHead>
               <TableHead className="text-right">Profit</TableHead>
               <TableHead className="text-right">ROI</TableHead>
-              <TableHead className="w-[72px]">Save</TableHead>
+              <TableHead className="text-right">EPC</TableHead>
               <TableHead className="text-right">Spend</TableHead>
               <TableHead className="text-right">Revenue</TableHead>
               <TableHead className="text-right">ROI</TableHead>
@@ -553,16 +461,14 @@ export default function LiveCampaigns() {
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={20} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>
+              <TableRow><TableCell colSpan={19} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>
             ) : isError ? (
-              <TableRow><TableCell colSpan={20} className="text-center py-8 text-destructive">{errorMessage}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={19} className="text-center py-8 text-destructive">{errorMessage}</TableCell></TableRow>
             ) : filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={20} className="text-center py-8 text-muted-foreground">No campaigns match these filters.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={19} className="text-center py-8 text-muted-foreground">No campaigns match these filters.</TableCell></TableRow>
             ) : (
               filtered.map((c) => {
-                const draft = metricDrafts[c.id] ?? defaultDraft();
-                const derived = deriveProfitRoi(draft.cost, draft.revenue);
-                const rowSave = saveState[c.id] ?? "idle";
+                const daily = metricsByCampaignId.get(c.id);
                 return (
                 <TableRow key={c.id}>
                   <TableCell className="font-medium">
@@ -581,60 +487,13 @@ export default function LiveCampaigns() {
                   </TableCell>
                   <TableCell><StatusBadge status={c.status} /></TableCell>
                   <TableCell className="text-xs">{fmtDate(c.liveStartedAt)}</TableCell>
-                  <TableCell className="p-1">
-                    <Input
-                      className="h-8 text-right tabular-nums text-xs"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={draft.cost}
-                      onChange={(e) => updateDraft(c.id, { cost: e.target.value })}
-                    />
-                  </TableCell>
-                  <TableCell className="p-1">
-                    <Input
-                      className="h-8 text-right tabular-nums text-xs"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={draft.revenue}
-                      onChange={(e) => updateDraft(c.id, { revenue: e.target.value })}
-                    />
-                  </TableCell>
-                  <TableCell className="p-1">
-                    <Input
-                      className="h-8 text-right tabular-nums text-xs w-16"
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={draft.conversions}
-                      onChange={(e) => updateDraft(c.id, { conversions: e.target.value })}
-                    />
-                  </TableCell>
-                  <TableCell className="p-1">
-                    <Input
-                      className="h-8 text-right tabular-nums text-xs w-16"
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={draft.visits}
-                      onChange={(e) => updateDraft(c.id, { visits: e.target.value })}
-                    />
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-xs">{fmtMoney(derived.profit)}</TableCell>
-                  <TableCell className="text-right tabular-nums text-xs">{fmtPct(derived.roi)}</TableCell>
-                  <TableCell>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-[10px] px-2"
-                      disabled={rowSave === "saving"}
-                      onClick={() => void saveMetricsForCampaign(c.id)}
-                    >
-                      {rowSave === "saving" ? "…" : rowSave === "saved" ? "Saved" : rowSave === "error" ? "Error" : "Save"}
-                    </Button>
-                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-xs">{daily ? fmtMoney(daily.cost) : "—"}</TableCell>
+                  <TableCell className="text-right tabular-nums text-xs">{daily ? fmtMoney(daily.revenue) : "—"}</TableCell>
+                  <TableCell className="text-right tabular-nums text-xs">{daily ? daily.conversions : "—"}</TableCell>
+                  <TableCell className="text-right tabular-nums text-xs">{daily ? daily.visits : "—"}</TableCell>
+                  <TableCell className="text-right tabular-nums text-xs">{daily ? fmtMoney(daily.profit) : "—"}</TableCell>
+                  <TableCell className="text-right tabular-nums text-xs">{daily ? fmtPct(daily.roi) : "—"}</TableCell>
+                  <TableCell className="text-right tabular-nums text-xs">{daily?.epc != null ? fmtMoney(daily.epc) : "—"}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtMoney(c.cost)}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtMoney(c.revenue)}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtPct(c.roi)}</TableCell>
@@ -700,6 +559,15 @@ export default function LiveCampaigns() {
           }}
         />
       )}
+
+      <VoluumMetricsImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        workspaceId={activeWorkspaceId ?? 0}
+        metricsDate={metricsDate}
+        onMetricsDateChange={setMetricsDate}
+        statusFilter={statusFilter}
+      />
 
       {isAdmin && (
         <Dialog open={addOpen} onOpenChange={setAddOpen}>

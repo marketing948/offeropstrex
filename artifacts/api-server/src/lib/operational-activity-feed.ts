@@ -8,6 +8,7 @@ export const OPERATIONAL_ACTIVITY_EVENT_TYPES = [
   "campaign_linked",
   "campaign_live",
   "manual_metrics_submitted",
+  "voluum_metrics_imported",
   "campaign_closed",
   "winner_added",
   "winner_promoted",
