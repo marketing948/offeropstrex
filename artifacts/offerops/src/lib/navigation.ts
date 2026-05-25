@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  BarChart3,
   CheckSquare,
   FileBarChart,
   FolderTree,
@@ -44,6 +45,7 @@ export function getNavigationSections(isAdmin: boolean): NavSection[] {
       id: "administration",
       label: "Administration",
       items: [
+        { href: "/dashboard", label: "Executive Overview", icon: BarChart3 },
         { href: "/employees", label: "Team", icon: Users },
         { href: "/settings", label: "Settings", icon: Settings },
       ],
@@ -55,7 +57,6 @@ export function getNavigationSections(isAdmin: boolean): NavSection[] {
 
 /** Legacy bookmarks — routes stay registered but redirect to canonical homes. */
 export const LEGACY_ROUTE_REDIRECTS: Record<string, string> = {
-  "/dashboard": "/ops",
   "/employee-dashboard": "/ops",
   "/performance": "/ops",
   "/mission-control": "/ops",

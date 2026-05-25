@@ -24,6 +24,7 @@ import Reports from "@/pages/reports";
 import Profile from "@/pages/profile";
 import NotFound from "@/pages/not-found";
 import RouteRedirect from "@/pages/route-redirect";
+import Dashboard from "@/pages/dashboard";
 
 const queryClient = new QueryClient();
 
@@ -85,7 +86,7 @@ function Router() {
 
       {/* Legacy overview aliases → canonical operational homes */}
       <Route path="/dashboard">
-        {() => <ProtectedRoute component={() => <RouteRedirect to="/ops" />} adminOnly />}
+        {() => <ProtectedRoute component={Dashboard} adminOnly />}
       </Route>
       <Route path="/employee-dashboard">
         {() => <ProtectedRoute component={() => <RouteRedirect to="/ops" />} />}
