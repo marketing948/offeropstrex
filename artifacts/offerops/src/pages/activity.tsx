@@ -113,10 +113,10 @@ export default function Activity() {
           </Select>
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs">Actor</Label>
+          <Label className="text-xs">Employee</Label>
           <Select value={actorId} onValueChange={setActorId}>
             <SelectTrigger className="h-9">
-              <SelectValue placeholder="All actors" />
+              <SelectValue placeholder="All employees" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All</SelectItem>

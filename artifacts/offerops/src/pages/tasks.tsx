@@ -1,6 +1,6 @@
 /**
- * Worker View Phase 1 — "Today's work" at /tasks.
- * Assigned open tasks (CampaignOps + MANUAL) with filters and completion flows.
+ * Work Queue — operational task queue at /tasks (UI-only redesign).
+ * Backend task APIs and completion flows unchanged.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -10,65 +10,36 @@ import {
   useListTodoTasks,
   useUpdateTodoTask,
   useListWorkspaceTrafficSources,
+  useListEmployees,
   getListTodoTasksQueryKey,
   getListWorkspaceTrafficSourcesQueryKey,
+  getListEmployeesQueryKey,
   type TodoTask,
-  type TodoTaskStatus,
 } from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { useAuth } from "@/lib/auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { TaskDetailDrawer } from "@/components/task-detail-drawer";
-import { getTaskTypeVisual } from "@/lib/task-type-visuals";
+import { WorkQueueRow } from "@/components/work-queue/work-queue-row";
+import { WorkQueueToolbar } from "@/components/work-queue/work-queue-toolbar";
 import {
+  compareWorkerTasks,
   compareWorkerTasksForList,
-  formatDueDate,
-  isCampaignOpsTask,
-  isCompletedWorkerTask,
-  isManualTask,
-  isOverdueTask,
-  matchesWorkerFilter,
-  platformLabel,
-  taskInstructions,
-  workerTaskHeadline,
-  type WorkerTaskFilter,
-  type WorkerTaskStatusFilter,
 } from "@/lib/worker-tasks";
-import { Badge } from "@/components/ui/badge";
+import {
+  countByQueueTab,
+  dueDateInPreset,
+  groupActiveQueueTasks,
+  matchesQueueTab,
+  matchesWorkQueueSearch,
+  type DatePreset,
+  type QueueTab,
+} from "@/lib/work-queue";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CalendarClock, CheckSquare, ChevronRight, PlayCircle, Plus } from "lucide-react";
+import { ClipboardList, Plus } from "lucide-react";
 import { CreateManualTaskDialog } from "@/components/create-manual-task-dialog";
-
-const STATUS_LABEL: Record<TodoTaskStatus, string> = {
-  TODO: "To do",
-  IN_PROGRESS: "In progress",
-  BLOCKED: "Blocked",
-  DONE: "Done",
-};
-
-const STATUS_FILTER_OPTIONS: { key: WorkerTaskStatusFilter; label: string }[] = [
-  { key: "active", label: "Active / Open" },
-  { key: "completed", label: "Completed" },
-  { key: "all", label: "All" },
-];
-
-const CATEGORY_FILTER_OPTIONS: { key: WorkerTaskFilter; label: string }[] = [
-  { key: "all", label: "All types" },
-  { key: "campaignops", label: "CampaignOps" },
-  { key: "manual", label: "Manual" },
-  { key: "overdue", label: "Overdue" },
-  { key: "blocked", label: "Blocked" },
-];
-
-function todayHeading(): string {
-  return new Date().toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-}
 
 function parseOpenTaskIdFromUrl(): number | null {
   if (typeof window === "undefined") return null;
@@ -83,15 +54,32 @@ export default function Tasks() {
   const queryClient = useQueryClient();
   const employeeId = currentEmployee?.id;
   const isAdmin = currentEmployee?.role === "admin";
+
   const [createManualOpen, setCreateManualOpen] = useState(false);
+  const [queueTab, setQueueTab] = useState<QueueTab>("my");
+  const [search, setSearch] = useState("");
+  const [datePreset, setDatePreset] = useState<DatePreset>("all");
+  const [employeeFilter, setEmployeeFilter] = useState("all");
+  const [selectedTask, setSelectedTask] = useState<TodoTask | null>(null);
+  const [deepLinkTaskId] = useState(() => parseOpenTaskIdFromUrl());
 
-  const [statusFilter, setStatusFilter] = useState<WorkerTaskStatusFilter>("active");
+  const wsId = activeWorkspaceId ?? 0;
 
-  const taskParams = {
-    workspace_id: activeWorkspaceId ?? 0,
-    status_filter: statusFilter,
-    ...(employeeId ? { employee_id: employeeId } : {}),
-  };
+  const employeeIdForFetch = useMemo(() => {
+    if (!isAdmin) return employeeId;
+    if (employeeFilter !== "all") return Number(employeeFilter);
+    if (queueTab === "my") return employeeId;
+    return undefined;
+  }, [isAdmin, employeeId, employeeFilter, queueTab]);
+
+  const taskParams = useMemo(
+    () => ({
+      workspace_id: wsId,
+      status_filter: "all" as const,
+      ...(employeeIdForFetch ? { employee_id: employeeIdForFetch } : {}),
+    }),
+    [wsId, employeeIdForFetch],
+  );
 
   const { data: tasks, isLoading } = useListTodoTasks(
     taskParams,
@@ -100,7 +88,15 @@ export default function Tasks() {
     }),
   );
 
-  const tsParams = { workspace_id: activeWorkspaceId ?? 0 };
+  const employeeParams = { workspace_id: wsId };
+  const { data: employees = [] } = useListEmployees(
+    employeeParams,
+    wsQueryOpts(activeWorkspaceId, getListEmployeesQueryKey(employeeParams), {
+      enabled: isAdmin && !!activeWorkspaceId,
+    }),
+  );
+
+  const tsParams = { workspace_id: wsId };
   const { data: trafficSources = [] } = useListWorkspaceTrafficSources(
     tsParams,
     wsQueryOpts(activeWorkspaceId, getListWorkspaceTrafficSourcesQueryKey(tsParams)),
@@ -113,9 +109,6 @@ export default function Tasks() {
   }, [trafficSources]);
 
   const updateTask = useUpdateTodoTask();
-  const [selectedTask, setSelectedTask] = useState<TodoTask | null>(null);
-  const [categoryFilter, setCategoryFilter] = useState<WorkerTaskFilter>("all");
-  const [deepLinkTaskId] = useState(() => parseOpenTaskIdFromUrl());
 
   const { data: deepLinkedTask } = useGetTodoTask(deepLinkTaskId ?? 0, {
     query: {
@@ -130,36 +123,31 @@ export default function Tasks() {
 
   const listedTasks = useMemo(() => tasks ?? [], [tasks]);
 
-  const filtered = useMemo(() => {
-    return listedTasks
-      .filter((t) => matchesWorkerFilter(t, categoryFilter))
-      .sort(compareWorkerTasksForList);
-  }, [listedTasks, categoryFilter]);
-
-  const openCount = useMemo(
-    () => listedTasks.filter((t) => t.status !== "DONE").length,
-    [listedTasks],
+  const tabCounts = useMemo(
+    () => countByQueueTab(listedTasks, employeeId),
+    [listedTasks, employeeId],
   );
 
-  const counts = useMemo(() => {
-    const c: Record<WorkerTaskFilter, number> = {
-      all: listedTasks.length,
-      campaignops: listedTasks.filter(isCampaignOpsTask).length,
-      manual: listedTasks.filter(isManualTask).length,
-      overdue: listedTasks.filter((t) => isOverdueTask(t)).length,
-      blocked: listedTasks.filter((t) => t.status === "BLOCKED").length,
-    };
-    return c;
-  }, [listedTasks]);
+  const filtered = useMemo(() => {
+    return listedTasks
+      .filter((t) => matchesQueueTab(t, queueTab, employeeId))
+      .filter((t) => dueDateInPreset(t.dueDate, datePreset))
+      .filter((t) => matchesWorkQueueSearch(t, search))
+      .sort(queueTab === "completed" ? compareWorkerTasksForList : compareWorkerTasks);
+  }, [listedTasks, queueTab, employeeId, datePreset, search]);
+
+  const sections = useMemo(() => {
+    if (queueTab !== "active") return null;
+    return groupActiveQueueTasks(filtered);
+  }, [queueTab, filtered]);
+
+  const pageTitle = isAdmin ? "Operations Queue" : "Work Queue";
+  const showAssignee = isAdmin && (queueTab !== "my" || employeeFilter === "all");
 
   async function invalidateTasks() {
     if (!activeWorkspaceId) return;
     await queryClient.invalidateQueries({
-      queryKey: getListTodoTasksQueryKey({
-        workspace_id: activeWorkspaceId,
-        status_filter: statusFilter,
-        employee_id: employeeId,
-      }),
+      queryKey: getListTodoTasksQueryKey(taskParams),
     });
   }
 
@@ -170,32 +158,18 @@ export default function Tasks() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 pb-8">
+    <div className="mx-auto max-w-4xl space-y-5 overflow-x-hidden pb-10">
       <header>
         <div className="flex items-center gap-2 text-primary">
-          <CheckSquare className="h-5 w-5" />
-          <span className="text-xs font-semibold uppercase tracking-widest">Today&apos;s work</span>
+          <ClipboardList className="h-5 w-5" />
+          <span className="text-xs font-semibold uppercase tracking-widest">
+            {pageTitle}
+          </span>
         </div>
-        <h1 className="mt-1 text-2xl font-black tracking-tight">My tasks</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{todayHeading()}</p>
-        {!isLoading && (
-          <p className="mt-2 text-sm font-medium text-foreground">
-            {statusFilter === "completed"
-              ? filtered.length === 0
-                ? "No completed tasks in this view."
-                : `${filtered.length} completed task${filtered.length === 1 ? "" : "s"}`
-              : statusFilter === "all"
-                ? filtered.length === 0
-                  ? "No tasks in this view."
-                  : `${openCount} open · ${filtered.length - openCount} completed`
-                : openCount === 0
-                  ? "Nothing assigned right now."
-                  : `${openCount} open task${openCount === 1 ? "" : "s"}`}
-            {statusFilter === "active" && counts.overdue > 0 && (
-              <span className="ml-2 text-red-600">· {counts.overdue} overdue</span>
-            )}
-          </p>
-        )}
+        <h1 className="mt-1 text-2xl font-black tracking-tight">{pageTitle}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Scan urgency, open details in-place, and move work forward without leaving the queue.
+        </p>
         {isAdmin && (
           <Button
             type="button"
@@ -214,52 +188,73 @@ export default function Tasks() {
         <CreateManualTaskDialog open={createManualOpen} onOpenChange={setCreateManualOpen} />
       )}
 
-      <div className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          {STATUS_FILTER_OPTIONS.map(({ key, label }) => (
-            <FilterChip
-              key={key}
-              label={label}
-              active={statusFilter === key}
-              onClick={() => setStatusFilter(key)}
-            />
-          ))}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {CATEGORY_FILTER_OPTIONS.map(({ key, label }) => (
-            <FilterChip
-              key={key}
-              label={label}
-              count={counts[key]}
-              active={categoryFilter === key}
-              onClick={() => setCategoryFilter(key)}
-            />
-          ))}
-        </div>
-      </div>
+      <WorkQueueToolbar
+        queueTab={queueTab}
+        onQueueTabChange={setQueueTab}
+        tabCounts={tabCounts}
+        search={search}
+        onSearchChange={setSearch}
+        datePreset={datePreset}
+        onDatePresetChange={setDatePreset}
+        showEmployeeFilter={isAdmin && queueTab !== "my"}
+        employeeFilter={employeeFilter}
+        onEmployeeFilterChange={setEmployeeFilter}
+        employees={employees.map((e) => ({ id: e.id, name: e.name }))}
+      />
 
       {isLoading ? (
         <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-36 w-full rounded-xl" />
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} className="h-28 w-full rounded-xl" />
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <EmptyState statusFilter={statusFilter} categoryFilter={categoryFilter} />
-      ) : (
-        <div className="space-y-3">
-          {filtered.map((task) => (
-            <WorkerTaskCard
-              key={task.id}
-              task={task}
-              readOnly={isCompletedWorkerTask(task)}
-              trafficSourceNames={trafficSourceNames}
-              onOpen={() => setSelectedTask(task)}
-              onStart={() => markInProgress(task)}
-              starting={updateTask.isPending}
-            />
+        <EmptyQueue queueTab={queueTab} search={search} />
+      ) : sections && sections.length > 0 ? (
+        <div className="space-y-6">
+          {sections.map((section) => (
+            <section key={section.id} aria-labelledby={`section-${section.id}`}>
+              <h2
+                id={`section-${section.id}`}
+                className="mb-2 text-xs font-bold uppercase tracking-widest text-muted-foreground"
+              >
+                {section.label}
+                <span className="ml-2 font-mono text-[10px] text-muted-foreground/80">
+                  {section.tasks.length}
+                </span>
+              </h2>
+              <ul className="space-y-3">
+                {section.tasks.map((task) => (
+                  <li key={task.id}>
+                    <WorkQueueRow
+                      task={task}
+                      showAssignee={showAssignee}
+                      trafficSourceNames={trafficSourceNames}
+                      onOpen={() => setSelectedTask(task)}
+                      onStart={() => markInProgress(task)}
+                      starting={updateTask.isPending}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </section>
           ))}
         </div>
+      ) : (
+        <ul className="space-y-3">
+          {filtered.map((task) => (
+            <li key={task.id}>
+              <WorkQueueRow
+                task={task}
+                showAssignee={showAssignee}
+                trafficSourceNames={trafficSourceNames}
+                onOpen={() => setSelectedTask(task)}
+                onStart={() => markInProgress(task)}
+                starting={updateTask.isPending}
+              />
+            </li>
+          ))}
+        </ul>
       )}
 
       <TaskDetailDrawer
@@ -271,227 +266,26 @@ export default function Tasks() {
   );
 }
 
-function FilterChip({
-  label,
-  count,
-  active,
-  onClick,
-}: {
-  label: string;
-  count?: number;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-        active ? "border-foreground/20 bg-foreground/5" : "border-border hover:bg-muted/40"
-      }`}
-    >
-      <span>{label}</span>
-      {count != null && count > 0 && (
-        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-muted-foreground">
-          {count}
-        </span>
-      )}
-    </button>
-  );
-}
-
-function WorkerTaskCard({
-  task,
-  readOnly,
-  trafficSourceNames,
-  onOpen,
-  onStart,
-  starting,
-}: {
-  task: TodoTask;
-  readOnly: boolean;
-  trafficSourceNames: Map<number, string>;
-  onOpen: () => void;
-  onStart: () => void;
-  starting: boolean;
-}) {
-  const visual = getTaskTypeVisual(task.taskType as string);
-  const Icon = visual.icon;
-  const overdue = isOverdueTask(task);
-  const dueLabel = formatDueDate(task.dueDate);
-  const platform = platformLabel(task);
-  const trafficSourceId = (task as { trafficSourceId?: number | null }).trafficSourceId;
-  const trafficSourceName =
-    task.trafficSourceName ??
-    (trafficSourceId != null ? trafficSourceNames.get(trafficSourceId) : null);
-  const instructions = taskInstructions(task);
-  const canStart = !readOnly && task.status === "TODO";
-  const isBlocked = task.status === "BLOCKED";
-  const blockedReason = (task as { blockedReason?: string | null }).blockedReason;
-
-  return (
-    <article
-      className={`overflow-hidden rounded-xl border bg-card shadow-sm transition hover:shadow-md ${
-        isBlocked
-          ? "border-amber-300/80 bg-amber-50/30 dark:bg-amber-950/10"
-          : overdue
-            ? "border-red-300/70 ring-1 ring-red-200/50"
-            : "border-border"
-      }`}
-    >
-      <div className={`h-1 ${visual.accentBar}`} />
-      <div className="p-4">
-        <div className="flex items-start gap-3">
-          <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${visual.iconBg}`}>
-            <Icon className={`h-5 w-5 ${visual.iconFg}`} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline" className={`text-[10px] font-semibold ${visual.badgeBg} ${visual.badgeFg} border-0`}>
-                {visual.label}
-              </Badge>
-              <Badge
-                variant={
-                  task.priority === "high"
-                    ? "destructive"
-                    : task.priority === "medium"
-                      ? "default"
-                      : "secondary"
-                }
-                className="text-[10px] capitalize"
-              >
-                {task.priority}
-              </Badge>
-              <StatusPill status={task.status} />
-              {isManualTask(task) && (
-                <Badge variant="secondary" className="text-[10px]">
-                  Manual
-                </Badge>
-              )}
-              {isCampaignOpsTask(task) && (
-                <Badge variant="secondary" className="text-[10px]">
-                  CampaignOps
-                </Badge>
-              )}
-            </div>
-
-            <h2 className="mt-2 text-base font-semibold leading-snug text-foreground">
-              {workerTaskHeadline(task)}
-            </h2>
-
-            <p className="mt-1.5 text-sm text-muted-foreground line-clamp-2">{instructions}</p>
-
-            <dl className="mt-3 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
-              {task.batchName && (
-                <div>
-                  <dt className="inline font-medium text-foreground/80">Batch: </dt>
-                  <dd className="inline">{task.batchName}</dd>
-                </div>
-              )}
-              {platform && (
-                <div>
-                  <dt className="inline font-medium text-foreground/80">Platform: </dt>
-                  <dd className="inline">{platform}</dd>
-                </div>
-              )}
-              {trafficSourceName && (
-                <div className="sm:col-span-2">
-                  <dt className="inline font-medium text-foreground/80">Traffic source: </dt>
-                  <dd className="inline">{trafficSourceName}</dd>
-                </div>
-              )}
-              {dueLabel && (
-                <div className={overdue ? "text-red-600 sm:col-span-2" : "sm:col-span-2"}>
-                  <dt className="inline font-medium">
-                    <CalendarClock className="mr-0.5 inline h-3 w-3" />
-                    Due:{" "}
-                  </dt>
-                  <dd className="inline font-medium">{dueLabel}</dd>
-                  {overdue && <span className="ml-1 font-semibold">(overdue)</span>}
-                </div>
-              )}
-            </dl>
-
-            {isBlocked && blockedReason && (
-              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-                Blocked: {blockedReason}
-              </p>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-border/60 pt-3">
-          {canStart && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              disabled={starting}
-              onClick={(e) => {
-                e.stopPropagation();
-                void onStart();
-              }}
-            >
-              <PlayCircle className="h-3.5 w-3.5" />
-              Start
-            </Button>
-          )}
-          <Button type="button" size="sm" variant={readOnly ? "outline" : "default"} className="gap-1.5" onClick={onOpen}>
-            {readOnly ? "View" : task.status === "IN_PROGRESS" ? "Continue" : "Open"}
-            <ChevronRight className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
-    </article>
-  );
-}
-
-function StatusPill({ status }: { status: TodoTaskStatus }) {
-  const styles =
-    status === "DONE"
-      ? "bg-emerald-50 text-emerald-800 border-emerald-200"
-      : status === "IN_PROGRESS"
-        ? "bg-blue-50 text-blue-800 border-blue-200"
-        : status === "BLOCKED"
-          ? "bg-amber-50 text-amber-900 border-amber-200"
-          : "bg-slate-50 text-slate-700 border-slate-200";
-  return (
-    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${styles}`}>
-      {STATUS_LABEL[status]}
-    </span>
-  );
-}
-
-function EmptyState({
-  statusFilter,
-  categoryFilter,
-}: {
-  statusFilter: WorkerTaskStatusFilter;
-  categoryFilter: WorkerTaskFilter;
-}) {
-  const categoryMessages: Record<WorkerTaskFilter, string> = {
-    all: "Try another filter or check back later.",
-    campaignops: "No CampaignOps tasks match this filter.",
-    manual: "No manual reminders match this filter.",
-    overdue: "Nothing overdue — nice work.",
-    blocked: "No blocked tasks.",
-  };
+function EmptyQueue({ queueTab, search }: { queueTab: QueueTab; search: string }) {
   const headline =
-    statusFilter === "completed"
-      ? "No completed tasks"
-      : statusFilter === "all"
-        ? "No tasks"
-        : "All clear";
+    search.trim() !== ""
+      ? "No matches"
+      : queueTab === "completed"
+        ? "Nothing completed yet"
+        : queueTab === "blocked"
+          ? "No blocked work"
+          : queueTab === "overdue"
+            ? "Nothing overdue"
+            : "Queue is clear";
   const body =
-    statusFilter === "completed"
-      ? "Completed work will show up here after you finish tasks."
-      : statusFilter === "active" && categoryFilter === "all"
-        ? "You have no open tasks assigned. Check back later or ask your lead for work."
-        : categoryMessages[categoryFilter];
+    search.trim() !== ""
+      ? "Try a different search or filter."
+      : queueTab === "completed"
+        ? "Finished tasks will appear here."
+        : "You're caught up on this view.";
   return (
-    <div className="rounded-xl border border-dashed border-border bg-muted/20 px-6 py-14 text-center">
-      <CheckSquare className="mx-auto mb-3 h-10 w-10 text-muted-foreground/35" />
+    <div className="rounded-xl border border-dashed border-border bg-muted/15 px-6 py-14 text-center">
+      <ClipboardList className="mx-auto mb-3 h-10 w-10 text-muted-foreground/35" />
       <p className="text-sm font-medium text-foreground">{headline}</p>
       <p className="mt-1 text-sm text-muted-foreground">{body}</p>
     </div>

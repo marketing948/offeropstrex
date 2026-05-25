@@ -293,7 +293,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
     { href: "/testing-batches", label: "Batches", icon: FolderTree },
     { href: "/live-campaigns", label: "Live Campaigns", icon: Radio },
-    { href: "/tasks", label: "Tasks", icon: CheckSquare },
+    { href: "/tasks", label: "Work Queue", icon: CheckSquare },
     { href: "/activity", label: "Activity", icon: History },
     { href: "/reports", label: "Reports", icon: FileBarChart },
     { href: "/employees", label: "Team", icon: Users },
@@ -302,7 +302,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { href: "/employee-dashboard", label: "My Dashboard", icon: LayoutDashboard },
     { href: "/testing-batches", label: "My Batches", icon: FolderTree },
     { href: "/live-campaigns", label: "Live Campaigns", icon: Radio },
-    { href: "/tasks", label: "My Tasks", icon: CheckSquare },
+    { href: "/tasks", label: "Work Queue", icon: CheckSquare },
     { href: "/activity", label: "Activity", icon: History },
     { href: "/reports", label: "Reports", icon: FileBarChart },
   ];

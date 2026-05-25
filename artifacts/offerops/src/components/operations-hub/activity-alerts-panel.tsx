@@ -156,7 +156,7 @@ export function ActivityAlertsPanel() {
                         item.eventType as OperationalActivityEventType
                       ] ?? item.eventType}
                       {item.actorEmployeeId != null &&
-                        ` · ${employeeNameById.get(item.actorEmployeeId) ?? "Team"}`}
+                        ` · ${employeeNameById.get(item.actorEmployeeId) ?? "Employee"}`}
                     </p>
                   </div>
                 </button>
