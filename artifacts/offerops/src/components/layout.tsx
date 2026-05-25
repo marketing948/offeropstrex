@@ -1,5 +1,6 @@
 import { useAuth } from "@/lib/auth";
 import { readAuthToken } from "@/lib/api-fetch";
+import { routeForNotification } from "@/lib/entity-navigation";
 import { queryOpts } from "@/lib/ws-query";
 import { Link, useLocation } from "wouter";
 import {
@@ -11,7 +12,6 @@ import {
   LogOut,
   FolderTree,
   Network,
-  TrendingUp,
   Bell,
   Layers,
   Radio,
@@ -240,7 +240,7 @@ function WorkspaceSwitcher() {
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { currentEmployee, logout, isLoading } = useAuth();
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const [notifOpen, setNotifOpen] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
   const qc = useQueryClient();
@@ -289,21 +289,19 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   // ── Nav items (Pivot Phase 0: Tracker Campaigns hidden — Voluum disabled) ──
   const navItems = isAdmin ? [
-    { href: "/ops", label: "Mission Control", icon: Layers, highlight: true },
+    { href: "/ops", label: "Operations Hub", icon: Layers, highlight: true },
     { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
     { href: "/testing-batches", label: "Batches", icon: FolderTree },
     { href: "/live-campaigns", label: "Live Campaigns", icon: Radio },
-    { href: "/performance", label: "Performance", icon: TrendingUp },
     { href: "/tasks", label: "Tasks", icon: CheckSquare },
     { href: "/activity", label: "Activity", icon: History },
     { href: "/reports", label: "Reports", icon: FileBarChart },
     { href: "/employees", label: "Team", icon: Users },
   ] : [
-    { href: "/ops", label: "Mission Control", icon: Layers, highlight: true },
+    { href: "/ops", label: "Operations Hub", icon: Layers, highlight: true },
     { href: "/employee-dashboard", label: "My Dashboard", icon: LayoutDashboard },
     { href: "/testing-batches", label: "My Batches", icon: FolderTree },
     { href: "/live-campaigns", label: "Live Campaigns", icon: Radio },
-    { href: "/performance", label: "Performance", icon: TrendingUp },
     { href: "/tasks", label: "My Tasks", icon: CheckSquare },
     { href: "/activity", label: "Activity", icon: History },
     { href: "/reports", label: "Reports", icon: FileBarChart },
@@ -441,7 +439,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
                       <div
                         key={n.id}
                         className={`flex gap-2 px-3 py-2.5 border-b border-border last:border-0 cursor-pointer hover:bg-muted/50 transition-colors ${!n.read ? "bg-blue-50/60" : ""}`}
-                        onClick={() => !n.read && markOneRead.mutate({ id: n.id })}
+                        onClick={() => {
+                          if (!n.read) markOneRead.mutate({ id: n.id });
+                          setNotifOpen(false);
+                          setLocation(routeForNotification(n));
+                        }}
                       >
                         <span
                           className={`text-sm flex-shrink-0 mt-0.5 w-6 h-6 rounded-full flex items-center justify-center ring-2 ${sevCls}`}

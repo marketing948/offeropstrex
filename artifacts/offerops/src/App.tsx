@@ -20,8 +20,8 @@ import Activity from "@/pages/activity";
 import DailyReports from "@/pages/daily-reports";
 import WeeklyReports from "@/pages/weekly-reports";
 import Settings from "@/pages/settings";
-import Performance from "@/pages/performance";
-import MissionControl from "@/pages/mission-control";
+import PerformanceRedirect from "@/pages/performance";
+import OperationsHub from "@/pages/operations-hub";
 import OpsQueue from "@/pages/ops-queue";
 import TrackerCampaigns from "@/pages/tracker-campaigns";
 import LiveCampaigns from "@/pages/live-campaigns";
@@ -71,7 +71,7 @@ function Router() {
       <Route path="/login" component={Login} />
 
       <Route path="/ops">
-        {() => <ProtectedRoute component={MissionControl} />}
+        {() => <ProtectedRoute component={OperationsHub} />}
       </Route>
       <Route path="/ops/legacy">
         {() => <ProtectedRoute component={OpsQueue} />}
@@ -126,7 +126,7 @@ function Router() {
       </Route>
 
       <Route path="/performance">
-        {() => <ProtectedRoute component={Performance} />}
+        {() => <ProtectedRoute component={PerformanceRedirect} />}
       </Route>
 
       <Route path="/settings">
