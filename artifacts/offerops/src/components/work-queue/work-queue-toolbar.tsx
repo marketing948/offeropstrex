@@ -15,10 +15,6 @@ export function WorkQueueToolbar({
   dateFrom,
   dateTo,
   onCustomDueRangeChange,
-  showEmployeeFilter,
-  employeeFilter,
-  onEmployeeFilterChange,
-  employees,
 }: {
   queueTab: QueueTab;
   onQueueTabChange: (tab: QueueTab) => void;
@@ -30,10 +26,6 @@ export function WorkQueueToolbar({
   dateFrom: string;
   dateTo: string;
   onCustomDueRangeChange: (from: string, to: string) => void;
-  showEmployeeFilter?: boolean;
-  employeeFilter: string;
-  onEmployeeFilterChange: (id: string) => void;
-  employees: { id: number; name: string }[];
 }) {
   return (
     <div className="sticky top-0 z-10 -mx-1 space-y-3 border-b border-border bg-background/95 px-1 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
@@ -84,26 +76,6 @@ export function WorkQueueToolbar({
         onCustomRangeChange={onCustomDueRangeChange}
         showAllOption
       />
-
-      {showEmployeeFilter && (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Employee
-          </span>
-          <select
-            value={employeeFilter}
-            onChange={(e) => onEmployeeFilterChange(e.target.value)}
-            className="h-9 min-w-[10rem] rounded-md border border-input bg-background px-2 text-sm"
-          >
-            <option value="all">All employees</option>
-            {employees.map((e) => (
-              <option key={e.id} value={String(e.id)}>
-                {e.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
     </div>
   );
 }

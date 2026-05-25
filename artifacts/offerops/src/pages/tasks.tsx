@@ -23,6 +23,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { TaskDetailDrawer } from "@/components/task-detail-drawer";
 import { WorkQueueRow } from "@/components/work-queue/work-queue-row";
 import { WorkQueueToolbar } from "@/components/work-queue/work-queue-toolbar";
+import { WorkQueueSummary } from "@/components/work-queue/work-queue-summary";
+import { WorkQueueFilterRail } from "@/components/work-queue/work-queue-filter-rail";
+import { WorkQueueFamilySection } from "@/components/work-queue/work-queue-family-section";
 import {
   compareWorkerTasks,
   compareWorkerTasksForList,
@@ -31,12 +34,21 @@ import { resolveDateRangeFromPreset } from "@/lib/date-filter-presets";
 import {
   countByQueueTab,
   dueDateInPreset,
-  groupActiveQueueTasks,
   matchesQueueTab,
   matchesWorkQueueSearch,
   type DatePreset,
   type QueueTab,
 } from "@/lib/work-queue";
+import {
+  completedTodayCount,
+  groupTasksByFamily,
+  highPriorityOpenCount,
+  matchesRailDue,
+  matchesRailPriority,
+  matchesRailStatus,
+  type WorkQueueRailFilters,
+} from "@/lib/work-queue-families";
+import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { ClipboardList, Plus } from "lucide-react";
 import { CreateManualTaskDialog } from "@/components/create-manual-task-dialog";
@@ -54,6 +66,12 @@ function parseOpenTaskIdFromUrl(): number | null {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+const DEFAULT_RAIL_FILTERS: WorkQueueRailFilters = {
+  status: "all",
+  priority: "all",
+  due: "all",
+};
+
 export default function Tasks() {
   const { activeWorkspaceId } = useWorkspace();
   const { currentEmployee } = useAuth();
@@ -67,6 +85,7 @@ export default function Tasks() {
   const [datePreset, setDatePreset] = useState<DatePreset>("all");
   const [dueDateFrom, setDueDateFrom] = useState("");
   const [dueDateTo, setDueDateTo] = useState("");
+  const [railFilters, setRailFilters] = useState<WorkQueueRailFilters>(DEFAULT_RAIL_FILTERS);
 
   const handleDuePresetChange = (p: DatePreset) => {
     setDatePreset(p);
@@ -152,21 +171,35 @@ export default function Tasks() {
     [listedTasks, employeeId],
   );
 
+  const summaryCounts = useMemo(
+    () => ({
+      myTasks: tabCounts.my,
+      overdue: tabCounts.overdue,
+      highPriority: highPriorityOpenCount(listedTasks),
+      completedToday: completedTodayCount(listedTasks),
+    }),
+    [tabCounts, listedTasks],
+  );
+
   const filtered = useMemo(() => {
     return listedTasks
       .filter((t) => matchesQueueTab(t, queueTab, employeeId))
       .filter((t) => dueDateInPreset(t.dueDate, datePreset))
       .filter((t) => matchesWorkQueueSearch(t, search))
+      .filter(
+        (t) =>
+          matchesRailStatus(t, railFilters.status) &&
+          matchesRailPriority(t, railFilters.priority) &&
+          matchesRailDue(t, railFilters.due),
+      )
       .sort(queueTab === "completed" ? compareWorkerTasksForList : compareWorkerTasks);
-  }, [listedTasks, queueTab, employeeId, datePreset, search]);
+  }, [listedTasks, queueTab, employeeId, datePreset, search, railFilters]);
 
-  const sections = useMemo(() => {
-    if (queueTab !== "active") return null;
-    return groupActiveQueueTasks(filtered);
-  }, [queueTab, filtered]);
+  const familySections = useMemo(() => groupTasksByFamily(filtered), [filtered]);
 
   const pageTitle = isAdmin ? "Operations Queue" : "Work Queue";
   const showAssignee = isAdmin && (queueTab !== "my" || employeeFilter === "all");
+  const showAssigneeFilter = isAdmin && queueTab !== "my";
 
   async function invalidateTasks() {
     if (!activeWorkspaceId) return;
@@ -191,7 +224,7 @@ export default function Tasks() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-5 overflow-x-hidden pb-10">
+    <div className="mx-auto max-w-6xl space-y-4 overflow-x-hidden pb-10">
       <header>
         <div className="flex items-center gap-2 text-primary">
           <ClipboardList className="h-5 w-5" />
@@ -200,8 +233,13 @@ export default function Tasks() {
           </span>
         </div>
         <h1 className="mt-1 text-2xl font-black tracking-tight">{pageTitle}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Scan urgency, open details in-place, and move work forward without leaving the queue.
+        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+          Organized work streams by task family — scan category first, then individual tasks.
+          Execution stays here; campaign review decisions live on{" "}
+          <Link href="/campaign-review" className="font-medium text-primary hover:underline">
+            Campaign Review
+          </Link>
+          .
         </p>
         {isAdmin && (
           <Button
@@ -221,86 +259,66 @@ export default function Tasks() {
         <CreateManualTaskDialog open={createManualOpen} onOpenChange={setCreateManualOpen} />
       )}
 
-      <WorkQueueToolbar
-        queueTab={queueTab}
-        onQueueTabChange={setQueueTab}
-        tabCounts={tabCounts}
-        search={search}
-        onSearchChange={setSearch}
-        datePreset={datePreset}
-        onDatePresetChange={handleDuePresetChange}
-        dateFrom={dueDateFrom}
-        dateTo={dueDateTo}
-        onCustomDueRangeChange={(from, to) => {
-          setDatePreset("custom");
-          setDueDateFrom(from);
-          setDueDateTo(to);
-        }}
-        showEmployeeFilter={isAdmin && queueTab !== "my"}
-        employeeFilter={employeeFilter}
-        onEmployeeFilterChange={setEmployeeFilter}
-        employees={employees.map((e) => ({ id: e.id, name: e.name }))}
-      />
-
-      <RefreshingHint visible={isFetching && !isLoading} className="-mt-2 mb-1" />
-
-      {isLoading ? (
-        <QueueListSkeleton count={4} />
-      ) : isError ? (
-        <OperationalError
-          title="Couldn't load the work queue"
-          error={error}
-          onRetry={() => void refetch()}
-          retrying={isFetching}
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+        <WorkQueueFilterRail
+          filters={railFilters}
+          onFiltersChange={setRailFilters}
+          showAssignee={showAssigneeFilter}
+          employeeFilter={employeeFilter}
+          onEmployeeFilterChange={setEmployeeFilter}
+          employees={employees.map((e) => ({ id: e.id, name: e.name }))}
         />
-      ) : filtered.length === 0 ? (
-        <EmptyQueue queueTab={queueTab} search={search} />
-      ) : sections && sections.length > 0 ? (
-        <div className="space-y-6">
-          {sections.map((section) => (
-            <section key={section.id} aria-labelledby={`section-${section.id}`}>
-              <h2
-                id={`section-${section.id}`}
-                className="mb-2 text-xs font-bold uppercase tracking-widest text-muted-foreground"
-              >
-                {section.label}
-                <span className="ml-2 font-mono text-[10px] text-muted-foreground/80">
-                  {section.tasks.length}
-                </span>
-              </h2>
-              <ul className="space-y-3">
-                {section.tasks.map((task) => (
-                  <li key={task.id}>
-                    <WorkQueueRow
-                      task={task}
-                      showAssignee={showAssignee}
-                      trafficSourceNames={trafficSourceNames}
-                      onOpen={() => setSelectedTask(task)}
-                      onStart={() => markInProgress(task)}
-                      starting={updateTask.isPending}
-                    />
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
+
+        <div className="min-w-0 flex-1 space-y-3">
+          <WorkQueueSummary counts={summaryCounts} />
+
+          <WorkQueueToolbar
+            queueTab={queueTab}
+            onQueueTabChange={setQueueTab}
+            tabCounts={tabCounts}
+            search={search}
+            onSearchChange={setSearch}
+            datePreset={datePreset}
+            onDatePresetChange={handleDuePresetChange}
+            dateFrom={dueDateFrom}
+            dateTo={dueDateTo}
+            onCustomDueRangeChange={(from, to) => {
+              setDatePreset("custom");
+              setDueDateFrom(from);
+              setDueDateTo(to);
+            }}
+          />
+
+          <RefreshingHint visible={isFetching && !isLoading} className="-mt-1 mb-1" />
+
+          {isLoading ? (
+            <QueueListSkeleton count={4} />
+          ) : isError ? (
+            <OperationalError
+              title="Couldn't load the work queue"
+              error={error}
+              onRetry={() => void refetch()}
+              retrying={isFetching}
+            />
+          ) : filtered.length === 0 ? (
+            <EmptyQueue queueTab={queueTab} search={search} />
+          ) : (
+            <div className="space-y-4">
+              {familySections.map((section) => (
+                <WorkQueueFamilySection
+                  key={section.id}
+                  section={section}
+                  showAssignee={showAssignee}
+                  trafficSourceNames={trafficSourceNames}
+                  onOpenTask={setSelectedTask}
+                  onStartTask={markInProgress}
+                  starting={updateTask.isPending}
+                />
+              ))}
+            </div>
+          )}
         </div>
-      ) : (
-        <ul className="space-y-3">
-          {filtered.map((task) => (
-            <li key={task.id}>
-              <WorkQueueRow
-                task={task}
-                showAssignee={showAssignee}
-                trafficSourceNames={trafficSourceNames}
-                onOpen={() => setSelectedTask(task)}
-                onStart={() => markInProgress(task)}
-                starting={updateTask.isPending}
-              />
-            </li>
-          ))}
-        </ul>
-      )}
+      </div>
 
       <TaskDetailDrawer
         task={selectedTask}
