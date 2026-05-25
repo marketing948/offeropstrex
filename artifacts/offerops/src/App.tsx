@@ -9,18 +9,13 @@ import { ExpFeedbackProvider } from "@/components/exp-feedback/exp-feedback-cont
 import { Layout } from "@/components/layout";
 
 import Login from "@/pages/login";
-import Dashboard from "@/pages/dashboard";
-import EmployeeDashboard from "@/pages/employee-dashboard";
 import Employees from "@/pages/employees";
 import EmployeeDetail from "@/pages/employee-detail";
 import TestingBatches from "@/pages/testing-batches";
 import TestingBatchDetail from "@/pages/testing-batch-detail";
 import Tasks from "@/pages/tasks";
 import Activity from "@/pages/activity";
-import DailyReports from "@/pages/daily-reports";
-import WeeklyReports from "@/pages/weekly-reports";
 import Settings from "@/pages/settings";
-import PerformanceRedirect from "@/pages/performance";
 import OperationsHub from "@/pages/operations-hub";
 import OpsQueue from "@/pages/ops-queue";
 import TrackerCampaigns from "@/pages/tracker-campaigns";
@@ -28,6 +23,7 @@ import LiveCampaigns from "@/pages/live-campaigns";
 import Reports from "@/pages/reports";
 import Profile from "@/pages/profile";
 import NotFound from "@/pages/not-found";
+import RouteRedirect from "@/pages/route-redirect";
 
 const queryClient = new QueryClient();
 
@@ -40,7 +36,7 @@ function ProtectedRoute({ component: Component, adminOnly = false }: { component
       if (!currentEmployee) {
         setLocation("/login");
       } else if (adminOnly && currentEmployee.role !== "admin") {
-        setLocation("/employee-dashboard");
+        setLocation("/ops");
       }
     }
   }, [currentEmployee, isLoading, adminOnly, setLocation]);
@@ -73,24 +69,32 @@ function Router() {
       <Route path="/ops">
         {() => <ProtectedRoute component={OperationsHub} />}
       </Route>
+      {/* Internal legacy surface — not linked from sidebar; use /ops instead. */}
       <Route path="/ops/legacy">
         {() => <ProtectedRoute component={OpsQueue} />}
       </Route>
 
+      {/* Voluum tracker stub — hidden from nav; deep links only. */}
       <Route path="/tracker-campaigns">
         {() => <ProtectedRoute component={TrackerCampaigns} />}
       </Route>
-      {/* Phase 9c: legacy /live-campaigns kept as a redirect alias so any
-          stale bookmarks land on the new page without a 404. */}
+
       <Route path="/live-campaigns">
         {() => <ProtectedRoute component={LiveCampaigns} />}
       </Route>
 
+      {/* Legacy overview aliases → canonical operational homes */}
       <Route path="/dashboard">
-        {() => <ProtectedRoute component={Dashboard} adminOnly={true} />}
+        {() => <ProtectedRoute component={() => <RouteRedirect to="/ops" />} adminOnly />}
       </Route>
       <Route path="/employee-dashboard">
-        {() => <ProtectedRoute component={EmployeeDashboard} />}
+        {() => <ProtectedRoute component={() => <RouteRedirect to="/ops" />} />}
+      </Route>
+      <Route path="/mission-control">
+        {() => <ProtectedRoute component={() => <RouteRedirect to="/ops" />} />}
+      </Route>
+      <Route path="/performance">
+        {() => <ProtectedRoute component={() => <RouteRedirect to="/ops" />} />}
       </Route>
 
       <Route path="/employees">
@@ -119,14 +123,10 @@ function Router() {
         {() => <ProtectedRoute component={Reports} />}
       </Route>
       <Route path="/daily-reports">
-        {() => <ProtectedRoute component={DailyReports} />}
+        {() => <ProtectedRoute component={() => <RouteRedirect to="/reports" />} />}
       </Route>
       <Route path="/weekly-reports">
-        {() => <ProtectedRoute component={WeeklyReports} />}
-      </Route>
-
-      <Route path="/performance">
-        {() => <ProtectedRoute component={PerformanceRedirect} />}
+        {() => <ProtectedRoute component={() => <RouteRedirect to="/reports" />} />}
       </Route>
 
       <Route path="/settings">

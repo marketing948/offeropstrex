@@ -1,4 +1,4 @@
-/** Relative time for Mission Control (client clock). */
+/** Relative time for batch health panels (client clock). */
 export function formatRelativeTime(iso: string | null | undefined, now = Date.now()): string {
   if (!iso) return "—";
   const then = new Date(iso).getTime();

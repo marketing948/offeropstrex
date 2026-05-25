@@ -4,24 +4,14 @@ import { routeForNotification } from "@/lib/entity-navigation";
 import { queryOpts } from "@/lib/ws-query";
 import { Link, useLocation } from "wouter";
 import {
-  LayoutDashboard,
   Users,
-  CheckSquare,
-  BarChart3,
-  Settings,
   LogOut,
-  FolderTree,
-  Network,
   Bell,
-  Layers,
-  Radio,
-  FileBarChart,
-  History,
-  User,
   ChevronsUpDown,
   Building2,
   Check,
 } from "lucide-react";
+import { getNavigationSections, isNavActive } from "@/lib/navigation";
 import {
   useListNotifications,
   useMarkAllNotificationsRead,
@@ -287,25 +277,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const isAdmin = currentEmployee.role === "admin";
 
-  // ── Nav items (Pivot Phase 0: Tracker Campaigns hidden — Voluum disabled) ──
-  const navItems = isAdmin ? [
-    { href: "/ops", label: "Operations Hub", icon: Layers, highlight: true },
-    { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
-    { href: "/testing-batches", label: "Batches", icon: FolderTree },
-    { href: "/live-campaigns", label: "Live Campaigns", icon: Radio },
-    { href: "/tasks", label: "Work Queue", icon: CheckSquare },
-    { href: "/activity", label: "Activity", icon: History },
-    { href: "/reports", label: "Reports", icon: FileBarChart },
-    { href: "/employees", label: "Team", icon: Users },
-  ] : [
-    { href: "/ops", label: "Operations Hub", icon: Layers, highlight: true },
-    { href: "/employee-dashboard", label: "My Dashboard", icon: LayoutDashboard },
-    { href: "/testing-batches", label: "My Batches", icon: FolderTree },
-    { href: "/live-campaigns", label: "Live Campaigns", icon: Radio },
-    { href: "/tasks", label: "Work Queue", icon: CheckSquare },
-    { href: "/activity", label: "Activity", icon: History },
-    { href: "/reports", label: "Reports", icon: FileBarChart },
-  ];
+  const navSections = getNavigationSections(isAdmin);
 
   // Phase 9e: Bible §9 notification taxonomy. Severity drives the
   // colored ring around the icon (info/warning/high/critical), the
@@ -335,55 +307,59 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <WorkspaceSwitcher />
 
         {/* Nav */}
-        <nav className="flex-1 overflow-y-auto p-3 space-y-0.5">
-          {navItems.map((item) => {
-            const isActive = location === item.href || location.startsWith(`${item.href}/`);
-            const isHighlight = (item as any).highlight;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="flex items-center gap-3 px-3 py-2 rounded-md transition-colors text-sm font-medium"
-                style={
-                  isActive
-                    ? {
-                        background: "hsl(var(--sidebar-primary))",
-                        color: "hsl(var(--sidebar-primary-foreground))",
-                      }
-                    : {
-                        color: isHighlight
-                          ? "hsl(var(--sidebar-foreground))"
-                          : "hsl(var(--sidebar-foreground) / 0.65)",
-                      }
-                }
-                onMouseEnter={e => {
-                  if (!isActive) {
-                    (e.currentTarget as HTMLElement).style.background = "hsl(var(--sidebar-accent))";
-                    (e.currentTarget as HTMLElement).style.color = "hsl(var(--sidebar-accent-foreground))";
-                  }
-                }}
-                onMouseLeave={e => {
-                  if (!isActive) {
-                    (e.currentTarget as HTMLElement).style.background = "";
-                    (e.currentTarget as HTMLElement).style.color = isHighlight
-                      ? "hsl(var(--sidebar-foreground))"
-                      : "hsl(var(--sidebar-foreground) / 0.65)";
-                  }
-                }}
+        <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-4" aria-label="Main navigation">
+          {navSections.map((section) => (
+            <div key={section.id}>
+              <p
+                className="mb-1 px-2 text-[9px] font-semibold uppercase tracking-widest"
+                style={{ color: "hsl(var(--sidebar-foreground) / 0.4)" }}
               >
-                <item.icon size={17} />
-                {item.label}
-                {isHighlight && !isActive && (
-                  <span
-                    className="ml-auto text-[10px] font-bold px-1.5 py-0.5 rounded-full"
-                    style={{ background: "hsl(var(--sidebar-primary))", color: "hsl(var(--sidebar-primary-foreground))" }}
-                  >
-                    HUB
-                  </span>
-                )}
-              </Link>
-            );
-          })}
+                {section.label}
+              </p>
+              <ul className="space-y-0.5">
+                {section.items.map((item) => {
+                  const isActive = isNavActive(location, item.href);
+                  const mutedOpacity = item.primary ? 0.85 : 0.65;
+                  return (
+                    <li key={item.href}>
+                      <Link
+                        href={item.href}
+                        aria-current={isActive ? "page" : undefined}
+                        className="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors"
+                        style={
+                          isActive
+                            ? {
+                                background: "hsl(var(--sidebar-primary))",
+                                color: "hsl(var(--sidebar-primary-foreground))",
+                              }
+                            : {
+                                color: `hsl(var(--sidebar-foreground) / ${mutedOpacity})`,
+                              }
+                        }
+                        onMouseEnter={(e) => {
+                          if (!isActive) {
+                            (e.currentTarget as HTMLElement).style.background =
+                              "hsl(var(--sidebar-accent))";
+                            (e.currentTarget as HTMLElement).style.color =
+                              "hsl(var(--sidebar-accent-foreground))";
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!isActive) {
+                            (e.currentTarget as HTMLElement).style.background = "";
+                            (e.currentTarget as HTMLElement).style.color = `hsl(var(--sidebar-foreground) / ${mutedOpacity})`;
+                          }
+                        }}
+                      >
+                        <item.icon size={17} aria-hidden />
+                        <span className="truncate">{item.label}</span>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
         </nav>
 
         {/* Footer */}
@@ -507,35 +483,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
               </span>
             </div>
           </Link>
-
-          {/* Settings link (admin) */}
-          {isAdmin && (
-            <Link
-              href="/settings"
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors mb-0.5"
-              style={{
-                color: location === "/settings"
-                  ? "hsl(var(--sidebar-primary-foreground))"
-                  : "hsl(var(--sidebar-foreground) / 0.55)",
-                background: location === "/settings" ? "hsl(var(--sidebar-primary))" : "",
-              }}
-              onMouseEnter={e => {
-                if (location !== "/settings") {
-                  (e.currentTarget as HTMLElement).style.background = "hsl(var(--sidebar-accent))";
-                  (e.currentTarget as HTMLElement).style.color = "hsl(var(--sidebar-foreground))";
-                }
-              }}
-              onMouseLeave={e => {
-                if (location !== "/settings") {
-                  (e.currentTarget as HTMLElement).style.background = "";
-                  (e.currentTarget as HTMLElement).style.color = "hsl(var(--sidebar-foreground) / 0.55)";
-                }
-              }}
-            >
-              <Settings size={15} />
-              Settings
-            </Link>
-          )}
 
           {/* Sign out */}
           <button

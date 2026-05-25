@@ -22,6 +22,7 @@ import { useAuth } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace-context";
 import { VOLUUM_UI_ENABLED } from "@/lib/feature-flags";
 import { useLocation, Link } from "wouter";
+import { LegacyRouteBanner } from "@/components/legacy-route-banner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -534,16 +535,22 @@ export default function OpsQueue() {
 
   return (
     <div className="space-y-8 max-w-[1400px]">
+      <LegacyRouteBanner
+        title="Legacy operations view"
+        description="This older hub layout is kept for internal reference. Use Operations Hub for day-to-day work."
+        canonicalHref="/ops"
+        canonicalLabel="Go to Operations Hub"
+      />
 
       {/* ── Header ── */}
       <div className="flex items-start justify-between flex-wrap gap-4">
         <div>
           <div className="flex items-center gap-2.5 mb-1">
             <div className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse flex-shrink-0" />
-            <h1 className="text-2xl font-black tracking-tight">Operations Hub</h1>
+            <h1 className="text-2xl font-black tracking-tight">Legacy operations queue</h1>
           </div>
           <p className="text-sm text-muted-foreground">
-            Mission control — real-time status, action queue, and performance snapshot.
+            Superseded by Operations Hub — action queue and pipeline snapshot (internal).
           </p>
         </div>
         <div className="flex items-center gap-2">

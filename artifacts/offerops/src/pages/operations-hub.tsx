@@ -1,5 +1,5 @@
 /**
- * Operations Hub — merged Mission Control + Performance at /ops.
+ * Operations Hub — live operational overview at /ops.
  * UI-only restructuring; existing APIs unchanged.
  */
 

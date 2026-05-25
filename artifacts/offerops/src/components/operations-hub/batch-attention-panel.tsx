@@ -1,5 +1,5 @@
 /**
- * Compact batch health list — "what requires attention?" from Mission Control.
+ * Compact batch health list — "what requires attention?" for Operations Hub.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
