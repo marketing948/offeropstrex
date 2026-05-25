@@ -2,6 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   BarChart3,
   CheckSquare,
+  ClipboardCheck,
   FileBarChart,
   FolderTree,
   History,
@@ -30,6 +31,7 @@ export function getNavigationSections(isAdmin: boolean): NavSection[] {
   const operations: NavItem[] = [
     { href: "/ops", label: "Operations Hub", icon: Layers, primary: true },
     { href: "/tasks", label: "Work Queue", icon: CheckSquare },
+    { href: "/campaign-review", label: "Campaign Review", icon: ClipboardCheck },
     { href: "/testing-batches", label: "Batches", icon: FolderTree },
     { href: "/live-campaigns", label: "Live Campaigns", icon: Radio },
     { href: "/activity", label: "Activity", icon: History },

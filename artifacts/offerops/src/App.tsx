@@ -25,6 +25,7 @@ import Profile from "@/pages/profile";
 import NotFound from "@/pages/not-found";
 import RouteRedirect from "@/pages/route-redirect";
 import Dashboard from "@/pages/dashboard";
+import CampaignReview from "@/pages/campaign-review";
 
 const queryClient = new QueryClient();
 
@@ -114,6 +115,10 @@ function Router() {
 
       <Route path="/tasks">
         {() => <ProtectedRoute component={Tasks} />}
+      </Route>
+
+      <Route path="/campaign-review">
+        {() => <ProtectedRoute component={CampaignReview} />}
       </Route>
 
       <Route path="/activity">
