@@ -38,9 +38,14 @@ import {
   type QueueTab,
 } from "@/lib/work-queue";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { ClipboardList, Plus } from "lucide-react";
 import { CreateManualTaskDialog } from "@/components/create-manual-task-dialog";
+import { OperationalEmpty } from "@/components/operational-state/operational-empty";
+import { OperationalError } from "@/components/operational-state/operational-error";
+import { QueueListSkeleton } from "@/components/operational-state/operational-skeletons";
+import { RefreshingHint } from "@/components/operational-state/refreshing-hint";
+import { useToast } from "@/hooks/use-toast";
+import { operationalErrorMessage } from "@/lib/operational-feedback";
 
 function parseOpenTaskIdFromUrl(): number | null {
   if (typeof window === "undefined") return null;
@@ -92,7 +97,15 @@ export default function Tasks() {
     [wsId, employeeIdForFetch],
   );
 
-  const { data: tasks, isLoading } = useListTodoTasks(
+  const { toast } = useToast();
+  const {
+    data: tasks,
+    isLoading,
+    isError,
+    error,
+    refetch,
+    isFetching,
+  } = useListTodoTasks(
     taskParams,
     wsQueryOpts(activeWorkspaceId, getListTodoTasksQueryKey(taskParams), {
       staleTime: 20_000,
@@ -163,9 +176,18 @@ export default function Tasks() {
   }
 
   async function markInProgress(task: TodoTask) {
-    if (task.status === "IN_PROGRESS") return;
-    await updateTask.mutateAsync({ id: task.id, data: { status: "IN_PROGRESS" } });
-    await invalidateTasks();
+    if (task.status === "IN_PROGRESS" || updateTask.isPending) return;
+    try {
+      await updateTask.mutateAsync({ id: task.id, data: { status: "IN_PROGRESS" } });
+      await invalidateTasks();
+      toast({ title: "Task moved to in progress" });
+    } catch (e) {
+      toast({
+        title: "Could not update task",
+        description: operationalErrorMessage(e, "Try again in a moment."),
+        variant: "destructive",
+      });
+    }
   }
 
   return (
@@ -220,12 +242,17 @@ export default function Tasks() {
         employees={employees.map((e) => ({ id: e.id, name: e.name }))}
       />
 
+      <RefreshingHint visible={isFetching && !isLoading} className="-mt-2 mb-1" />
+
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-28 w-full rounded-xl" />
-          ))}
-        </div>
+        <QueueListSkeleton count={4} />
+      ) : isError ? (
+        <OperationalError
+          title="Couldn't load the work queue"
+          error={error}
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+        />
       ) : filtered.length === 0 ? (
         <EmptyQueue queueTab={queueTab} search={search} />
       ) : sections && sections.length > 0 ? (
@@ -285,27 +312,26 @@ export default function Tasks() {
 }
 
 function EmptyQueue({ queueTab, search }: { queueTab: QueueTab; search: string }) {
-  const headline =
-    search.trim() !== ""
-      ? "No matches"
-      : queueTab === "completed"
-        ? "Nothing completed yet"
-        : queueTab === "blocked"
-          ? "No blocked work"
-          : queueTab === "overdue"
-            ? "Nothing overdue"
-            : "Queue is clear";
-  const body =
-    search.trim() !== ""
-      ? "Try a different search or filter."
-      : queueTab === "completed"
-        ? "Finished tasks will appear here."
-        : "You're caught up on this view.";
+  const hasSearch = search.trim() !== "";
+  const title = hasSearch
+    ? "No tasks match your search"
+    : queueTab === "completed"
+      ? "Nothing completed in this view"
+      : queueTab === "blocked"
+        ? "No blocked tasks"
+        : queueTab === "overdue"
+          ? "Nothing overdue"
+          : queueTab === "active"
+            ? "No active tasks right now"
+            : "Your queue is clear";
+  const description = hasSearch
+    ? "Try a different keyword or clear filters."
+    : queueTab === "completed"
+      ? "Completed work will show up here when tasks are done."
+      : queueTab === "my"
+        ? "You're caught up — new assignments will appear here."
+        : "Nothing needs attention on this tab.";
   return (
-    <div className="rounded-xl border border-dashed border-border bg-muted/15 px-6 py-14 text-center">
-      <ClipboardList className="mx-auto mb-3 h-10 w-10 text-muted-foreground/35" />
-      <p className="text-sm font-medium text-foreground">{headline}</p>
-      <p className="mt-1 text-sm text-muted-foreground">{body}</p>
-    </div>
+    <OperationalEmpty icon={ClipboardList} title={title} description={description} />
   );
 }

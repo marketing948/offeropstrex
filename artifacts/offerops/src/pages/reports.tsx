@@ -22,6 +22,11 @@ import type {
   Employee,
 } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { OperationalEmpty } from "@/components/operational-state/operational-empty";
+import {
+  DataTableSkeleton,
+  ReportKpiCardsSkeleton,
+} from "@/components/operational-state/operational-skeletons";
 import { DateFilterBar } from "@/components/date-filter-bar";
 import { useDateFilterState } from "@/hooks/use-date-filter-state";
 import { useAuth } from "@/lib/auth";
@@ -227,8 +232,15 @@ export default function Reports() {
     ...(dateTo ? { date_to: dateTo } : {}),
     workspace_id: activeWorkspaceId ?? 0,
   };
-  const { data: batches = [] }  = useListTestingBatches(wsParams, wsQueryOpts(activeWorkspaceId, getListTestingBatchesQueryKey(wsParams)));
-  const { data: perfAll = [] }  = useListPerformance(perfParams, wsQueryOpts(activeWorkspaceId, getListPerformanceQueryKey(perfParams)));
+  const { data: batches = [], isLoading: batchesLoading } = useListTestingBatches(
+    wsParams,
+    wsQueryOpts(activeWorkspaceId, getListTestingBatchesQueryKey(wsParams)),
+  );
+  const { data: perfAll = [], isLoading: perfLoading } = useListPerformance(
+    perfParams,
+    wsQueryOpts(activeWorkspaceId, getListPerformanceQueryKey(perfParams)),
+  );
+  const reportsCoreLoading = batchesLoading || perfLoading;
   const { data: offers = [] }   = useListOffers(wsParams, wsQueryOpts(activeWorkspaceId, getListOffersQueryKey(wsParams)));
   const { data: tasks = [] }    = useListTodoTasks(wsParams, wsQueryOpts(activeWorkspaceId, getListTodoTasksQueryKey(wsParams)));
   const { data: employees = [] } = useListEmployees(wsParams, wsQueryOpts(activeWorkspaceId, getListEmployeesQueryKey(wsParams)));
@@ -577,6 +589,13 @@ export default function Reports() {
       ══════════════════════════════════════ */}
       {tab === "ops" && (
         <div className="space-y-5">
+          {reportsCoreLoading ? (
+            <>
+              <ReportKpiCardsSkeleton count={4} />
+              <ReportKpiCardsSkeleton count={4} />
+            </>
+          ) : (
+          <>
           {/* KPI cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
@@ -633,7 +652,9 @@ export default function Reports() {
                     </div>
                   ))}
                   {opsSummary.statusChart.length === 0 && (
-                    <p className="text-xs text-muted-foreground text-center py-4">No batches yet</p>
+                    <p className="text-xs text-muted-foreground text-center py-4">
+                      No active testing batches in this range.
+                    </p>
                   )}
                 </div>
               </CardContent>
@@ -673,6 +694,8 @@ export default function Reports() {
               </CardContent>
             </Card>
           </div>
+          </>
+          )}
         </div>
       )}
 
@@ -681,6 +704,10 @@ export default function Reports() {
       ══════════════════════════════════════ */}
       {tab === "batches" && (
         <div className="space-y-4">
+          {reportsCoreLoading ? (
+            <DataTableSkeleton rows={8} cols={7} />
+          ) : (
+          <>
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">{sortedBatches.length} batch{sortedBatches.length !== 1 ? "es" : ""}</p>
             <button
@@ -719,7 +746,16 @@ export default function Reports() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {sortedBatches.length === 0 ? (
-                    <tr><td colSpan={15} className="text-center py-10 text-sm text-muted-foreground">No batches match the current filters.</td></tr>
+                    <tr>
+                      <td colSpan={15} className="p-4">
+                        <OperationalEmpty
+                          icon={Target}
+                          title="No batches match these filters"
+                          description="Clear filters or widen the date range to see batch performance."
+                          compact
+                        />
+                      </td>
+                    </tr>
                   ) : sortedBatches.map(r => (
                     <tr key={r.id} className="hover:bg-muted/20 transition-colors">
                       <td className="py-2.5 px-3">
@@ -757,6 +793,8 @@ export default function Reports() {
               </table>
             </div>
           </Card>
+          </>
+          )}
         </div>
       )}
 
@@ -846,7 +884,16 @@ export default function Reports() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {sortedSrc.length === 0 ? (
-                    <tr><td colSpan={10} className="text-center py-10 text-sm text-muted-foreground">No data available.</td></tr>
+                    <tr>
+                      <td colSpan={10} className="p-4">
+                        <OperationalEmpty
+                          icon={Globe}
+                          title="No traffic source metrics in this range"
+                          description="Import daily metrics or widen the date filter to see source breakdowns."
+                          compact
+                        />
+                      </td>
+                    </tr>
                   ) : sortedSrc.map(r => (
                     <tr key={r.source} className="hover:bg-muted/20 transition-colors">
                       <td className="py-2.5 px-3 text-sm font-semibold text-foreground">{r.source}</td>
@@ -934,7 +981,16 @@ export default function Reports() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {sortedNet.length === 0 ? (
-                    <tr><td colSpan={11} className="text-center py-10 text-sm text-muted-foreground">No data available.</td></tr>
+                    <tr>
+                      <td colSpan={11} className="p-4">
+                        <OperationalEmpty
+                          icon={Network}
+                          title="No network / GEO metrics in this range"
+                          description="Adjust filters or import Voluum metrics for the selected period."
+                          compact
+                        />
+                      </td>
+                    </tr>
                   ) : sortedNet.map((r, i) => (
                     <tr key={i} className="hover:bg-muted/20 transition-colors">
                       <td className="py-2.5 px-3 text-sm font-semibold text-foreground">{r.network}</td>
@@ -1065,7 +1121,16 @@ export default function Reports() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {sortedEmp.length === 0 ? (
-                    <tr><td colSpan={10} className="text-center py-10 text-sm text-muted-foreground">No employee data.</td></tr>
+                    <tr>
+                      <td colSpan={10} className="p-4">
+                        <OperationalEmpty
+                          icon={Users}
+                          title="No employee performance in this range"
+                          description="Assign batches to employees or adjust filters to see breakdowns."
+                          compact
+                        />
+                      </td>
+                    </tr>
                   ) : sortedEmp.map(r => (
                     <tr key={r.employeeId} className="hover:bg-muted/20 transition-colors">
                       <td className="py-2.5 px-3">
@@ -1113,9 +1178,14 @@ export default function Reports() {
             </CardHeader>
             <CardContent className="pt-0">
               {winnersLoading ? (
-                <p className="text-sm text-muted-foreground py-6">Loading…</p>
+                <DataTableSkeleton rows={5} cols={6} />
               ) : winnerRows.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-6">No winner rows recorded yet.</p>
+                <OperationalEmpty
+                  icon={Trophy}
+                  title="No campaign winners recorded yet"
+                  description="Winners appear when find-winners tasks complete or winners are entered manually."
+                  compact
+                />
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { History, AlertCircle } from "lucide-react";
+import { History } from "lucide-react";
 import {
   useListEmployees,
   getListEmployeesQueryKey,
@@ -23,7 +23,10 @@ import { routeForEntity } from "@/lib/entity-navigation";
 import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
+import { OperationalEmpty } from "@/components/operational-state/operational-empty";
+import { OperationalError } from "@/components/operational-state/operational-error";
+import { ActivityTimelineSkeleton } from "@/components/operational-state/operational-skeletons";
+import { RefreshingHint } from "@/components/operational-state/refreshing-hint";
 import {
   Select,
   SelectContent,
@@ -141,43 +144,23 @@ export default function Activity() {
       </div>
 
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-24 w-full rounded-lg" />
-          ))}
-        </div>
+        <ActivityTimelineSkeleton count={6} />
       ) : isError ? (
-        <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-6">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-foreground">Could not load activity</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {error instanceof Error ? error.message : "Unknown error"}
-              </p>
-              <button
-                type="button"
-                onClick={() => void refetch()}
-                className="mt-3 text-sm font-medium text-primary hover:underline"
-              >
-                Try again
-              </button>
-            </div>
-          </div>
-        </div>
+        <OperationalError
+          title="Couldn't load operational activity"
+          error={error}
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+        />
       ) : items.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border bg-muted/20 px-6 py-14 text-center">
-          <History className="mx-auto mb-3 h-10 w-10 text-muted-foreground/35" />
-          <p className="text-sm font-medium text-foreground">No activity in this range.</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Try another preset or clear filters.
-          </p>
-        </div>
+        <OperationalEmpty
+          icon={History}
+          title="No recent operational activity"
+          description="Try a wider date range or clear employee and event filters."
+        />
       ) : (
         <div className="space-y-2">
-          {isFetching && !isLoading && (
-            <p className="text-xs text-muted-foreground">Refreshing…</p>
-          )}
+          <RefreshingHint visible={isFetching && !isLoading} />
           <ul className="divide-y divide-border rounded-xl border border-border bg-card">
             {items.map((item) => (
               <ActivityRow

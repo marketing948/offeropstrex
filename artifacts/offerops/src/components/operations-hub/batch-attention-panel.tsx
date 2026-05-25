@@ -38,7 +38,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Activity, Loader2, RefreshCw } from "lucide-react";
+import { Activity, Layers, Loader2, RefreshCw } from "lucide-react";
+import { OperationalEmpty } from "@/components/operational-state/operational-empty";
+import { OperationalError } from "@/components/operational-state/operational-error";
 
 const FILTER_OPTIONS: { key: MissionControlFilter; label: string }[] = [
   { key: "attention", label: "Needs attention" },
@@ -53,6 +55,8 @@ export function BatchAttentionPanel() {
   const {
     data: batches,
     isLoading: batchesLoading,
+    isError: batchesError,
+    error: batchesLoadError,
     refetch: refetchBatches,
     isFetching: batchesFetching,
   } = useListTestingBatches(
@@ -204,14 +208,27 @@ export function BatchAttentionPanel() {
             ))}
           </div>
         )}
-        {!batchesLoading && filteredRows.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <Activity className="mb-2 h-8 w-8 text-muted-foreground/35" />
-            <p className="text-sm font-medium">Nothing needs attention</p>
-            <p className="mt-1 text-xs text-muted-foreground">Try another filter.</p>
-          </div>
+        {batchesError && !batchesLoading && (
+          <OperationalError
+            title="Couldn't load testing batches"
+            error={batchesLoadError}
+            onRetry={() => void refetchBatches()}
+            retrying={batchesFetching}
+          />
         )}
-        {!batchesLoading && filteredRows.length > 0 && (
+        {!batchesLoading && !batchesError && filteredRows.length === 0 && (
+          <OperationalEmpty
+            icon={filter === "attention" ? Activity : Layers}
+            title={
+              filter === "attention"
+                ? "No batches need attention"
+                : "No batches match this filter"
+            }
+            description="Switch filters or refresh after new testing work starts."
+            compact
+          />
+        )}
+        {!batchesLoading && !batchesError && filteredRows.length > 0 && (
           <div className="space-y-2">
             {filteredRows.slice(0, 12).map((row) => (
               <BatchListRow

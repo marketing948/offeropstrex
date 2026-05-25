@@ -22,8 +22,10 @@ import {
   type OperationalActivityItem,
 } from "@/lib/operational-activity";
 import { routeForEntity, routeForNotification } from "@/lib/entity-navigation";
-import { Skeleton } from "@/components/ui/skeleton";
 import { AlertTriangle, Bell, History } from "lucide-react";
+import { OperationalEmpty } from "@/components/operational-state/operational-empty";
+import { OperationalError } from "@/components/operational-state/operational-error";
+import { ActivityTimelineSkeleton } from "@/components/operational-state/operational-skeletons";
 
 const NOTIF_ICONS: Record<string, string> = {
   NEW_BATCH_CREATED: "🆕",
@@ -132,11 +134,21 @@ export function ActivityAlertsPanel() {
           </button>
         </div>
         {activityQuery.isLoading ? (
-          <Skeleton className="h-32 w-full rounded-lg" />
+          <ActivityTimelineSkeleton count={4} />
+        ) : activityQuery.isError ? (
+          <OperationalError
+            title="Couldn't load recent activity"
+            error={activityQuery.error}
+            onRetry={() => void activityQuery.refetch()}
+            retrying={activityQuery.isFetching}
+          />
         ) : activityItems.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
-            No activity recorded today.
-          </p>
+          <OperationalEmpty
+            icon={History}
+            title="No operational activity today"
+            description="Events from batches, tasks, and campaigns will appear here."
+            compact
+          />
         ) : (
           <ul className="divide-y divide-border rounded-lg border border-border bg-card">
             {activityItems.map((item) => (
@@ -175,7 +187,9 @@ export function ActivityAlertsPanel() {
             </h3>
           </div>
           {recentNotifs.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No notifications.</p>
+            <p className="rounded-lg border border-dashed border-border bg-muted/10 px-3 py-4 text-center text-xs text-muted-foreground">
+              No notifications right now.
+            </p>
           ) : (
             <ul className="space-y-1.5">
               {recentNotifs.map((n) => {

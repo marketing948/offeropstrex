@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { OperationalError } from "@/components/operational-state/operational-error";
 import { BatchHealthDrawerRecovery } from "@/components/mission-control/batch-health-drawer-recovery";
 import { CopyButton } from "@/components/mission-control/copy-button";
 import { RecommendationBadge } from "@/components/mission-control/recommendation-badge";
@@ -293,23 +294,11 @@ export function BatchHealthDrawer({
           )}
 
           {isError && (
-            <div className="rounded-lg border border-dashed border-destructive/40 bg-destructive/5 px-4 py-6 text-center">
-              <p className="text-sm font-medium text-destructive">Could not load batch health</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Check your connection or permissions, then retry.
-              </p>
-              {onHealthRefetch && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="mt-3"
-                  onClick={() => void onHealthRefetch()}
-                >
-                  Retry health
-                </Button>
-              )}
-            </div>
+            <OperationalError
+              title="Couldn't load batch health"
+              description="Check your connection or permissions, then retry."
+              onRetry={onHealthRefetch ? () => void onHealthRefetch() : undefined}
+            />
           )}
 
           {!isLoading && health && batchId != null && (

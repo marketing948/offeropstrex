@@ -19,8 +19,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Network, Percent, TrendingUp, Trophy } from "lucide-react";
+import { OperationalEmpty } from "@/components/operational-state/operational-empty";
+import { OperationalError } from "@/components/operational-state/operational-error";
+import { PerformanceSectionSkeleton } from "@/components/operational-state/operational-skeletons";
 
 function fmt$(n: number) {
   return `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
@@ -48,7 +50,14 @@ export function PerformancePanel({
     batchParams,
     wsQueryOpts(activeWorkspaceId, getListTestingBatchesQueryKey(batchParams)),
   );
-  const { data: records = [], isLoading } = useListPerformance(
+  const {
+    data: records = [],
+    isLoading,
+    isError,
+    error,
+    refetch,
+    isFetching,
+  } = useListPerformance(
     perfParams,
     wsQueryOpts(activeWorkspaceId, getListPerformanceQueryKey(perfParams)),
   );
@@ -142,19 +151,29 @@ export function PerformancePanel({
   }, [records, batches]);
 
   if (isLoading) {
+    return <PerformanceSectionSkeleton />;
+  }
+
+  if (isError) {
     return (
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Skeleton className="h-40 w-full rounded-lg" />
-        <Skeleton className="h-40 w-full rounded-lg" />
-      </div>
+      <OperationalError
+        title="Couldn't load performance metrics"
+        error={error}
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+      />
     );
   }
 
   if (records.length === 0) {
     return (
-      <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-        No imported metrics in this date range. Import Voluum CSV on Live Campaigns.
-      </p>
+      <OperationalEmpty
+        icon={TrendingUp}
+        title="No metrics for this date range"
+        description="Import Voluum daily metrics from Live Campaigns, or choose a wider range."
+        actionLabel="Open Live Campaigns"
+        onAction={() => nav("/live-campaigns")}
+      />
     );
   }
 

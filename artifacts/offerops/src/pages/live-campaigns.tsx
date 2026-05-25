@@ -29,6 +29,12 @@ import { DateFilterSingleDay } from "@/components/date-filter-bar";
 import { useDateFilterState } from "@/hooks/use-date-filter-state";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  TableRowsSkeleton,
+  TableSectionState,
+} from "@/components/operational-state/table-body-state";
+import { RefreshingHint } from "@/components/operational-state/refreshing-hint";
+import { operationalErrorMessage } from "@/lib/operational-feedback";
 
 type CampaignPurpose = "testing" | "working" | "scaling";
 
@@ -226,7 +232,14 @@ export default function LiveCampaigns() {
     params.set("date_to", `${wentLiveRange.dateTo}T23:59:59.999Z`);
   }
 
-  const { data: response, isLoading, isError, error } = useQuery<LiveCampaignsResponse>({
+  const {
+    data: response,
+    isLoading,
+    isError,
+    error,
+    refetch,
+    isFetching,
+  } = useQuery<LiveCampaignsResponse>({
     queryKey: [
       "live-campaigns",
       activeWorkspaceId,
@@ -247,7 +260,10 @@ export default function LiveCampaigns() {
   const campaignItems = response?.items;
   const campaigns = campaignItems ?? [];
   const pagination = response?.pagination;
-  const errorMessage = error instanceof Error ? error.message : "Unable to load live campaigns.";
+  const loadErrorMessage = operationalErrorMessage(
+    error,
+    "Couldn't load live campaigns.",
+  );
 
   const metricsParams = new URLSearchParams();
   if (activeWorkspaceId) metricsParams.set("workspace_id", String(activeWorkspaceId));
@@ -321,7 +337,10 @@ export default function LiveCampaigns() {
   const pageEnd = Math.min(offset + pageSize, total);
   const canGoPrevious = offset > 0;
   const canGoNext = offset + pageSize < total;
-  const optionsErrorMessage = optionsError instanceof Error ? optionsError.message : "Some filter options could not be loaded.";
+  const optionsErrorMessage = operationalErrorMessage(
+    optionsError,
+    "Some filter options could not be loaded.",
+  );
 
   return (
     <div className="space-y-6">
@@ -465,9 +484,9 @@ export default function LiveCampaigns() {
       </div>
 
       {isOptionsError && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          {optionsErrorMessage}
-        </div>
+        <p className="rounded-md border border-amber-200/80 bg-amber-50/50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/20 dark:text-amber-100">
+          {optionsErrorMessage} Filters may be limited until options reload.
+        </p>
       )}
 
       <div className="rounded-md border border-border bg-card/50 overflow-x-auto">
@@ -500,11 +519,24 @@ export default function LiveCampaigns() {
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={19} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>
+              <TableRowsSkeleton rows={6} cols={8} />
             ) : isError ? (
-              <TableRow><TableCell colSpan={19} className="text-center py-8 text-destructive">{errorMessage}</TableCell></TableRow>
+              <TableSectionState
+                colSpan={19}
+                variant="error"
+                title="Couldn't load live campaigns"
+                description={loadErrorMessage}
+                error={error}
+                onRetry={() => void refetch()}
+                retrying={isFetching}
+              />
             ) : filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={19} className="text-center py-8 text-muted-foreground">No campaigns match these filters.</TableCell></TableRow>
+              <TableSectionState
+                colSpan={19}
+                variant="empty"
+                title="No live campaigns match these filters"
+                description="Adjust status, date range, or search — or add campaigns from a testing batch."
+              />
             ) : (
               filtered.map((c) => {
                 const daily = metricsByCampaignId.get(c.id);
@@ -561,9 +593,13 @@ export default function LiveCampaigns() {
         </Table>
       </div>
 
+      <RefreshingHint visible={isFetching && !isLoading} className="mb-1" />
+
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
         <div>
-          {isLoading ? "Loading live campaigns…" : `Showing ${pageStart}-${pageEnd} of ${total} campaigns`}
+          {isLoading
+            ? "Loading campaigns…"
+            : `Showing ${pageStart}-${pageEnd} of ${total} campaigns`}
           {q && filtered.length !== campaigns.length ? ` (${filtered.length} match search on this page)` : ""}
         </div>
         <div className="flex items-center gap-2">
