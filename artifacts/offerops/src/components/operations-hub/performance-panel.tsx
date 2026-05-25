@@ -30,18 +30,15 @@ function fmtPct(n: number) {
   return `${n.toFixed(1)}%`;
 }
 
-const PERF_DAYS = 14;
-
-export function PerformancePanel() {
+export function PerformancePanel({
+  dateFrom,
+  dateTo,
+}: {
+  dateFrom: string;
+  dateTo: string;
+}) {
   const { activeWorkspaceId } = useWorkspace();
   const [, nav] = useLocation();
-
-  const dateTo = useMemo(() => new Date().toISOString().split("T")[0], []);
-  const dateFrom = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - PERF_DAYS);
-    return d.toISOString().split("T")[0];
-  }, []);
 
   const wsId = activeWorkspaceId ?? 0;
   const batchParams = { workspace_id: wsId };
@@ -156,7 +153,7 @@ export function PerformancePanel() {
   if (records.length === 0) {
     return (
       <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-        No imported metrics in the last {PERF_DAYS} days. Import Voluum CSV on Live Campaigns.
+        No imported metrics in this date range. Import Voluum CSV on Live Campaigns.
       </p>
     );
   }

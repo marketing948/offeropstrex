@@ -6,20 +6,13 @@ import {
   isManualTask,
   isOverdueTask,
   isOpenWorkerTask,
-  parseDueDate,
 } from "@/lib/worker-tasks";
 import { getTaskTypeVisual } from "@/lib/task-type-visuals";
 
-export type QueueTab = "my" | "active" | "blocked" | "overdue" | "completed";
+export type { DateFilterPreset as DatePreset } from "@/lib/date-filter-presets";
+export { dueDateInPreset, DATE_FILTER_PRESET_OPTIONS as DATE_PRESET_OPTIONS } from "@/lib/date-filter-presets";
 
-export type DatePreset =
-  | "all"
-  | "today"
-  | "yesterday"
-  | "last7"
-  | "last30"
-  | "thisMonth"
-  | "lastMonth";
+export type QueueTab = "my" | "active" | "blocked" | "overdue" | "completed";
 
 export const QUEUE_TAB_OPTIONS: { key: QueueTab; label: string }[] = [
   { key: "my", label: "My Queue" },
@@ -27,16 +20,6 @@ export const QUEUE_TAB_OPTIONS: { key: QueueTab; label: string }[] = [
   { key: "blocked", label: "Blocked" },
   { key: "overdue", label: "Overdue" },
   { key: "completed", label: "Completed" },
-];
-
-export const DATE_PRESET_OPTIONS: { key: DatePreset; label: string }[] = [
-  { key: "all", label: "Any due date" },
-  { key: "today", label: "Today" },
-  { key: "yesterday", label: "Yesterday" },
-  { key: "last7", label: "Last 7 days" },
-  { key: "last30", label: "Last 30 days" },
-  { key: "thisMonth", label: "This month" },
-  { key: "lastMonth", label: "Last month" },
 ];
 
 export type TaskVisualWeight = "critical" | "elevated" | "normal" | "muted";
@@ -56,59 +39,6 @@ export function isNewlyAssigned(task: TodoTask, now = new Date()): boolean {
   const created = new Date(task.createdAt);
   if (Number.isNaN(created.getTime())) return false;
   return now.getTime() - created.getTime() < 24 * 60 * 60 * 1000;
-}
-
-function startOfLocalDay(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
-
-function endOfLocalDay(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
-}
-
-export function dueDateInPreset(
-  dueDate: string | null | undefined,
-  preset: DatePreset,
-  now = new Date(),
-): boolean {
-  if (preset === "all") return true;
-  const due = parseDueDate(dueDate);
-  if (!due) return false;
-
-  const todayStart = startOfLocalDay(now);
-  const todayEnd = endOfLocalDay(now);
-
-  switch (preset) {
-    case "today":
-      return due >= todayStart && due <= todayEnd;
-    case "yesterday": {
-      const y = new Date(todayStart);
-      y.setDate(y.getDate() - 1);
-      return due >= y && due < todayStart;
-    }
-    case "last7": {
-      const from = new Date(todayStart);
-      from.setDate(from.getDate() - 6);
-      return due >= from && due <= todayEnd;
-    }
-    case "last30": {
-      const from = new Date(todayStart);
-      from.setDate(from.getDate() - 29);
-      return due >= from && due <= todayEnd;
-    }
-    case "thisMonth": {
-      const from = new Date(now.getFullYear(), now.getMonth(), 1);
-      const to = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-      return due >= from && due <= to;
-    }
-    case "lastMonth": {
-      const from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const to = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-      return due >= from && due <= to;
-    }
-    default:
-      return true;
-  }
 }
 
 export function matchesQueueTab(task: TodoTask, tab: QueueTab, viewerEmployeeId?: number): boolean {
@@ -171,7 +101,6 @@ export type QueueSection = {
   tasks: TodoTask[];
 };
 
-/** Group active-queue rows so blocked/overdue stand out. */
 export function groupActiveQueueTasks(tasks: TodoTask[]): QueueSection[] {
   const blocked: TodoTask[] = [];
   const overdue: TodoTask[] = [];

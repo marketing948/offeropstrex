@@ -27,6 +27,7 @@ import {
   compareWorkerTasks,
   compareWorkerTasksForList,
 } from "@/lib/worker-tasks";
+import { resolveDateRangeFromPreset } from "@/lib/date-filter-presets";
 import {
   countByQueueTab,
   dueDateInPreset,
@@ -59,6 +60,16 @@ export default function Tasks() {
   const [queueTab, setQueueTab] = useState<QueueTab>("my");
   const [search, setSearch] = useState("");
   const [datePreset, setDatePreset] = useState<DatePreset>("all");
+  const [dueDateFrom, setDueDateFrom] = useState("");
+  const [dueDateTo, setDueDateTo] = useState("");
+
+  const handleDuePresetChange = (p: DatePreset) => {
+    setDatePreset(p);
+    if (p === "all" || p === "custom") return;
+    const r = resolveDateRangeFromPreset(p);
+    setDueDateFrom(r.dateFrom);
+    setDueDateTo(r.dateTo);
+  };
   const [employeeFilter, setEmployeeFilter] = useState("all");
   const [selectedTask, setSelectedTask] = useState<TodoTask | null>(null);
   const [deepLinkTaskId] = useState(() => parseOpenTaskIdFromUrl());
@@ -195,7 +206,14 @@ export default function Tasks() {
         search={search}
         onSearchChange={setSearch}
         datePreset={datePreset}
-        onDatePresetChange={setDatePreset}
+        onDatePresetChange={handleDuePresetChange}
+        dateFrom={dueDateFrom}
+        dateTo={dueDateTo}
+        onCustomDueRangeChange={(from, to) => {
+          setDatePreset("custom");
+          setDueDateFrom(from);
+          setDueDateTo(to);
+        }}
         showEmployeeFilter={isAdmin && queueTab !== "my"}
         employeeFilter={employeeFilter}
         onEmployeeFilterChange={setEmployeeFilter}

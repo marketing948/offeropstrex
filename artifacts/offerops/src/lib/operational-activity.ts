@@ -1,4 +1,5 @@
 import { authedJson } from "@/lib/api-fetch";
+import { listIsoDatesInRange } from "@/lib/date-filter-presets";
 
 /** Mirrors GET /api/operational-activity (not yet in OpenAPI). */
 export const OPERATIONAL_ACTIVITY_EVENT_TYPES = [
@@ -51,7 +52,9 @@ function apiBase(): string {
 
 export function getOperationalActivityQueryKey(params: {
   workspace_id: number;
-  date: string;
+  date?: string;
+  date_from?: string;
+  date_to?: string;
   event_type?: string;
   actor_employee_id?: number;
 }) {
@@ -74,6 +77,36 @@ export async function fetchOperationalActivity(params: {
   }
   if (params.limit != null) sp.set("limit", String(params.limit));
   return authedJson<OperationalActivityResponse>(`${apiBase()}/operational-activity?${sp.toString()}`);
+}
+
+/** Multi-day activity without API changes — one request per UTC day in range. */
+export async function fetchOperationalActivityRange(params: {
+  workspace_id: number;
+  date_from: string;
+  date_to: string;
+  event_type?: string;
+  actor_employee_id?: number;
+  limitPerDay?: number;
+}): Promise<OperationalActivityItem[]> {
+  const days = listIsoDatesInRange(params.date_from, params.date_to);
+  if (days.length === 0) return [];
+
+  const limit = params.limitPerDay ?? 50;
+  const chunks = await Promise.all(
+    days.map((date) =>
+      fetchOperationalActivity({
+        workspace_id: params.workspace_id,
+        date,
+        event_type: params.event_type,
+        actor_employee_id: params.actor_employee_id,
+        limit,
+      }),
+    ),
+  );
+
+  const merged = chunks.flatMap((c) => c.items);
+  merged.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return merged;
 }
 
 export function formatActivityTime(iso: string): string {

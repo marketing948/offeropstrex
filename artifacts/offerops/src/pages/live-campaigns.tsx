@@ -24,6 +24,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { DateFilterBar } from "@/components/date-filter-bar";
+import { DateFilterSingleDay } from "@/components/date-filter-bar";
+import { useDateFilterState } from "@/hooks/use-date-filter-state";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
@@ -126,18 +129,6 @@ function fmtDate(iso: string | null): string {
   return new Date(iso).toLocaleDateString();
 }
 
-function toNextDate(value: string): string {
-  const date = new Date(`${value}T00:00:00.000Z`);
-  date.setUTCDate(date.getUTCDate() + 1);
-  return date.toISOString().slice(0, 10);
-}
-
-function yesterdayIsoDate(): string {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
-
 type DailyMetricRow = {
   campaignId: number;
   cost: string;
@@ -163,8 +154,18 @@ export default function LiveCampaigns() {
   const [geoFilter, setGeoFilter] = useState<string>("all");
   const [networkFilter, setNetworkFilter] = useState<string>("all");
   const [batchFilter, setBatchFilter] = useState<string>("all");
-  const [liveDateFilter, setLiveDateFilter] = useState("");
-  const [metricsDate, setMetricsDate] = useState(() => yesterdayIsoDate());
+  const [wentLiveFilterActive, setWentLiveFilterActive] = useState(false);
+  const wentLiveRange = useDateFilterState({
+    storageKey: "offerops.dateFilter.liveWentLive",
+    defaultPreset: "last7",
+    syncUrl: false,
+  });
+  const metricsDay = useDateFilterState({
+    storageKey: "offerops.dateFilter.liveMetrics",
+    defaultPreset: "yesterday",
+    syncUrl: false,
+  });
+  const metricsDate = metricsDay.dateTo;
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
   const pageSize = 50;
@@ -176,15 +177,27 @@ export default function LiveCampaigns() {
     setGeoFilter("all");
     setNetworkFilter("all");
     setBatchFilter("all");
-    setLiveDateFilter("");
-    setMetricsDate(yesterdayIsoDate());
+    setWentLiveFilterActive(false);
+    wentLiveRange.clearToDefault();
+    metricsDay.clearToDefault();
     setSearch("");
     setOffset(0);
   }, [activeWorkspaceId]);
 
   useEffect(() => {
     setOffset(0);
-  }, [statusFilter, platformFilter, trafficSourceFilter, geoFilter, networkFilter, batchFilter, liveDateFilter, search]);
+  }, [
+    statusFilter,
+    platformFilter,
+    trafficSourceFilter,
+    geoFilter,
+    networkFilter,
+    batchFilter,
+    wentLiveFilterActive,
+    wentLiveRange.dateFrom,
+    wentLiveRange.dateTo,
+    search,
+  ]);
 
   const optionParams = new URLSearchParams();
   if (activeWorkspaceId) optionParams.set("workspace_id", String(activeWorkspaceId));
@@ -208,9 +221,9 @@ export default function LiveCampaigns() {
   if (geoFilter !== "all") params.set("geo", geoFilter);
   if (networkFilter !== "all") params.set("affiliate_network", networkFilter);
   if (batchFilter !== "all") params.set("batch_id", batchFilter);
-  if (liveDateFilter) {
-    params.set("date_from", liveDateFilter);
-    params.set("date_to", toNextDate(liveDateFilter));
+  if (wentLiveFilterActive) {
+    params.set("date_from", wentLiveRange.dateFrom);
+    params.set("date_to", `${wentLiveRange.dateTo}T23:59:59.999Z`);
   }
 
   const { data: response, isLoading, isError, error } = useQuery<LiveCampaignsResponse>({
@@ -223,7 +236,9 @@ export default function LiveCampaigns() {
       geoFilter,
       networkFilter,
       batchFilter,
-      liveDateFilter,
+      wentLiveFilterActive,
+      wentLiveRange.dateFrom,
+      wentLiveRange.dateTo,
       offset,
     ],
     enabled: !!activeWorkspaceId,
@@ -407,21 +422,45 @@ export default function LiveCampaigns() {
             </SelectContent>
           </Select>
         </div>
-        <div>
+        <div className="sm:col-span-2 lg:col-span-3 space-y-2">
           <label className="text-xs font-medium text-muted-foreground">Date went live</label>
-          <Input className="mt-1 h-9" type="date" value={liveDateFilter} onChange={(e) => setLiveDateFilter(e.target.value)} />
-        </div>
-        <div>
-          <label className="text-xs font-medium text-muted-foreground">Metrics date</label>
-          <Input
-            className="mt-1 h-9"
-            type="date"
-            value={metricsDate}
-            onChange={(e) => setMetricsDate(e.target.value)}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setWentLiveFilterActive(false)}
+              className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+                !wentLiveFilterActive
+                  ? "border-foreground/25 bg-foreground/5 text-foreground"
+                  : "border-border text-muted-foreground hover:bg-muted/40"
+              }`}
+            >
+              Any time
+            </button>
+          </div>
+          <DateFilterBar
+            preset={wentLiveRange.preset}
+            onPresetChange={(p) => {
+              if (p === "all") return;
+              setWentLiveFilterActive(true);
+              wentLiveRange.setPreset(p);
+            }}
+            dateFrom={wentLiveRange.dateFrom}
+            dateTo={wentLiveRange.dateTo}
+            onCustomRangeChange={(from, to) => {
+              setWentLiveFilterActive(true);
+              wentLiveRange.setCustomRange(from, to);
+            }}
           />
-          <p className="text-[10px] text-muted-foreground mt-1">
-            Use Import Voluum CSV to add or update metrics for this date.
-          </p>
+        </div>
+        <div className="sm:col-span-2 lg:col-span-3 space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">Metrics date</label>
+          <DateFilterSingleDay
+            preset={metricsDay.preset === "custom" ? "custom" : metricsDay.preset}
+            onPresetChange={(p) => metricsDay.setPreset(p)}
+            date={metricsDate}
+            onDateChange={(d) => metricsDay.setCustomRange(d, d)}
+            hint="Use Import Voluum CSV to add or update metrics for this date."
+          />
         </div>
       </div>
 
@@ -565,7 +604,7 @@ export default function LiveCampaigns() {
         onOpenChange={setImportOpen}
         workspaceId={activeWorkspaceId ?? 0}
         metricsDate={metricsDate}
-        onMetricsDateChange={setMetricsDate}
+        onMetricsDateChange={(d) => metricsDay.setCustomRange(d, d)}
         statusFilter={statusFilter}
       />
 

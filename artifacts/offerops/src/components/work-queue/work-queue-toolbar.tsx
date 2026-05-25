@@ -1,5 +1,6 @@
 import type { DatePreset, QueueTab } from "@/lib/work-queue";
-import { DATE_PRESET_OPTIONS, QUEUE_TAB_OPTIONS } from "@/lib/work-queue";
+import { QUEUE_TAB_OPTIONS } from "@/lib/work-queue";
+import { DateFilterBar } from "@/components/date-filter-bar";
 import { Input } from "@/components/ui/input";
 import { Search } from "lucide-react";
 
@@ -11,6 +12,9 @@ export function WorkQueueToolbar({
   onSearchChange,
   datePreset,
   onDatePresetChange,
+  dateFrom,
+  dateTo,
+  onCustomDueRangeChange,
   showEmployeeFilter,
   employeeFilter,
   onEmployeeFilterChange,
@@ -23,6 +27,9 @@ export function WorkQueueToolbar({
   onSearchChange: (v: string) => void;
   datePreset: DatePreset;
   onDatePresetChange: (p: DatePreset) => void;
+  dateFrom: string;
+  dateTo: string;
+  onCustomDueRangeChange: (from: string, to: string) => void;
   showEmployeeFilter?: boolean;
   employeeFilter: string;
   onEmployeeFilterChange: (id: string) => void;
@@ -69,25 +76,14 @@ export function WorkQueueToolbar({
         ))}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Due
-        </span>
-        {DATE_PRESET_OPTIONS.map(({ key, label }) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => onDatePresetChange(key)}
-            className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-              datePreset === key
-                ? "border-foreground/25 bg-foreground/5 text-foreground"
-                : "border-border text-muted-foreground hover:bg-muted/40"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <DateFilterBar
+        preset={datePreset}
+        onPresetChange={onDatePresetChange}
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+        onCustomRangeChange={onCustomDueRangeChange}
+        showAllOption
+      />
 
       {showEmployeeFilter && (
         <div className="flex flex-wrap items-center gap-2">

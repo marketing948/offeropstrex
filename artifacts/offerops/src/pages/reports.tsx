@@ -22,6 +22,8 @@ import type {
   Employee,
 } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DateFilterBar } from "@/components/date-filter-bar";
+import { useDateFilterState } from "@/hooks/use-date-filter-state";
 import { useAuth } from "@/lib/auth";
 import { authedJson } from "@/lib/api-fetch";
 import {
@@ -186,9 +188,19 @@ export default function Reports() {
   const [, navigate] = useLocation();
   const isAdmin = currentEmployee?.role === "admin";
 
-  // Global filters
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo]     = useState("");
+  const {
+    preset: datePreset,
+    dateFrom,
+    dateTo,
+    setPreset: setDatePreset,
+    setCustomRange,
+    clearToDefault: clearDateRange,
+  } = useDateFilterState({
+    storageKey: "offerops.dateFilter.reports",
+    defaultPreset: "last7",
+    syncUrl: true,
+  });
+
   const [filterEmployee, setFilterEmployee] = useState<number | "">("");
   const [filterNetwork, setFilterNetwork]   = useState("");
   const [filterGeo, setFilterGeo]           = useState("");
@@ -490,15 +502,15 @@ export default function Reports() {
       {/* Global filters */}
       <Card className="border border-border shadow-sm">
         <CardContent className="py-3 px-4">
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
-            <div>
-              <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide block mb-1">From</label>
-              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className={selFilter} />
-            </div>
-            <div>
-              <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide block mb-1">To</label>
-              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className={selFilter} />
-            </div>
+          <DateFilterBar
+            preset={datePreset}
+            onPresetChange={setDatePreset}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onCustomRangeChange={setCustomRange}
+            className="mb-3"
+          />
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
             {isAdmin && (
               <div>
                 <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide block mb-1">Employee</label>
@@ -534,7 +546,7 @@ export default function Reports() {
             <div className="flex items-center justify-between mt-2 pt-2 border-t border-border">
               <span className="text-xs text-muted-foreground">{filteredBatches.length} batch{filteredBatches.length !== 1 ? "es" : ""} in view</span>
               <button
-                onClick={() => { setDateFrom(""); setDateTo(""); setFilterEmployee(""); setFilterNetwork(""); setFilterGeo(""); setFilterSource(""); setFilterStatus(""); }}
+                onClick={() => { clearDateRange(); setFilterEmployee(""); setFilterNetwork(""); setFilterGeo(""); setFilterSource(""); setFilterStatus(""); }}
                 className="text-xs text-primary hover:underline"
               >
                 Clear filters

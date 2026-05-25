@@ -7,16 +7,20 @@ import {
 } from "@workspace/api-client-react";
 import { useWorkspace } from "@/lib/workspace-context";
 import { wsQueryOpts } from "@/lib/ws-query";
+import { DateFilterBar } from "@/components/date-filter-bar";
+import { useDateFilterState } from "@/hooks/use-date-filter-state";
 import {
   OPERATIONAL_ACTIVITY_EVENT_TYPES,
   OPERATIONAL_ACTIVITY_EVENT_LABELS,
   type OperationalActivityEventType,
   type OperationalActivityItem,
-  fetchOperationalActivity,
+  fetchOperationalActivityRange,
   formatActivityTime,
   formatEntityRef,
   getOperationalActivityQueryKey,
 } from "@/lib/operational-activity";
+import { routeForEntity } from "@/lib/entity-navigation";
+import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,15 +32,23 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 export default function Activity() {
   const { activeWorkspaceId } = useWorkspace();
-  const [date, setDate] = useState(todayIsoDate);
+  const [, nav] = useLocation();
   const [eventType, setEventType] = useState<string>("all");
-  const [actorId, setActorId] = useState<string>("all");
+  const [employeeId, setEmployeeId] = useState<string>("all");
+
+  const {
+    preset,
+    dateFrom,
+    dateTo,
+    setPreset,
+    setCustomRange,
+  } = useDateFilterState({
+    storageKey: "offerops.dateFilter.activity",
+    defaultPreset: "today",
+    syncUrl: true,
+  });
 
   const wsId = activeWorkspaceId ?? 0;
   const employeeParams = { workspace_id: wsId };
@@ -54,24 +66,23 @@ export default function Activity() {
   const queryParams = useMemo(
     () => ({
       workspace_id: wsId,
-      date,
+      date_from: dateFrom,
+      date_to: dateTo,
       ...(eventType !== "all" ? { event_type: eventType } : {}),
-      ...(actorId !== "all" ? { actor_employee_id: Number(actorId) } : {}),
+      ...(employeeId !== "all" ? { actor_employee_id: Number(employeeId) } : {}),
     }),
-    [wsId, date, eventType, actorId],
+    [wsId, dateFrom, dateTo, eventType, employeeId],
   );
 
-  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
+  const { data: items = [], isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: getOperationalActivityQueryKey(queryParams),
-    queryFn: () => fetchOperationalActivity(queryParams),
+    queryFn: () => fetchOperationalActivityRange({ ...queryParams, limitPerDay: 80 }),
     enabled: !!activeWorkspaceId,
     staleTime: 20_000,
   });
 
-  const items = data?.items ?? [];
-
   return (
-    <div className="mx-auto max-w-3xl space-y-6 pb-10">
+    <div className="mx-auto max-w-3xl space-y-6 overflow-x-hidden pb-10">
       <header>
         <div className="flex items-center gap-2 text-primary">
           <History className="h-5 w-5" />
@@ -79,54 +90,53 @@ export default function Activity() {
         </div>
         <h1 className="mt-1 text-2xl font-black tracking-tight">Activity</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Daily operational timeline for this workspace. Dates use UTC boundaries.
+          Operational timeline. Day boundaries use UTC on the server.
         </p>
       </header>
 
-      <div className="grid gap-4 rounded-xl border border-border bg-card p-4 sm:grid-cols-3">
-        <div className="space-y-1.5">
-          <Label htmlFor="activity-date" className="text-xs">
-            Date
-          </Label>
-          <input
-            id="activity-date"
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label className="text-xs">Event type</Label>
-          <Select value={eventType} onValueChange={setEventType}>
-            <SelectTrigger className="h-9">
-              <SelectValue placeholder="All events" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All</SelectItem>
-              {OPERATIONAL_ACTIVITY_EVENT_TYPES.map((t) => (
-                <SelectItem key={t} value={t}>
-                  {OPERATIONAL_ACTIVITY_EVENT_LABELS[t]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label className="text-xs">Employee</Label>
-          <Select value={actorId} onValueChange={setActorId}>
-            <SelectTrigger className="h-9">
-              <SelectValue placeholder="All employees" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All</SelectItem>
-              {employees.map((e) => (
-                <SelectItem key={e.id} value={String(e.id)}>
-                  {e.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+      <div className="space-y-4 rounded-xl border border-border bg-card p-4">
+        <DateFilterBar
+          preset={preset}
+          onPresetChange={setPreset}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onCustomRangeChange={setCustomRange}
+          sticky
+        />
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Event type</Label>
+            <Select value={eventType} onValueChange={setEventType}>
+              <SelectTrigger className="h-9">
+                <SelectValue placeholder="All events" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                {OPERATIONAL_ACTIVITY_EVENT_TYPES.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {OPERATIONAL_ACTIVITY_EVENT_LABELS[t]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Employee</Label>
+            <Select value={employeeId} onValueChange={setEmployeeId}>
+              <SelectTrigger className="h-9">
+                <SelectValue placeholder="All employees" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All employees</SelectItem>
+                {employees.map((e) => (
+                  <SelectItem key={e.id} value={String(e.id)}>
+                    {e.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </div>
 
@@ -158,9 +168,9 @@ export default function Activity() {
       ) : items.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border bg-muted/20 px-6 py-14 text-center">
           <History className="mx-auto mb-3 h-10 w-10 text-muted-foreground/35" />
-          <p className="text-sm font-medium text-foreground">No activity for this date.</p>
+          <p className="text-sm font-medium text-foreground">No activity in this range.</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Try another date or clear filters.
+            Try another preset or clear filters.
           </p>
         </div>
       ) : (
@@ -173,11 +183,16 @@ export default function Activity() {
               <ActivityRow
                 key={item.id}
                 item={item}
-                actorName={
+                employeeName={
                   item.actorEmployeeId != null
-                    ? employeeNameById.get(item.actorEmployeeId) ?? `Employee #${item.actorEmployeeId}`
+                    ? employeeNameById.get(item.actorEmployeeId) ??
+                      `Employee #${item.actorEmployeeId}`
                     : null
                 }
+                onOpen={() => {
+                  const route = routeForEntity(item.entityType, item.entityId);
+                  if (route) nav(route);
+                }}
               />
             ))}
           </ul>
@@ -189,31 +204,42 @@ export default function Activity() {
 
 function ActivityRow({
   item,
-  actorName,
+  employeeName,
+  onOpen,
 }: {
   item: OperationalActivityItem;
-  actorName: string | null;
+  employeeName: string | null;
+  onOpen: () => void;
 }) {
   const eventLabel =
     OPERATIONAL_ACTIVITY_EVENT_LABELS[item.eventType as OperationalActivityEventType] ??
     item.eventType.replace(/_/g, " ");
 
+  const day = item.createdAt.slice(0, 10);
+
   return (
-    <li className="px-4 py-3.5">
-      <div className="flex gap-3">
-        <time
-          className="w-14 shrink-0 pt-0.5 text-xs font-medium tabular-nums text-muted-foreground"
-          dateTime={item.createdAt}
-        >
-          {formatActivityTime(item.createdAt)}
-        </time>
+    <li>
+      <button
+        type="button"
+        className="flex w-full gap-3 px-4 py-3.5 text-left transition-colors hover:bg-muted/40"
+        onClick={onOpen}
+      >
+        <div className="w-14 shrink-0">
+          <time
+            className="block text-xs font-medium tabular-nums text-muted-foreground"
+            dateTime={item.createdAt}
+          >
+            {formatActivityTime(item.createdAt)}
+          </time>
+          <span className="text-[10px] text-muted-foreground/80">{day}</span>
+        </div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="text-[10px] font-medium">
               {eventLabel}
             </Badge>
-            {actorName && (
-              <span className="text-xs text-muted-foreground">{actorName}</span>
+            {employeeName && (
+              <span className="text-xs text-muted-foreground">{employeeName}</span>
             )}
           </div>
           <p className="mt-1.5 text-sm font-medium leading-snug text-foreground">{item.title}</p>
@@ -224,7 +250,7 @@ function ActivityRow({
             {formatEntityRef(item.entityType, item.entityId)}
           </p>
         </div>
-      </div>
+      </button>
     </li>
   );
 }

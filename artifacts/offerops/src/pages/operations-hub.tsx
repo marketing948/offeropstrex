@@ -19,6 +19,8 @@ import {
 } from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useWorkspace } from "@/lib/workspace-context";
+import { DateFilterBar } from "@/components/date-filter-bar";
+import { useDateFilterState } from "@/hooks/use-date-filter-state";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CompactKpi } from "@/components/operations-hub/compact-kpi";
 import { BatchAttentionPanel } from "@/components/operations-hub/batch-attention-panel";
@@ -89,6 +91,18 @@ export default function OperationsHub() {
   const wsId = activeWorkspaceId ?? 0;
   const today = todayIso();
 
+  const {
+    preset: perfPreset,
+    dateFrom: perfDateFrom,
+    dateTo: perfDateTo,
+    setPreset: setPerfPreset,
+    setCustomRange: setPerfCustomRange,
+  } = useDateFilterState({
+    storageKey: "offerops.dateFilter.ops",
+    defaultPreset: "last7",
+    syncUrl: false,
+  });
+
   const batchParams = { workspace_id: wsId };
   const { data: batches = [], isLoading: batchesLoading } = useListTestingBatches(
     batchParams,
@@ -109,12 +123,7 @@ export default function OperationsHub() {
     wsQueryOpts(activeWorkspaceId, getListEmployeesQueryKey(batchParams)),
   );
 
-  const perfFrom = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 7);
-    return d.toISOString().split("T")[0];
-  }, []);
-  const perfParams = { workspace_id: wsId, date_from: perfFrom, date_to: today };
+  const perfParams = { workspace_id: wsId, date_from: perfDateFrom, date_to: perfDateTo };
   const { data: perfRecords = [] } = useListPerformance(
     perfParams,
     wsQueryOpts(activeWorkspaceId, getListPerformanceQueryKey(perfParams)),
@@ -383,9 +392,15 @@ export default function OperationsHub() {
             >
               Performance visibility
             </h2>
-            <span className="text-[10px] text-muted-foreground">Last 14 days</span>
           </div>
-          <PerformancePanel />
+          <DateFilterBar
+            preset={perfPreset}
+            onPresetChange={setPerfPreset}
+            dateFrom={perfDateFrom}
+            dateTo={perfDateTo}
+            onCustomRangeChange={setPerfCustomRange}
+          />
+          <PerformancePanel dateFrom={perfDateFrom} dateTo={perfDateTo} />
         </section>
 
         {/* Section 4 — Activity + alerts */}
