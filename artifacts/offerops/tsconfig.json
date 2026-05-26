@@ -20,6 +20,9 @@
     },
     {
       "path": "../../lib/voluum-offer-ids"
+    },
+    {
+      "path": "../../lib/alert-rules"
     }
   ]
 }

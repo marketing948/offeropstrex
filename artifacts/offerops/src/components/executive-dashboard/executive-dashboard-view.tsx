@@ -24,6 +24,7 @@ import {
 } from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useWorkspace } from "@/lib/workspace-context";
+import { useAlertRules } from "@/hooks/use-alert-rules";
 import { useAuth } from "@/lib/auth";
 import { authedJson } from "@/lib/api-fetch";
 import { DateFilterBar } from "@/components/date-filter-bar";
@@ -100,6 +101,7 @@ type LiveCampaignsApiResponse = {
 
 export function ExecutiveDashboardView() {
   const { activeWorkspaceId } = useWorkspace();
+  const { rules } = useAlertRules();
   const { currentEmployee } = useAuth();
   const [, navigate] = useLocation();
   const wsId = activeWorkspaceId ?? 0;
@@ -267,8 +269,9 @@ export function ExecutiveDashboardView() {
         campaigns,
         suspiciousCount: suspicious.length,
         syncFailureCount: syncFailures,
+        rules,
       }),
-    [batches, tasks, offers, campaigns, suspicious.length, syncFailures],
+    [batches, tasks, offers, campaigns, suspicious.length, syncFailures, rules],
   );
 
   const winnerRows = useMemo(

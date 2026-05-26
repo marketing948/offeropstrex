@@ -1,4 +1,8 @@
-import { VISITS_PER_OFFER_TARGET } from "@/lib/executive-dashboard";
+import {
+  DEFAULT_ALERT_RULES,
+  milestoneFractions,
+  type AlertRulesConfig,
+} from "@workspace/alert-rules";
 import type {
   CampaignHealthStatus,
   CampaignSignal,
@@ -49,62 +53,78 @@ function signal(
   return { id: `${kind}`, kind, label, detail, severity };
 }
 
-/** UI heuristics only — not server automation rules. */
+/** UI heuristics only — thresholds from workspace alert rules. */
 export function deriveCampaignSignals(
   c: ReviewCampaignInput,
   offerCount: number,
   daysLive: number,
+  rules: AlertRulesConfig = DEFAULT_ALERT_RULES,
 ): CampaignSignal[] {
   const signals: CampaignSignal[] = [];
   const visits = c.clicks ?? 0;
   const conv = c.conversions ?? 0;
-  const target = Math.max(offerCount, 1) * VISITS_PER_OFFER_TARGET;
+  const visitsPerOffer = rules.testing.visitsPerOffer;
+  const target = Math.max(offerCount, 1) * visitsPerOffer;
   const pct = target > 0 ? visits / target : 0;
   const roi = c.roi ?? 0;
   const revenue = c.revenue ?? 0;
   const isTesting = c.campaignPurpose === "testing" && c.status === "live";
   const isScale = c.campaignPurpose !== "testing" && c.status === "live";
+  const milestones = milestoneFractions(rules).sort((a, b) => b - a);
+  const zeroAtMilestone = rules.testing.zeroConversionAtMilestoneEnabled;
+
+  if (isTesting && zeroAtMilestone) {
+    for (const m of milestones) {
+      if (conv === 0 && pct >= m) {
+        const pctLabel = Math.round(m * 100);
+        if (m >= 1) {
+          signals.push(
+            signal(
+              "traffic_100_no_conv",
+              "Visit target reached — no conversions",
+              "Testing traffic exhausted with no conversions recorded.",
+              "high",
+            ),
+          );
+          signals.push(
+            signal(
+              "burning",
+              "Burning testing campaign",
+              "High traffic with no conversion outcome — consider stopping test.",
+              "high",
+            ),
+          );
+        } else if (m >= 0.75) {
+          signals.push(
+            signal(
+              "traffic_75_no_conv",
+              `${pctLabel}% of visit target — no conversions`,
+              "Approaching full test spend without conversions.",
+              "high",
+            ),
+          );
+        } else if (m >= 0.5) {
+          signals.push(
+            signal(
+              "traffic_50_no_conv",
+              `${pctLabel}% of visit target — no conversions`,
+              `${Math.round(pct * 100)}% of expected traffic with zero conversions.`,
+              pct >= 0.75 ? "high" : "medium",
+            ),
+          );
+        }
+        break;
+      }
+    }
+  }
 
   if (isTesting) {
-    if (conv === 0 && pct >= 0.5) {
-      signals.push(
-        signal(
-          "traffic_50_no_conv",
-          "50% of visit target — no conversions",
-          `${Math.round(pct * 100)}% of expected traffic with zero conversions.`,
-          pct >= 0.75 ? "high" : "medium",
-        ),
-      );
-    }
-    if (conv === 0 && pct >= 0.75) {
-      signals.push(
-        signal(
-          "traffic_75_no_conv",
-          "75% of visit target — no conversions",
-          "Approaching full test spend without conversions.",
-          "high",
-        ),
-      );
-    }
-    if (conv === 0 && pct >= 1) {
-      signals.push(
-        signal(
-          "traffic_100_no_conv",
-          "Visit target reached — no conversions",
-          "Testing traffic exhausted with no conversions recorded.",
-          "high",
-        ),
-      );
-      signals.push(
-        signal(
-          "burning",
-          "Burning testing campaign",
-          "High traffic with no conversion outcome — consider stopping test.",
-          "high",
-        ),
-      );
-    }
-    if (daysLive >= 3 && pct < 0.25 && conv === 0) {
+    const paceMax = rules.testing.pacingRiskMaxTrafficPercent / 100;
+    if (
+      daysLive >= rules.testing.pacingRiskMinDaysLive &&
+      pct < paceMax &&
+      conv === 0
+    ) {
       signals.push(
         signal(
           "traffic_unlikely_pace",
@@ -114,23 +134,31 @@ export function deriveCampaignSignals(
         ),
       );
     }
-    if (conv === 0 && visits > 500) {
-      signals.push(signal("zero_conversions", "Zero conversions", `${visits.toLocaleString()} visits recorded.`, "medium"));
+    if (conv === 0 && visits > rules.testing.minVisitsForZeroConvAlert) {
+      signals.push(
+        signal(
+          "zero_conversions",
+          "Zero conversions",
+          `${visits.toLocaleString()} visits recorded.`,
+          "medium",
+        ),
+      );
     }
   }
 
   if (isScale) {
-    if (conv === 0 && daysLive >= 2) {
+    const scaleNoConvDays = rules.scaling.noConversionsAfterHours / 24;
+    if (conv === 0 && daysLive >= scaleNoConvDays) {
       signals.push(
         signal(
           "zero_conversions",
           "No conversions since live",
           `Live ${daysLive} day(s) without conversions.`,
-          daysLive >= 2 ? "high" : "medium",
+          daysLive >= scaleNoConvDays ? "high" : "medium",
         ),
       );
     }
-    if (roi < 0 && daysLive >= 7) {
+    if (roi < 0 && daysLive >= rules.scaling.negativeRoiDays) {
       signals.push(
         signal(
           "burning",
@@ -142,27 +170,52 @@ export function deriveCampaignSignals(
     }
   }
 
-  if (roi > 15 && revenue > 50) {
-    signals.push(signal("positive_roi", "Positive ROI", `${roi.toFixed(1)}% ROI in recent metrics.`, "low"));
+  if (roi > rules.scaling.minRoiPercentForPositiveSignal && revenue > 50) {
+    signals.push(
+      signal("positive_roi", "Positive ROI", `${roi.toFixed(1)}% ROI in recent metrics.`, "low"),
+    );
   }
-  if (revenue > 200 && conv > 0) {
-    signals.push(signal("strong_revenue", "Strong revenue", `${revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} revenue signal.`, "medium"));
+  if (revenue > rules.scaling.minRevenueForStrongSignal && conv > 0) {
+    signals.push(
+      signal(
+        "strong_revenue",
+        "Strong revenue",
+        `${revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} revenue signal.`,
+        "medium",
+      ),
+    );
   }
-  if (conv > 0 && roi > 10 && isTesting) {
-    signals.push(signal("likely_winner", "Likely winner detected", "Conversion performance suggests winner review.", "high"));
+  if (
+    conv >= rules.winners.minConversionsForPotentialWinner &&
+    roi >= rules.winners.minRoiPercentForLikelyWinner &&
+    isTesting
+  ) {
+    signals.push(
+      signal("likely_winner", "Likely winner detected", "Conversion performance suggests winner review.", "high"),
+    );
   }
   if (c.campaignPurpose === "working" && roi > 5 && conv > 0) {
-    signals.push(signal("scaling_opportunity", "Scaling opportunity", "Working campaign performing — consider scale path.", "medium"));
+    signals.push(
+      signal("scaling_opportunity", "Scaling opportunity", "Working campaign performing — consider scale path.", "medium"),
+    );
   }
 
-  if (daysLive > 14 && c.status === "live" && conv === 0) {
-    signals.push(signal("stale", "Stale live campaign", "Extended live period without meaningful conversion signal.", "medium"));
+  if (daysLive > rules.review.staleCampaignDays && c.status === "live" && conv === 0) {
+    signals.push(
+      signal("stale", "Stale live campaign", "Extended live period without meaningful conversion signal.", "medium"),
+    );
   }
 
   if (visits > 0 && pct > 0.3) {
     const pace = visits / Math.max(daysLive, 1);
-    if (pace > target * 0.15) {
-      signals.push(signal("traffic_spike", "Traffic spike", "Visit velocity above typical pace.", "low"));
+    const expectedDaily = target / Math.max(daysLive, 1);
+    if (expectedDaily > 0) {
+      const changePct = ((pace - expectedDaily) / expectedDaily) * 100;
+      if (changePct >= rules.testing.trafficSpikePercentIncrease) {
+        signals.push(signal("traffic_spike", "Traffic spike", "Visit velocity above typical pace.", "low"));
+      } else if (changePct <= -rules.testing.trafficDecreasePercentDecrease) {
+        signals.push(signal("traffic_decrease", "Traffic decrease", "Visit velocity below typical pace.", "low"));
+      }
     }
   }
 
@@ -270,11 +323,12 @@ export function buildReviewQueueItem(
   offerCount: number,
   firstSeenAt: string | null,
   escalated: boolean,
+  rules: AlertRulesConfig = DEFAULT_ALERT_RULES,
 ): ReviewQueueCampaign | null {
   const daysLive = c.liveStartedAt
     ? Math.floor((Date.now() - new Date(c.liveStartedAt).getTime()) / 86_400_000)
     : 0;
-  const signals = deriveCampaignSignals(c, offerCount, daysLive);
+  const signals = deriveCampaignSignals(c, offerCount, daysLive, rules);
   if (signals.length === 0 && c.status !== "live") return null;
 
   const health = signals.length === 0 ? "healthy" : deriveHealthStatus(signals);
@@ -306,4 +360,20 @@ export function buildReviewQueueItem(
     escalated,
     urgencyScore: computeUrgencyScore(signals, escalated),
   };
+}
+
+/** Lightweight health for live campaign monitoring rows. */
+export function evaluateCampaignMonitoringHealth(
+  c: ReviewCampaignInput,
+  offerCount: number,
+  rules: AlertRulesConfig = DEFAULT_ALERT_RULES,
+): { health: CampaignHealthStatus; healthLabel: string; targetPct: number } {
+  const daysLive = c.liveStartedAt
+    ? Math.floor((Date.now() - new Date(c.liveStartedAt).getTime()) / 86_400_000)
+    : 0;
+  const signals = deriveCampaignSignals(c, offerCount, daysLive, rules);
+  const health = signals.length === 0 ? "healthy" : deriveHealthStatus(signals);
+  const target = Math.max(offerCount, 1) * rules.testing.visitsPerOffer;
+  const targetPct = target > 0 ? Math.min(100, Math.round(((c.clicks ?? 0) / target) * 100)) : 0;
+  return { health, healthLabel: healthLabel(health), targetPct };
 }

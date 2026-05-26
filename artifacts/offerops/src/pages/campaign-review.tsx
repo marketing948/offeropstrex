@@ -15,6 +15,7 @@ import {
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { useAuth } from "@/lib/auth";
+import { useAlertRules } from "@/hooks/use-alert-rules";
 import { authedJson } from "@/lib/api-fetch";
 import {
   buildReviewQueueItem,
@@ -67,6 +68,7 @@ type LiveCampaignsApiResponse = {
 export default function CampaignReviewPage() {
   const { activeWorkspaceId } = useWorkspace();
   const { currentEmployee } = useAuth();
+  const { rules } = useAlertRules();
   const wsId = activeWorkspaceId ?? 0;
   const isAdmin = currentEmployee?.role === "admin";
   const viewerId = currentEmployee?.id ?? 0;
@@ -148,8 +150,8 @@ export default function CampaignReviewPage() {
 
       const offerCount = raw.batchId != null ? offersPerBatch.get(raw.batchId) ?? 0 : 0;
       const firstSeen = touchCampaignFirstSeen(wsId, memoryActor, raw.id);
-      const escalated = markEscalatedIfNeeded(wsId, memoryActor, raw.id);
-      const item = buildReviewQueueItem(input, offerCount, firstSeen, escalated);
+      const escalated = markEscalatedIfNeeded(wsId, memoryActor, raw.id, rules);
+      const item = buildReviewQueueItem(input, offerCount, firstSeen, escalated, rules);
       if (item) items.push(item);
     }
 
@@ -162,11 +164,12 @@ export default function CampaignReviewPage() {
     viewerId,
     wsId,
     memoryTick,
+    rules,
   ]);
 
   const opScore = useMemo(
-    () => computeOperationalScore(wsId, viewerId),
-    [wsId, viewerId, memoryTick],
+    () => computeOperationalScore(wsId, viewerId, rules),
+    [wsId, viewerId, memoryTick, rules],
   );
 
   const recentMemory = useMemo(
@@ -362,6 +365,7 @@ export default function CampaignReviewPage() {
         workspaceId={wsId}
         actorEmployeeId={viewerId}
         onMemoryRecorded={() => setMemoryTick((t) => t + 1)}
+        rules={rules}
       />
     </div>
   );

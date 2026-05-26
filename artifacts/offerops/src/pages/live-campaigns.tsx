@@ -15,7 +15,6 @@ import { useWorkspace } from "@/lib/workspace-context";
 import { authedJson } from "@/lib/api-fetch";
 import { ProductionLiveCampaignForm } from "@/components/production-live-campaign-form";
 import { ManualCloseCampaignDialog } from "@/components/manual-close-campaign-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -28,11 +27,13 @@ import { DateFilterBar } from "@/components/date-filter-bar";
 import { DateFilterSingleDay } from "@/components/date-filter-bar";
 import { useDateFilterState } from "@/hooks/use-date-filter-state";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
-  TableRowsSkeleton,
-  TableSectionState,
-} from "@/components/operational-state/table-body-state";
+  useListOffers,
+  getListOffersQueryKey,
+} from "@workspace/api-client-react";
+import { wsQueryOpts } from "@/lib/ws-query";
+import { useAlertRules } from "@/hooks/use-alert-rules";
+import { LiveCampaignsMonitoringTable } from "@/components/live-campaigns/live-campaigns-monitoring-table";
 import { RefreshingHint } from "@/components/operational-state/refreshing-hint";
 import { operationalErrorMessage } from "@/lib/operational-feedback";
 
@@ -77,64 +78,6 @@ type LiveCampaignsResponse = {
   };
 };
 
-const STATUS_COLORS: Record<Campaign["status"], { dot: string; bg: string; text: string }> = {
-  draft:           { dot: "bg-slate-400",  bg: "bg-slate-100 dark:bg-slate-900/40", text: "text-slate-700 dark:text-slate-300" },
-  ready:           { dot: "bg-blue-500",   bg: "bg-blue-100 dark:bg-blue-900/40",   text: "text-blue-700 dark:text-blue-300" },
-  voluum_created:  { dot: "bg-purple-500", bg: "bg-purple-100 dark:bg-purple-900/40", text: "text-purple-700 dark:text-purple-300" },
-  live:            { dot: "bg-emerald-500",bg: "bg-emerald-100 dark:bg-emerald-900/40", text: "text-emerald-700 dark:text-emerald-300" },
-  tested:          { dot: "bg-amber-500",  bg: "bg-amber-100 dark:bg-amber-900/40", text: "text-amber-700 dark:text-amber-300" },
-  closed:          { dot: "bg-zinc-400",   bg: "bg-zinc-100 dark:bg-zinc-900/40",   text: "text-zinc-600 dark:text-zinc-400" },
-};
-
-function StatusBadge({ status }: { status: Campaign["status"] }) {
-  const c = STATUS_COLORS[status];
-  return (
-    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold ${c.bg} ${c.text}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
-      {status.replace(/_/g, " ")}
-    </span>
-  );
-}
-
-const PURPOSE_LABELS: Record<CampaignPurpose, string> = {
-  testing: "Testing",
-  working: "Working",
-  scaling: "Scaling",
-};
-
-function PurposeBadge({ purpose }: { purpose: CampaignPurpose }) {
-  if (purpose === "testing") {
-    return (
-      <Badge variant="secondary" className="text-[10px] font-medium">
-        {PURPOSE_LABELS.testing}
-      </Badge>
-    );
-  }
-  const variant = purpose === "working" ? "default" : "outline";
-  return (
-    <Badge variant={variant} className="text-[10px] font-medium">
-      {PURPOSE_LABELS[purpose]}
-    </Badge>
-  );
-}
-
-function fmtMoney(v: string | null): string {
-  if (v == null || v === "") return "—";
-  const n = Number(v);
-  if (Number.isNaN(n)) return v;
-  return `$${n.toFixed(2)}`;
-}
-function fmtPct(v: string | null): string {
-  if (v == null || v === "") return "—";
-  const n = Number(v);
-  if (Number.isNaN(n)) return v;
-  return `${(n * 100).toFixed(1)}%`;
-}
-function fmtDate(iso: string | null): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleDateString();
-}
-
 type DailyMetricRow = {
   campaignId: number;
   cost: string;
@@ -149,6 +92,7 @@ type DailyMetricRow = {
 export default function LiveCampaigns() {
   const { currentEmployee } = useAuth();
   const { activeWorkspaceId } = useWorkspace();
+  const { rules } = useAlertRules();
   const queryClient = useQueryClient();
   const isAdmin = currentEmployee?.role === "admin";
   const [addOpen, setAddOpen] = useState(false);
@@ -284,6 +228,23 @@ export default function LiveCampaigns() {
     return map;
   }, [metricsResponse?.items]);
 
+  const offerParams = useMemo(
+    () => ({ workspace_id: activeWorkspaceId ?? 0 }),
+    [activeWorkspaceId],
+  );
+  const { data: offers = [] } = useListOffers(
+    offerParams,
+    wsQueryOpts(activeWorkspaceId, getListOffersQueryKey(offerParams)),
+  );
+  const offersPerBatch = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const o of offers) {
+      if (o.batchId == null) continue;
+      m.set(o.batchId, (m.get(o.batchId) ?? 0) + 1);
+    }
+    return m;
+  }, [offers]);
+
   const trafficSourceOptions = useMemo(
     () =>
       Array.from(
@@ -346,10 +307,11 @@ export default function LiveCampaigns() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Live Campaigns</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Testing campaigns appear after take-campaign-live. Production working/scaling campaigns are added manually and skip CampaignOps.
-            Daily campaign metrics are loaded via Voluum CSV import for the selected metrics date.
+          <h1 className="text-2xl font-black tracking-tight">Live Campaigns</h1>
+          <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+            Campaign monitoring — scan health, traffic pacing, and performance at a glance.
+            Daily metrics come from Voluum CSV import; lifetime totals from campaign records.
+            Review decisions stay on Campaign Review.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -489,109 +451,20 @@ export default function LiveCampaigns() {
         </p>
       )}
 
-      <div className="rounded-md border border-border bg-card/50 overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Campaign</TableHead>
-              <TableHead>Purpose</TableHead>
-              <TableHead>Platform</TableHead>
-              <TableHead>Traffic source</TableHead>
-              <TableHead>Network / GEO</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Live since</TableHead>
-              <TableHead className="text-right min-w-[72px]" title={`Daily metrics for ${metricsDate}`}>
-                Cost
-              </TableHead>
-              <TableHead className="text-right min-w-[72px]">Revenue</TableHead>
-              <TableHead className="text-right min-w-[56px]">Conv.</TableHead>
-              <TableHead className="text-right min-w-[56px]">Visits</TableHead>
-              <TableHead className="text-right">Profit</TableHead>
-              <TableHead className="text-right">ROI</TableHead>
-              <TableHead className="text-right">EPC</TableHead>
-              <TableHead className="text-right">Spend</TableHead>
-              <TableHead className="text-right">Revenue</TableHead>
-              <TableHead className="text-right">ROI</TableHead>
-              <TableHead className="text-right">Winners</TableHead>
-              <TableHead>Worker</TableHead>
-              <TableHead className="w-[100px]">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRowsSkeleton rows={6} cols={8} />
-            ) : isError ? (
-              <TableSectionState
-                colSpan={19}
-                variant="error"
-                title="Couldn't load live campaigns"
-                description={loadErrorMessage}
-                error={error}
-                onRetry={() => void refetch()}
-                retrying={isFetching}
-              />
-            ) : filtered.length === 0 ? (
-              <TableSectionState
-                colSpan={19}
-                variant="empty"
-                title="No live campaigns match these filters"
-                description="Adjust status, date range, or search — or add campaigns from a testing batch."
-              />
-            ) : (
-              filtered.map((c) => {
-                const daily = metricsByCampaignId.get(c.id);
-                return (
-                <TableRow key={c.id}>
-                  <TableCell className="font-medium">
-                    <div>{c.campaignName}</div>
-                    {c.batchName && <div className="text-[11px] text-muted-foreground">Batch: {c.batchName}{c.batchGeo ? ` • ${c.batchGeo}` : ""}</div>}
-                    {c.voluumCampaignId && <div className="text-[11px] text-muted-foreground font-mono">Voluum: {c.voluumCampaignId}</div>}
-                  </TableCell>
-                  <TableCell>
-                    <PurposeBadge purpose={c.campaignPurpose ?? "testing"} />
-                  </TableCell>
-                  <TableCell><Badge variant="outline" className="uppercase text-[10px]">{c.platform}</Badge></TableCell>
-                  <TableCell>{c.trafficSourceName ?? "—"}</TableCell>
-                  <TableCell className="text-xs">
-                    <div>{c.batchAffiliateNetwork ?? "—"}</div>
-                    <div className="text-muted-foreground">{c.batchGeo ?? "—"}</div>
-                  </TableCell>
-                  <TableCell><StatusBadge status={c.status} /></TableCell>
-                  <TableCell className="text-xs">{fmtDate(c.liveStartedAt)}</TableCell>
-                  <TableCell className="text-right tabular-nums text-xs">{daily ? fmtMoney(daily.cost) : "—"}</TableCell>
-                  <TableCell className="text-right tabular-nums text-xs">{daily ? fmtMoney(daily.revenue) : "—"}</TableCell>
-                  <TableCell className="text-right tabular-nums text-xs">{daily ? daily.conversions : "—"}</TableCell>
-                  <TableCell className="text-right tabular-nums text-xs">{daily ? daily.visits : "—"}</TableCell>
-                  <TableCell className="text-right tabular-nums text-xs">{daily ? fmtMoney(daily.profit) : "—"}</TableCell>
-                  <TableCell className="text-right tabular-nums text-xs">{daily ? fmtPct(daily.roi) : "—"}</TableCell>
-                  <TableCell className="text-right tabular-nums text-xs">{daily?.epc != null ? fmtMoney(daily.epc) : "—"}</TableCell>
-                  <TableCell className="text-right tabular-nums">{fmtMoney(c.cost)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{fmtMoney(c.revenue)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{fmtPct(c.roi)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{c.winnersCount ?? "—"}</TableCell>
-                  <TableCell className="text-xs">{c.employeeName ?? "—"}</TableCell>
-                  <TableCell>
-                    {c.status !== "closed" ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-7 text-xs"
-                        onClick={() => setCloseTarget({ id: c.id, name: c.campaignName })}
-                      >
-                        Close
-                      </Button>
-                    ) : (
-                      <span className="text-[11px] text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                </TableRow>
-              );
-              })
-            )}
-          </TableBody>
-        </Table>
-      </div>
+      <LiveCampaignsMonitoringTable
+        campaigns={filtered}
+        metricsByCampaignId={metricsByCampaignId}
+        offersPerBatch={offersPerBatch}
+        metricsDateLabel={metricsDate}
+        rules={rules}
+        isLoading={isLoading}
+        isError={isError}
+        loadErrorMessage={loadErrorMessage}
+        error={error}
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+        onCloseCampaign={setCloseTarget}
+      />
 
       <RefreshingHint visible={isFetching && !isLoading} className="mb-1" />
 

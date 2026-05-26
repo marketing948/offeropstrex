@@ -1,4 +1,6 @@
 import { useLocation } from "wouter";
+import type { AlertRulesConfig } from "@workspace/alert-rules";
+import { DEFAULT_ALERT_RULES } from "@workspace/alert-rules";
 import type { ReviewQueueCampaign, SuggestedReviewAction } from "@/lib/campaign-review/types";
 import { recordReviewEvent, dismissCampaignUntil } from "@/lib/campaign-review/memory";
 import {
@@ -23,6 +25,7 @@ export function ReviewDetailSheet({
   workspaceId,
   actorEmployeeId,
   onMemoryRecorded,
+  rules = DEFAULT_ALERT_RULES,
 }: {
   item: ReviewQueueCampaign | null;
   open: boolean;
@@ -30,6 +33,7 @@ export function ReviewDetailSheet({
   workspaceId: number;
   actorEmployeeId: number;
   onMemoryRecorded: () => void;
+  rules?: AlertRulesConfig;
 }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
@@ -45,7 +49,7 @@ export function ReviewDetailSheet({
       note: action.label,
     });
     if (action.memoryType === "dismissed_signal") {
-      dismissCampaignUntil(workspaceId, actorEmployeeId, review.campaignId, 8);
+      dismissCampaignUntil(workspaceId, actorEmployeeId, review.campaignId, undefined, rules);
     }
     onMemoryRecorded();
     toast({

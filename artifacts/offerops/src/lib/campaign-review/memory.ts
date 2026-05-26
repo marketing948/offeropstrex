@@ -1,13 +1,17 @@
+import { DEFAULT_ALERT_RULES, type AlertRulesConfig } from "@workspace/alert-rules";
 import type { ReviewMemoryEvent, ReviewMemoryEventType } from "@/lib/campaign-review/types";
 
 const STORAGE_PREFIX = "offerops.campaignReview.memory";
-const ESCALATION_MS = 4 * 60 * 60 * 1000;
 
 type StoredState = {
   firstSeenAt: Record<string, string>;
   dismissedUntil: Record<string, string>;
   events: ReviewMemoryEvent[];
 };
+
+function escalationMs(rules: AlertRulesConfig): number {
+  return rules.review.ignoredSignalEscalationHours * 60 * 60 * 1000;
+}
 
 function storageKey(workspaceId: number, employeeId: number): string {
   return `${STORAGE_PREFIX}.${workspaceId}.${employeeId}`;
@@ -95,10 +99,12 @@ export function dismissCampaignUntil(
   workspaceId: number,
   employeeId: number,
   campaignId: number,
-  hours = 8,
+  hours?: number,
+  rules: AlertRulesConfig = DEFAULT_ALERT_RULES,
 ): void {
+  const snooze = hours ?? rules.review.dismissalSnoozeHours;
   const state = loadState(workspaceId, employeeId);
-  const until = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+  const until = new Date(Date.now() + snooze * 60 * 60 * 1000).toISOString();
   state.dismissedUntil[String(campaignId)] = until;
   saveState(workspaceId, employeeId, state);
 }
@@ -107,13 +113,14 @@ export function shouldEscalateReview(
   workspaceId: number,
   employeeId: number,
   campaignId: number,
+  rules: AlertRulesConfig = DEFAULT_ALERT_RULES,
 ): boolean {
   const state = loadState(workspaceId, employeeId);
   const key = String(campaignId);
   const first = state.firstSeenAt[key];
   if (!first) return false;
   const firstMs = new Date(first).getTime();
-  if (Date.now() - firstMs < ESCALATION_MS) return false;
+  if (Date.now() - firstMs < escalationMs(rules)) return false;
   const recentReview = state.events.find(
     (e) =>
       e.campaignId === campaignId &&
@@ -127,19 +134,21 @@ export function markEscalatedIfNeeded(
   workspaceId: number,
   employeeId: number,
   campaignId: number,
+  rules: AlertRulesConfig = DEFAULT_ALERT_RULES,
 ): boolean {
-  if (!shouldEscalateReview(workspaceId, employeeId, campaignId)) return false;
+  if (!shouldEscalateReview(workspaceId, employeeId, campaignId, rules)) return false;
+  const ms = escalationMs(rules);
   const already = loadState(workspaceId, employeeId).events.some(
     (e) =>
       e.campaignId === campaignId &&
       e.type === "escalated" &&
-      Date.now() - new Date(e.createdAt).getTime() < ESCALATION_MS,
+      Date.now() - new Date(e.createdAt).getTime() < ms,
   );
   if (already) return true;
   recordReviewEvent(workspaceId, employeeId, {
     campaignId,
     type: "escalated",
-    note: "Review signal open 4+ hours without resolution",
+    note: `Review signal open ${rules.review.ignoredSignalEscalationHours}+ hours without resolution`,
   });
   return true;
 }
@@ -156,13 +165,15 @@ export type OperationalScoreSummary = {
 export function computeOperationalScore(
   workspaceId: number,
   employeeId: number,
+  rules: AlertRulesConfig = DEFAULT_ALERT_RULES,
   windowDays = 7,
 ): OperationalScoreSummary {
   const state = loadState(workspaceId, employeeId);
+  const scoring = rules.operationalScoring;
   const cutoff = Date.now() - windowDays * 86_400_000;
   const recent = state.events.filter((e) => new Date(e.createdAt).getTime() >= cutoff);
 
-  let score = 50;
+  let score = scoring.baseScore;
   let timelyReviews = 0;
   let penalties = 0;
   let positives = 0;
@@ -172,20 +183,23 @@ export function computeOperationalScore(
       case "reviewed":
       case "winner_candidate":
       case "scaling_task_suggested":
-        score += 4;
+        score += scoring.positiveReviewPoints;
         positives += 1;
         timelyReviews += 1;
         break;
       case "escalated":
+        score -= scoring.escalationPenalty;
+        penalties += 1;
+        break;
       case "ignored":
-        score -= 6;
+        score -= scoring.ignoredSignalPenalty;
         penalties += 1;
         break;
       case "dismissed_signal":
-        score -= 1;
+        score -= scoring.dismissPenalty;
         break;
       case "action_taken":
-        score += 2;
+        score += scoring.actionTakenPoints;
         positives += 1;
         break;
       default:

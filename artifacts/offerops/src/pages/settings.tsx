@@ -98,14 +98,24 @@ import {
   ArrowDown,
   Radio,
   Save,
+  Bell,
 } from "lucide-react";
+import { AlertRulesSettingsTab } from "@/components/settings/alert-rules-settings-tab";
 import { useToast } from "@/hooks/use-toast";
 import { useWorkspace } from "@/lib/workspace-context";
 import AdminGoalsConfig from "@/pages/admin-goals-config";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { authedFetch, authedJson } from "@/lib/api-fetch";
 
-type SettingsTab = "goal-engine" | "admin-defaults" | "affiliate-networks" | "worker-networks" | "traffic-sources" | "geos" | "workspace";
+type SettingsTab =
+  | "goal-engine"
+  | "alert-rules"
+  | "admin-defaults"
+  | "affiliate-networks"
+  | "worker-networks"
+  | "traffic-sources"
+  | "geos"
+  | "workspace";
 
 // Pivot Phase 0 — Voluum disabled. The legacy Workspace tab (Voluum
 // credentials/sync/mappings) is hidden until automation comes back.
@@ -117,6 +127,12 @@ const TABS: { id: SettingsTab; label: string; icon: React.ReactNode; description
     label: "Goal Engine",
     icon: <SlidersHorizontal size={15} />,
     description: "Scoring rules, ranks, bonuses, and KPI targets",
+  },
+  {
+    id: "alert-rules",
+    label: "Alert Rules",
+    icon: <Bell size={15} />,
+    description: "Review thresholds, health signals, and operational scoring",
   },
   {
     id: "admin-defaults",
@@ -184,6 +200,7 @@ export default function Settings() {
           <AdminGoalsConfig embedded />
         </div>
       )}
+      {activeTab === "alert-rules" && <AlertRulesSettingsTab />}
       {activeTab === "admin-defaults" && <AdminFoundationTab />}
       {activeTab === "affiliate-networks" && <AffiliateNetworksTab />}
       {activeTab === "worker-networks" && <WorkerNetworksTab />}

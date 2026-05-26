@@ -1,3 +1,8 @@
+import {
+  DEFAULT_ALERT_RULES,
+  milestoneFractions,
+  type AlertRulesConfig,
+} from "@workspace/alert-rules";
 import type {
   Offer,
   TestingBatch,
@@ -5,8 +10,8 @@ import type {
 } from "@workspace/api-client-react";
 import type { DashboardBreakdownRow } from "@workspace/api-client-react";
 
-/** ~15k visits per offer — testing burn-risk assumption (UI heuristic). */
-export const VISITS_PER_OFFER_TARGET = 15_000;
+/** @deprecated Use alert rules `testing.visitsPerOffer` via useAlertRules(). */
+export const VISITS_PER_OFFER_TARGET = DEFAULT_ALERT_RULES.testing.visitsPerOffer;
 const MS_PER_HOUR = 3_600_000;
 const MS_PER_DAY = 86_400_000;
 
@@ -109,8 +114,10 @@ export function buildExecutiveAlerts(input: {
   suspiciousCount: number;
   syncFailureCount: number;
   employeeFilterId?: number;
+  rules?: AlertRulesConfig;
 }): ExecutiveAlert[] {
   const { batches, tasks, offers, campaigns, suspiciousCount, syncFailureCount } = input;
+  const rules = input.rules ?? DEFAULT_ALERT_RULES;
   const alerts: ExecutiveAlert[] = [];
   const now = new Date();
 
@@ -127,6 +134,7 @@ export function buildExecutiveAlerts(input: {
     unscaledByBatch.set(o.batchId, (unscaledByBatch.get(o.batchId) ?? 0) + 1);
   }
   for (const [batchId, count] of unscaledByBatch) {
+    if (!rules.winners.batchFinishedWinnersNoActionEnabled) continue;
     const batch = batches.find((b) => b.id === batchId);
     alerts.push({
       id: `winners-scale-${batchId}`,
@@ -175,16 +183,19 @@ export function buildExecutiveAlerts(input: {
   for (const c of campaigns) {
     if (c.campaignPurpose !== "testing" || c.status !== "live") continue;
     const batchOffers = c.batchId != null ? offerMap.get(c.batchId)?.length ?? 0 : 0;
-    const target = Math.max(batchOffers, 1) * VISITS_PER_OFFER_TARGET;
+    const target = Math.max(batchOffers, 1) * rules.testing.visitsPerOffer;
     const visits = c.clicks ?? 0;
     const conv = c.conversions ?? 0;
     const pct = target > 0 ? visits / target : 0;
     if (conv > 0) continue;
-    const thresholds: { min: number; sev: AlertSeverity; label: string }[] = [
-      { min: 1, sev: "critical", label: "100% of visit target with zero conversions" },
-      { min: 0.75, sev: "high", label: "75% of visit target with zero conversions" },
-      { min: 0.5, sev: "medium", label: "50% of visit target with zero conversions" },
-    ];
+    if (!rules.testing.zeroConversionAtMilestoneEnabled) continue;
+    const thresholds: { min: number; sev: AlertSeverity; label: string }[] = milestoneFractions(rules)
+      .sort((a, b) => b - a)
+      .map((min, i) => ({
+        min,
+        sev: (i === 0 ? "critical" : i === 1 ? "high" : "medium") as AlertSeverity,
+        label: `${Math.round(min * 100)}% of visit target with zero conversions`,
+      }));
     for (const t of thresholds) {
       if (pct >= t.min) {
         alerts.push({
@@ -214,7 +225,7 @@ export function buildExecutiveAlerts(input: {
     if (c.status !== "live") continue;
     const conv = c.conversions ?? 0;
     const hrs = hoursSince(c.liveStartedAt);
-    if (conv === 0 && hrs >= 48) {
+    if (conv === 0 && hrs >= rules.scaling.noConversionsAfterHours) {
       alerts.push({
         id: `scale-no-conv-${c.id}`,
         severity: "high",
@@ -223,7 +234,7 @@ export function buildExecutiveAlerts(input: {
         href: `/live-campaigns`,
       });
     }
-    if (c.roi < 0 && daysSince(c.liveStartedAt) >= 7) {
+    if (c.roi < 0 && daysSince(c.liveStartedAt) >= rules.scaling.negativeRoiDays) {
       alerts.push({
         id: `scale-roi-${c.id}`,
         severity: "medium",
@@ -446,15 +457,20 @@ export function buildWorkforceRows(input: {
   });
 }
 
-export function countBurnRiskCampaigns(campaigns: LiveCampaignRow[], offers: Offer[]): number {
+export function countBurnRiskCampaigns(
+  campaigns: LiveCampaignRow[],
+  offers: Offer[],
+  rules: AlertRulesConfig = DEFAULT_ALERT_RULES,
+): number {
   const offerMap = offersByBatch(offers);
+  const minMilestone = Math.min(...milestoneFractions(rules), 0.5);
   let n = 0;
   for (const c of campaigns) {
     if (c.campaignPurpose !== "testing" || c.status !== "live") continue;
     const batchOffers = c.batchId != null ? offerMap.get(c.batchId)?.length ?? 0 : 0;
-    const target = Math.max(batchOffers, 1) * VISITS_PER_OFFER_TARGET;
+    const target = Math.max(batchOffers, 1) * rules.testing.visitsPerOffer;
     const pct = target > 0 ? (c.clicks ?? 0) / target : 0;
-    if ((c.conversions ?? 0) === 0 && pct >= 0.5) n += 1;
+    if ((c.conversions ?? 0) === 0 && pct >= minMilestone) n += 1;
   }
   return n;
 }
