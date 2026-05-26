@@ -10,6 +10,12 @@ import {
   workspaceTrafficSourcesTable,
 } from "@workspace/db";
 import { requireAdmin, requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access";
+import {
+  ALERT_RULES_SETTINGS_KEY,
+  DEFAULT_ALERT_RULES,
+  mergeAlertRules,
+  type AlertRulesConfig,
+} from "@workspace/alert-rules";
 import { getSettingValue, upsertSetting } from "../lib/settings-store";
 
 const router: IRouter = Router();
@@ -426,6 +432,51 @@ router.patch("/settings/admin-foundation", async (req, res): Promise<void> => {
 // model. These endpoints return 410 Gone so any client still calling
 // them gets a clear, non-silent failure. Phase 4 ships the replacement
 // `/settings/workspace-traffic-sources` endpoints.
+async function readAlertRulesConfig(workspaceId: number): Promise<AlertRulesConfig> {
+  const raw = await getSettingValue(workspaceId, ALERT_RULES_SETTINGS_KEY);
+  if (!raw) return DEFAULT_ALERT_RULES;
+  try {
+    return mergeAlertRules(JSON.parse(raw));
+  } catch {
+    return DEFAULT_ALERT_RULES;
+  }
+}
+
+router.get("/settings/alert-rules", async (req, res): Promise<void> => {
+  const workspaceId = await requireWorkspaceFromQuery(req, res);
+  if (workspaceId === null) return;
+  const config = await readAlertRulesConfig(workspaceId);
+  res.json(config);
+});
+
+router.patch("/settings/alert-rules", async (req, res): Promise<void> => {
+  const admin = await requireAdmin(req, res);
+  if (admin === null) return;
+
+  const body = req.body;
+  if (!body || typeof body !== "object") {
+    res.status(400).json({ error: "Invalid body" });
+    return;
+  }
+  const workspaceId = Number(
+    (body as Record<string, unknown>).workspaceId ?? (body as Record<string, unknown>).workspace_id,
+  );
+  if ((await requireWorkspaceAccess(req, res, workspaceId)) === null) return;
+
+  const current = await readAlertRulesConfig(workspaceId);
+  const { workspaceId: _w, workspace_id: _w2, ...patch } = body as Record<string, unknown>;
+  let config: AlertRulesConfig;
+  try {
+    config = mergeAlertRules({ ...current, ...patch });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Invalid alert rules" });
+    return;
+  }
+
+  await upsertSetting(workspaceId, ALERT_RULES_SETTINGS_KEY, JSON.stringify(config));
+  res.json(config);
+});
+
 router.get("/settings/traffic-source-device-plan", (_req, res) => {
   res.status(410).json({
     error: "The traffic-source × device plan has been replaced. Configure traffic sources per workspace in Settings → Workspaces → Traffic Sources (Phase 4).",

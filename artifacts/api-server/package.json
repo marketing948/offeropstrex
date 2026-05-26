@@ -17,6 +17,7 @@
   "dependencies": {
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
+    "@workspace/alert-rules": "workspace:*",
     "@workspace/voluum-offer-ids": "workspace:*",
     "cookie-parser": "^1.4.7",
     "cors": "^2",
