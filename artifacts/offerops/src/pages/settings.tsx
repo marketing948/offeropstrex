@@ -103,6 +103,11 @@ import {
 import { AlertRulesSettingsTab } from "@/components/settings/alert-rules-settings-tab";
 import { useToast } from "@/hooks/use-toast";
 import { useWorkspace } from "@/lib/workspace-context";
+import {
+  useWorkspaceSettingsScope,
+  workspaceSettingsTabGate,
+  WorkspaceSettingsSkeleton,
+} from "@/lib/workspace-settings-ui";
 import AdminGoalsConfig from "@/pages/admin-goals-config";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { authedFetch, authedJson } from "@/lib/api-fetch";
@@ -248,8 +253,8 @@ type AdminFoundationConfig = {
 function AdminFoundationTab() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { activeWorkspaceId } = useWorkspace();
-  const wsId = activeWorkspaceId ?? 0;
+  const scope = useWorkspaceSettingsScope();
+  const { wsId, workspaceLabel } = scope;
   const [draft, setDraft] = useState<AdminFoundationConfig | null>(null);
   const [weeklyGoalsJson, setWeeklyGoalsJson] = useState("[]");
   const [monthlyGoalsJson, setMonthlyGoalsJson] = useState("[]");
@@ -258,12 +263,17 @@ function AdminFoundationTab() {
   const queryKey = ["admin-foundation-settings", wsId];
   const { data, isLoading } = useQuery<AdminFoundationConfig>({
     queryKey,
-    enabled: !!wsId,
+    enabled: scope.workspaceReady,
     queryFn: () => authedJson(`/api/settings/admin-foundation?workspace_id=${wsId}`),
   });
   const { data: trafficSources = [] } = useListWorkspaceTrafficSources(
     { workspace_id: wsId },
-    { query: { enabled: !!wsId, queryKey: getListWorkspaceTrafficSourcesQueryKey({ workspace_id: wsId }) } },
+    {
+      query: {
+        enabled: scope.workspaceReady,
+        queryKey: getListWorkspaceTrafficSourcesQueryKey({ workspace_id: wsId }),
+      },
+    },
   );
 
   useEffect(() => {
@@ -298,8 +308,9 @@ function AdminFoundationTab() {
     onError: (err) => toast({ title: "Save failed", description: errorMessage(err), variant: "destructive" }),
   });
 
-  if (!wsId) return <p className="text-sm text-muted-foreground">Select a workspace.</p>;
-  if (isLoading || !draft) return <Skeleton className="h-40 w-full" />;
+  const gate = workspaceSettingsTabGate(scope);
+  if (gate.blocked) return gate.element;
+  if (isLoading || !draft) return <WorkspaceSettingsSkeleton sections={1} />;
 
   const selectedTrafficSourceIds = draft.testingProgression.trafficSourceIds;
 
@@ -335,7 +346,8 @@ function AdminFoundationTab() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2"><Settings2 size={16} /> Admin Settings Foundation</CardTitle>
           <CardDescription>
-            Workspace-scoped defaults used by the manual testing workflow before Voluum automation is enabled.
+            Configuration for {workspaceLabel}. Workspace-scoped defaults used by the manual testing
+            workflow before Voluum automation is enabled.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
@@ -444,15 +456,20 @@ function AdminFoundationTab() {
 function AffiliateNetworksTab() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { activeWorkspaceId } = useWorkspace();
-  const wsId = activeWorkspaceId ?? 0;
+  const scope = useWorkspaceSettingsScope();
+  const { wsId, workspaceLabel } = scope;
   const [name, setName] = useState("");
   const [editing, setEditing] = useState<AffiliateNetwork | null>(null);
   const [editName, setEditName] = useState("");
 
   const { data: rows, isLoading } = useListAffiliateNetworks(
     { workspace_id: wsId },
-    { query: { enabled: !!wsId, queryKey: getListAffiliateNetworksQueryKey({ workspace_id: wsId }) } },
+    {
+      query: {
+        enabled: scope.workspaceReady,
+        queryKey: getListAffiliateNetworksQueryKey({ workspace_id: wsId }),
+      },
+    },
   );
 
   function invalidate() {
@@ -494,16 +511,18 @@ function AffiliateNetworksTab() {
     updateMutation.mutate({ id: row.id, data: { isActive: !row.isActive } });
   }
 
-  if (!wsId) {
-    return <p className="text-sm text-muted-foreground">Select a workspace to manage affiliate networks.</p>;
-  }
+  const gate = workspaceSettingsTabGate(scope);
+  if (gate.blocked) return gate.element;
 
   return (
     <div className="space-y-4 max-w-3xl">
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2"><Network size={16} /> Affiliate Networks</CardTitle>
-          <CardDescription>Admin-managed list. Used as the source of truth for batch creation dropdowns.</CardDescription>
+          <CardDescription>
+            Configuration for {workspaceLabel}. Admin-managed list used as the source of truth for batch
+            creation dropdowns.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex gap-2">
@@ -569,15 +588,20 @@ function AffiliateNetworksTab() {
 function TrafficSourcesTab() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { activeWorkspaceId } = useWorkspace();
-  const wsId = activeWorkspaceId ?? 0;
+  const scope = useWorkspaceSettingsScope();
+  const { wsId, workspaceLabel } = scope;
   const [name, setName] = useState("");
   const [editing, setEditing] = useState<WorkspaceTrafficSource | null>(null);
   const [editName, setEditName] = useState("");
 
   const { data: rows, isLoading } = useListWorkspaceTrafficSources(
     { workspace_id: wsId },
-    { query: { enabled: !!wsId, queryKey: getListWorkspaceTrafficSourcesQueryKey({ workspace_id: wsId }) } },
+    {
+      query: {
+        enabled: scope.workspaceReady,
+        queryKey: getListWorkspaceTrafficSourcesQueryKey({ workspace_id: wsId }),
+      },
+    },
   );
 
   function invalidate() {
@@ -635,9 +659,8 @@ function TrafficSourcesTab() {
     reorderMutation.mutate({ data: { workspaceId: wsId, orderedIds: list.map(r => r.id) } });
   }
 
-  if (!wsId) {
-    return <p className="text-sm text-muted-foreground">Select a workspace to manage traffic sources.</p>;
-  }
+  const gate = workspaceSettingsTabGate(scope);
+  if (gate.blocked) return gate.element;
 
   const sourcesList = (rows ?? []) as WorkspaceTrafficSource[];
 
@@ -646,7 +669,10 @@ function TrafficSourcesTab() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2"><Radio size={16} /> Traffic Sources</CardTitle>
-          <CardDescription>Workspace rotation. Order here controls the order in batch creation dropdowns.</CardDescription>
+          <CardDescription>
+            Configuration for {workspaceLabel}. Order here controls the rotation in batch creation
+            dropdowns.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex gap-2">
@@ -735,8 +761,8 @@ function TrafficSourcesTab() {
 function GeosTab() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { activeWorkspaceId } = useWorkspace();
-  const wsId = activeWorkspaceId ?? 0;
+  const scope = useWorkspaceSettingsScope();
+  const { wsId, workspaceLabel } = scope;
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [editing, setEditing] = useState<Geo | null>(null);
@@ -745,7 +771,12 @@ function GeosTab() {
 
   const { data: rows, isLoading } = useListGeos(
     { workspace_id: wsId },
-    { query: { enabled: !!wsId, queryKey: getListGeosQueryKey({ workspace_id: wsId }) } },
+    {
+      query: {
+        enabled: scope.workspaceReady,
+        queryKey: getListGeosQueryKey({ workspace_id: wsId }),
+      },
+    },
   );
 
   function invalidate() {
@@ -787,16 +818,18 @@ function GeosTab() {
     updateMutation.mutate({ id: row.id, data: { isActive: !row.isActive } });
   }
 
-  if (!wsId) {
-    return <p className="text-sm text-muted-foreground">Select a workspace to manage GEOs.</p>;
-  }
+  const gate = workspaceSettingsTabGate(scope);
+  if (gate.blocked) return gate.element;
 
   return (
     <div className="space-y-4 max-w-3xl">
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2"><Globe size={16} /> GEOs</CardTitle>
-          <CardDescription>Country / region lookup. Code is the canonical 2-3 letter code (e.g. DE, US, GB).</CardDescription>
+          <CardDescription>
+            Configuration for {workspaceLabel}. Country / region lookup — code is the canonical 2–3
+            letter code (e.g. DE, US, GB).
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex gap-2">
@@ -1984,18 +2017,28 @@ const FIXED_DEVICES = ["iOS 3G", "iOS Wifi", "Android 3G", "Android Wifi", "Desk
 function TrafficSourceDevicePlanSection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { activeWorkspaceId } = useWorkspace();
-  const wsId = activeWorkspaceId ?? 0;
+  const scope = useWorkspaceSettingsScope();
+  const { wsId, workspaceLabel, workspaceReady, isWorkspaceLoading } = scope;
 
   const tsParams = { workspace_id: wsId };
   const planParams = { workspace_id: wsId };
   const { data: trafficSources, isLoading: tsLoading } = useListVoluumTrafficSources(
     tsParams,
-    { query: { enabled: wsId > 0, queryKey: getListVoluumTrafficSourcesQueryKey(tsParams) } },
+    {
+      query: {
+        enabled: workspaceReady,
+        queryKey: getListVoluumTrafficSourcesQueryKey(tsParams),
+      },
+    },
   );
   const { data: planRows, isLoading: planLoading } = useGetTrafficSourceDevicePlan(
     planParams,
-    { query: { enabled: wsId > 0, queryKey: getGetTrafficSourceDevicePlanQueryKey(planParams) } },
+    {
+      query: {
+        enabled: workspaceReady,
+        queryKey: getGetTrafficSourceDevicePlanQueryKey(planParams),
+      },
+    },
   );
 
   const [enabled, setEnabled] = useState<Set<string>>(new Set());
@@ -2050,8 +2093,10 @@ function TrafficSourceDevicePlanSection() {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {wsId === 0 ? (
-          <p className="text-xs text-muted-foreground">Select a workspace first.</p>
+        {isWorkspaceLoading ? (
+          <Skeleton className="h-32 w-full" />
+        ) : !workspaceReady ? (
+          <p className="text-xs text-muted-foreground">Workspace configuration unavailable.</p>
         ) : tsLoading || planLoading ? (
           <Skeleton className="h-32 w-full" />
         ) : !trafficSources || trafficSources.length === 0 ? (
@@ -2111,23 +2156,33 @@ function TrafficSourceDevicePlanSection() {
 // /api/worker-affiliate-networks (GET/PUT).
 // ─────────────────────────────────────────────────────────────────
 function WorkerNetworksTab() {
-  const { activeWorkspaceId } = useWorkspace();
   const { toast } = useToast();
-  const wsId = activeWorkspaceId ?? 0;
+  const scope = useWorkspaceSettingsScope();
+  const { wsId, workspaceLabel, workspaceReady } = scope;
 
   const { data: employees = [] } = useListEmployees(
-    wsId ? { workspace_id: wsId } : undefined,
-    { query: { enabled: !!wsId, queryKey: getListEmployeesQueryKey(wsId ? { workspace_id: wsId } : undefined) } },
+    { workspace_id: wsId },
+    {
+      query: {
+        enabled: workspaceReady,
+        queryKey: getListEmployeesQueryKey({ workspace_id: wsId }),
+      },
+    },
   );
   const { data: networks = [] } = useListAffiliateNetworks(
     { workspace_id: wsId },
-    { query: { enabled: !!wsId, queryKey: getListAffiliateNetworksQueryKey({ workspace_id: wsId }) } },
+    {
+      query: {
+        enabled: workspaceReady,
+        queryKey: getListAffiliateNetworksQueryKey({ workspace_id: wsId }),
+      },
+    },
   );
 
   type Assignment = { id: number; employeeId: number; affiliateNetworkId: number };
   const { data: assignments = [], refetch } = useQuery<Assignment[]>({
     queryKey: ["worker-affiliate-networks", wsId],
-    enabled: !!wsId,
+    enabled: workspaceReady,
     queryFn: () => authedJson(`/api/worker-affiliate-networks?workspace_id=${wsId}`),
   });
 
@@ -2143,7 +2198,8 @@ function WorkerNetworksTab() {
     onError: (e: unknown) => toast({ title: "Save failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" }),
   });
 
-  if (!wsId) return <p className="text-sm text-muted-foreground">Select a workspace.</p>;
+  const gate = workspaceSettingsTabGate(scope);
+  if (gate.blocked) return gate.element;
 
   function isAssigned(empId: number, netId: number): boolean {
     return assignments.some((a) => a.employeeId === empId && a.affiliateNetworkId === netId);
@@ -2166,7 +2222,8 @@ function WorkerNetworksTab() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2"><Network size={16} /> Worker Network Assignments</CardTitle>
           <CardDescription>
-            Workers can only create batches for the affiliate networks checked here. Admins are not gated.
+            Configuration for {workspaceLabel}. Workers can only create batches for the affiliate
+            networks checked here. Admins are not gated.
           </CardDescription>
         </CardHeader>
         <CardContent>

@@ -4,19 +4,21 @@ import type { AlertRulesConfig } from "@workspace/alert-rules";
 import { DEFAULT_ALERT_RULES } from "@workspace/alert-rules";
 import { useAlertRules, alertRulesQueryKey } from "@/hooks/use-alert-rules";
 import { authedJson } from "@/lib/api-fetch";
-import { useWorkspace } from "@/lib/workspace-context";
 import { useToast } from "@/hooks/use-toast";
 import { operationalErrorMessage } from "@/lib/operational-feedback";
+import {
+  useWorkspaceSettingsScope,
+  workspaceSettingsTabGate,
+} from "@/lib/workspace-settings-ui";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { OperationalError } from "@/components/operational-state/operational-error";
 import { RefreshingHint } from "@/components/operational-state/refreshing-hint";
-import { AlertTriangle, Bell } from "lucide-react";
+import { Bell } from "lucide-react";
 
 function NumberField({
   label,
@@ -74,42 +76,14 @@ function RuleSection({
   );
 }
 
-function SettingsPanelSkeleton() {
-  return (
-    <div className="space-y-4" aria-busy="true" aria-label="Loading alert rules">
-      <Card>
-        <CardHeader>
-          <Skeleton className="h-5 w-40" />
-          <Skeleton className="h-3 w-full max-w-md" />
-        </CardHeader>
-      </Card>
-      {Array.from({ length: 5 }, (_, i) => (
-        <Card key={i}>
-          <CardHeader className="pb-2">
-            <Skeleton className="h-4 w-32" />
-            <Skeleton className="h-3 w-64" />
-          </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-2">
-            <Skeleton className="h-8 w-full" />
-            <Skeleton className="h-8 w-full" />
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
-}
-
 export function AlertRulesSettingsTab() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { activeWorkspaceId, isLoading: isWorkspaceLoading } = useWorkspace();
-  const wsId = activeWorkspaceId ?? 0;
+  const scope = useWorkspaceSettingsScope();
+  const { wsId, workspaceLabel, workspaceReady } = scope;
 
   const {
     rules: loaded,
-    workspaceLabel,
-    workspaceReady,
-    workspaceUnavailable,
     isLoading: isRulesLoading,
     isFetching,
     isError,
@@ -146,29 +120,10 @@ export function AlertRulesSettingsTab() {
   });
 
   const rulesSyncing = workspaceReady && isRulesLoading && !isFetched;
-  const formDisabled = !workspaceReady || rulesSyncing || isError;
+  const formDisabled = rulesSyncing || isError;
 
-  // Workspace list still hydrating (default workspace resolves automatically).
-  if (isWorkspaceLoading) {
-    return <SettingsPanelSkeleton />;
-  }
-
-  if (workspaceUnavailable) {
-    return (
-      <Card className="border-dashed border-destructive/30">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <AlertTriangle className="h-4 w-4 text-destructive" />
-            Workspace configuration unavailable
-          </CardTitle>
-          <CardDescription>
-            Alert rules could not be loaded because no workspace is configured for your account.
-            Contact an administrator to finish workspace setup.
-          </CardDescription>
-        </CardHeader>
-      </Card>
-    );
-  }
+  const gate = workspaceSettingsTabGate(scope);
+  if (gate.blocked) return gate.element;
 
   if (isError) {
     return (
@@ -180,7 +135,7 @@ export function AlertRulesSettingsTab() {
               Alert rules
             </CardTitle>
             <CardDescription>
-              Workspace configuration · {workspaceLabel}. Rules apply to this workspace.
+              Configuration for {workspaceLabel}. Rules apply to this workspace.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -208,9 +163,8 @@ export function AlertRulesSettingsTab() {
                 Alert rules
               </CardTitle>
               <CardDescription className="mt-1">
-                Rules apply to this workspace for Campaign Review, Executive Overview, and Live
-                Campaign health. Operational scoring uses professional terminology — not
-                gamification.
+                Rules apply to {workspaceLabel} for Campaign Review, Executive Overview, and Live
+                Campaign health.
               </CardDescription>
             </div>
             <div className="flex flex-wrap gap-1.5">

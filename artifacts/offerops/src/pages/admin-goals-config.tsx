@@ -12,6 +12,10 @@ import {
   getListTestingBatchesQueryKey, getListOffersQueryKey, getListTodoTasksQueryKey, getListEmployeesQueryKey,
 } from "@workspace/api-client-react";
 import { useWorkspace } from "@/lib/workspace-context";
+import {
+  useWorkspaceSettingsScope,
+  workspaceSettingsTabGate,
+} from "@/lib/workspace-settings-ui";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -656,6 +660,8 @@ function PreviewPanel({ savedCfg, draftCfg }: { savedCfg: GoalsConfig; draftCfg:
 export default function AdminGoalsConfig({ embedded = false }: { embedded?: boolean }) {
   const { currentEmployee } = useAuth();
   const { toast } = useToast();
+  const scope = useWorkspaceSettingsScope();
+  const { workspaceLabel } = scope;
   const { data: savedCfg } = useGoalsConfig();
   const cfg = savedCfg ?? DEFAULT_CONFIG;
   const updateCfg = useUpdateGoalsConfig();
@@ -687,6 +693,9 @@ export default function AdminGoalsConfig({ embedded = false }: { embedded?: bool
     });
   }
 
+  const gate = workspaceSettingsTabGate(scope);
+  if (gate.blocked) return gate.element;
+
   const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
     { id: "points",   label: "Point System",   icon: Activity },
     { id: "ranks",    label: "Ranks & Bonuses", icon: Crown },
@@ -706,7 +715,9 @@ export default function AdminGoalsConfig({ embedded = false }: { embedded?: bool
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
               <Settings size={22} /> Goals Engine Settings
             </h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Configure every aspect of the scoring and bonus system</p>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Configuration for {workspaceLabel}. Configure every aspect of the scoring and bonus system.
+            </p>
           </div>
         </div>
       )}

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { DEFAULT_ALERT_RULES, mergeAlertRules, type AlertRulesConfig } from "@workspace/alert-rules";
 import { authedJson } from "@/lib/api-fetch";
-import { useWorkspace } from "@/lib/workspace-context";
+import { useWorkspace, workspaceConfigLabel } from "@/lib/workspace-context";
 
 export function alertRulesQueryKey(workspaceId: number) {
   return ["alert-rules", workspaceId] as const;
@@ -15,11 +15,7 @@ export type UseAlertRulesOptions = {
   fallbackOnError?: boolean;
 };
 
-/** Single-workspace product label when the API name is missing. */
-export function workspaceConfigLabel(workspace: { name: string } | null | undefined): string {
-  const name = workspace?.name?.trim();
-  return name ? name : "Default Workspace";
-}
+export { workspaceConfigLabel };
 
 export function useAlertRules(options: UseAlertRulesOptions = {}) {
   const { fallbackOnError = true } = options;

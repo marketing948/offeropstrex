@@ -1,5 +1,4 @@
 import { useAuth } from "@/lib/auth";
-import { readAuthToken } from "@/lib/api-fetch";
 import { routeForNotification } from "@/lib/entity-navigation";
 import { queryOpts } from "@/lib/ws-query";
 import { Link, useLocation } from "wouter";
@@ -17,55 +16,27 @@ import {
   useMarkAllNotificationsRead,
   useMarkNotificationRead,
   getListNotificationsQueryKey,
-  useGetMyWorkspaces,
-  getGetMyWorkspacesQueryKey,
 } from "@workspace/api-client-react";
-import { useMutation } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState, useRef, useEffect } from "react";
 import { useWorkspace } from "@/lib/workspace-context";
 
 function WorkspaceSwitcher() {
-  const queryClient = useQueryClient();
   const { currentEmployee } = useAuth();
   const isAdmin = currentEmployee?.role === "admin";
   const [open, setOpen] = useState(false);
   const wsRef = useRef<HTMLDivElement>(null);
-  const { data: workspaces } = useGetMyWorkspaces(queryOpts(getGetMyWorkspacesQueryKey(), { refetchInterval: 60000 }));
+  const {
+    availableWorkspaces,
+    workspaceLabel,
+    isLoading,
+    canSwitchWorkspace,
+    switchWorkspace,
+    isSwitchingWorkspace,
+  } = useWorkspace();
 
-  const activeWs = workspaces?.find(w => w.isActive) ?? workspaces?.[0];
-  const activeLabel = activeWs?.name ?? "Default Workspace";
-  const activeInitial = activeLabel.charAt(0).toUpperCase();
-  const wsCount = workspaces?.length ?? 0;
-  const canSwitch = wsCount > 1;
-
-  // Pivot Phase 0 — workspace activation moved off the Voluum namespace
-  // (PATCH /api/workspaces/:id/activate). We call it via plain fetch so
-  // a regen of the API client is not required to ship Phase 0; the
-  // generated hook will be reintroduced in Phase 2 alongside the new
-  // OpenAPI contract.
-  const setActive = useMutation({
-    mutationFn: async ({ id }: { id: number }) => {
-      const token = readAuthToken();
-      const baseUrl = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/api`;
-      const res = await fetch(`${baseUrl}/workspaces/${id}/activate`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(text || `Activate failed (${res.status})`);
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: getGetMyWorkspacesQueryKey() });
-      queryClient.invalidateQueries();
-    },
-  });
+  const activeInitial = workspaceLabel.charAt(0).toUpperCase();
+  const wsCount = availableWorkspaces.length;
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -89,18 +60,22 @@ function WorkspaceSwitcher() {
       </span>
       <button
         type="button"
-        disabled={!canSwitch}
+        disabled={!canSwitchWorkspace || isLoading}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={canSwitch ? `Switch workspace. Current: ${activeLabel}` : `Current workspace: ${activeLabel}`}
-        className={`w-full flex items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors ${canSwitch ? "cursor-pointer" : "cursor-default"}`}
+        aria-label={
+          canSwitchWorkspace
+            ? `Switch workspace. Current: ${workspaceLabel}`
+            : `Current workspace: ${workspaceLabel}`
+        }
+        className={`w-full flex items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors ${canSwitchWorkspace ? "cursor-pointer" : "cursor-default"}`}
         style={{
           background: open ? "hsl(var(--sidebar-accent))" : "hsl(var(--sidebar-foreground) / 0.06)",
           outline: open ? "1px solid hsl(var(--sidebar-primary) / 0.5)" : "1px solid hsl(var(--sidebar-foreground) / 0.08)",
         }}
-        onClick={() => canSwitch && setOpen(v => !v)}
+        onClick={() => canSwitchWorkspace && setOpen((v) => !v)}
         onMouseEnter={e => {
-          if (canSwitch && !open) {
+          if (canSwitchWorkspace && !open) {
             (e.currentTarget as HTMLElement).style.background = "hsl(var(--sidebar-foreground) / 0.1)";
           }
         }}
@@ -124,16 +99,20 @@ function WorkspaceSwitcher() {
             className="text-[13px] font-semibold truncate leading-tight"
             style={{ color: "hsl(var(--sidebar-foreground))" }}
           >
-            {activeLabel}
+            {isLoading ? "Loading…" : workspaceLabel}
           </span>
           <span
             className="text-[10px] leading-tight truncate mt-0.5"
             style={{ color: "hsl(var(--sidebar-foreground) / 0.55)" }}
           >
-            {canSwitch ? `${wsCount} workspaces · click to switch` : "Single workspace"}
+            {isLoading
+              ? "Workspace configuration"
+              : canSwitchWorkspace
+                ? `${wsCount} workspaces · click to switch`
+                : "Single workspace"}
           </span>
         </div>
-        {canSwitch && (
+        {canSwitchWorkspace && (
           <>
             <span
               className="text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 min-w-[18px] text-center"
@@ -153,7 +132,7 @@ function WorkspaceSwitcher() {
         )}
       </button>
 
-      {open && canSwitch && (
+      {open && canSwitchWorkspace && (
         <div
           className="absolute top-full left-2.5 right-2.5 mt-1 z-50 rounded-lg shadow-2xl border border-border bg-background overflow-hidden"
           role="listbox"
@@ -164,12 +143,14 @@ function WorkspaceSwitcher() {
             <span className="text-[10px] text-muted-foreground">{wsCount}</span>
           </div>
           <div className="max-h-72 overflow-y-auto">
-            {workspaces!.map(ws => (
+            {availableWorkspaces.map((ws) => (
               <button
                 key={ws.id}
+                type="button"
                 role="option"
                 aria-selected={ws.isActive}
-                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors"
+                disabled={isSwitchingWorkspace}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors disabled:opacity-60"
                 style={{
                   background: ws.isActive ? "hsl(var(--primary) / 0.08)" : "transparent",
                 }}
@@ -182,7 +163,7 @@ function WorkspaceSwitcher() {
                   (e.currentTarget as HTMLElement).style.background = ws.isActive ? "hsl(var(--primary) / 0.08)" : "transparent";
                 }}
                 onClick={() => {
-                  if (!ws.isActive) setActive.mutate({ id: ws.id });
+                  if (!ws.isActive) switchWorkspace(ws.id);
                   setOpen(false);
                 }}
               >
