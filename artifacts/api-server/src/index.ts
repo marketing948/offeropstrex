@@ -25,7 +25,15 @@ app.listen(port, (err) => {
     process.exit(1);
   }
 
-  logger.info({ port }, "Server listening");
+  logger.info(
+    {
+      port,
+      environment: process.env.NODE_ENV ?? "development",
+      version: process.env.APP_VERSION ?? "dev",
+      deploymentTimestamp: process.env.DEPLOYMENT_TIMESTAMP ?? null,
+    },
+    "Server listening",
+  );
   // Phase 7: start the overdue-tasks scanner only after we're listening,
   // so a crash on boot doesn't surface as a missing port.
   startOverdueTasksCron();

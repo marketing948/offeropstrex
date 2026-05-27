@@ -376,6 +376,13 @@ export async function customFetch<T = unknown>(
 
   const response = await fetch(input, { ...init, method, headers });
 
+  if (typeof window !== "undefined") {
+    const requestId = response.headers.get("x-request-id");
+    if (requestId) {
+      window.sessionStorage.setItem("last_request_id", requestId);
+    }
+  }
+
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);
     throw new ApiError(response, errorData, requestInfo);

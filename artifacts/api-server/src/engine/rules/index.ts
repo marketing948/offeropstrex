@@ -28,6 +28,10 @@ import { handleFindWinnersDue } from "./find-winners-due.ts";
 
 let registered = false;
 
+export function areRulesRegistered(): boolean {
+  return registered;
+}
+
 /**
  * Register every Phase 4 rule. Safe to call multiple times — the
  * registry is reset only by `_resetRegistryForTests()` and this guard
