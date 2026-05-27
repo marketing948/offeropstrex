@@ -15,6 +15,7 @@ import {
   workspaceTrafficSourcesTable,
 } from "@workspace/db";
 import { ensureProductionLiveCampaignSchema } from "../test-utils/ensure-production-live-campaign-schema.ts";
+import { testAuthToken as authToken } from "../lib/test-auth-token.ts";
 
 let server: Server;
 let baseUrl: string;
@@ -49,9 +50,7 @@ afterEach(async () => {
   }
 });
 
-function authToken(employeeId: number): string {
-  return Buffer.from(`${employeeId}:cw-report:offerops_secret`).toString("base64");
-}
+
 
 async function getReport(employeeId: number, workspaceId: number) {
   const response = await fetch(`${baseUrl}/reports/campaign-winners?workspace_id=${workspaceId}`, {

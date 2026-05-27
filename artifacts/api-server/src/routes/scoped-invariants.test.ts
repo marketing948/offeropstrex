@@ -23,6 +23,7 @@ import {
 import { registerHandler, _resetRegistryForTests } from "../engine/handlers.ts";
 import { _resetRulesGuardForTests, registerAllRules } from "../engine/rules/index.ts";
 import { ensureProductionLiveCampaignSchema } from "../test-utils/ensure-production-live-campaign-schema.ts";
+import { testAuthToken as authToken } from "../lib/test-auth-token.ts";
 
 let server: Server;
 let baseUrl: string;
@@ -86,9 +87,7 @@ afterEach(async () => {
   }
 });
 
-function authToken(employeeId: number): string {
-  return Buffer.from(`${employeeId}:routes-test:offerops_secret`).toString("base64");
-}
+
 
 async function request(
   method: string,

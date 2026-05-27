@@ -245,9 +245,12 @@ try {
   if (!apiReachable) {
     console.log(`  ⚠ API not reachable at ${apiBase}; skipping HTTP route tests`);
   } else {
-    // Forge a Bearer token for the temp employee. Token format from
-    // artifacts/api-server/src/routes/auth.ts:18 — base64({id}:{ts}:offerops_secret).
-    const token = Buffer.from(`${tempEmployeeA}:${Date.now()}:offerops_secret`).toString("base64");
+    process.env.AUTH_TOKEN_SECRET =
+      process.env.AUTH_TOKEN_SECRET ?? "workspace-isolation-test-secret";
+    const { signAuthToken } = await import(
+      "../../artifacts/api-server/src/lib/auth-tokens.ts"
+    );
+    const token = signAuthToken(tempEmployeeA);
     const authHeaders = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
 
     // Make sure the temp employee has access ONLY to workspace B (not A) so we

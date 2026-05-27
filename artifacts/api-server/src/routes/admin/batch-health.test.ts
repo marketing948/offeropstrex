@@ -19,6 +19,7 @@ import {
   workspaceTrafficSourcesTable,
 } from "@workspace/db";
 import { recordOperationalEvent } from "../../lib/operational-events.ts";
+import { testAuthToken as authToken } from "../../lib/test-auth-token.ts";
 
 let server: Server;
 let baseUrl: string;
@@ -52,9 +53,7 @@ afterEach(async () => {
   }
 });
 
-function authToken(employeeId: number): string {
-  return Buffer.from(`${employeeId}:batch-health:offerops_secret`).toString("base64");
-}
+
 
 async function request(
   method: string,

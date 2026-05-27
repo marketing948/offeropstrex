@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db, employeesTable } from "@workspace/db";
 import { LoginBody } from "@workspace/api-zod";
 import crypto from "crypto";
+import { signAuthToken, verifyAuthToken } from "../lib/auth-tokens.ts";
 
 const router: IRouter = Router();
 
@@ -12,10 +13,6 @@ function hashPassword(password: string): string {
 
 function verifyPassword(password: string, hash: string): boolean {
   return hashPassword(password) === hash;
-}
-
-function generateToken(employeeId: number): string {
-  return Buffer.from(`${employeeId}:${Date.now()}:offerops_secret`).toString("base64");
 }
 
 router.post("/auth/login", async (req, res): Promise<void> => {
@@ -42,7 +39,14 @@ router.post("/auth/login", async (req, res): Promise<void> => {
     return;
   }
 
-  const token = generateToken(employee.id);
+  let token: string;
+  try {
+    token = signAuthToken(employee.id);
+  } catch (err) {
+    req.log.error({ err }, "Failed to sign auth token");
+    res.status(500).json({ error: "Authentication is not configured" });
+    return;
+  }
 
   const { passwordHash: _, ...employeeData } = employee;
 
@@ -67,13 +71,9 @@ router.get("/auth/me", async (req, res): Promise<void> => {
   }
 
   const token = authHeader.slice(7);
-  let employeeId: number;
-  try {
-    const decoded = Buffer.from(token, "base64").toString("utf-8");
-    employeeId = parseInt(decoded.split(":")[0], 10);
-    if (isNaN(employeeId)) throw new Error("Invalid token");
-  } catch {
-    res.status(401).json({ error: "Invalid token" });
+  const employeeId = verifyAuthToken(token);
+  if (employeeId === null) {
+    res.status(401).json({ error: "Invalid or expired token" });
     return;
   }
 
@@ -105,16 +105,16 @@ export async function getEmployeeFromToken(req: import("express").Request) {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) return null;
   const token = authHeader.slice(7);
-  try {
-    const decoded = Buffer.from(token, "base64").toString("utf-8");
-    const employeeId = parseInt(decoded.split(":")[0], 10);
-    if (isNaN(employeeId)) return null;
-    const [employee] = await db.select().from(employeesTable).where(eq(employeesTable.id, employeeId));
-    if (employee?.status === "inactive") return null;
-    return employee ?? null;
-  } catch {
-    return null;
-  }
+  const employeeId = verifyAuthToken(token);
+  if (employeeId === null) return null;
+
+  const [employee] = await db
+    .select()
+    .from(employeesTable)
+    .where(eq(employeesTable.id, employeeId));
+
+  if (!employee || employee.status === "inactive") return null;
+  return employee;
 }
 
 export default router;

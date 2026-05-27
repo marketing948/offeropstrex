@@ -17,6 +17,7 @@ import {
   voluumTrafficSourcesTable,
   workspacesTable,
 } from "@workspace/db";
+import { testAuthToken as authToken } from "../lib/test-auth-token.ts";
 
 let server: Server;
 let baseUrl: string;
@@ -105,9 +106,7 @@ function setOrDeleteEnv(name: string, value: string | undefined): void {
   }
 }
 
-function authToken(employeeId: number): string {
-  return Buffer.from(`${employeeId}:voluum-discovery-preview-test:offerops_secret`).toString("base64");
-}
+
 
 async function request(
   method: string,

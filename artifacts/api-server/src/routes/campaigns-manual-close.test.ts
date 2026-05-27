@@ -21,6 +21,7 @@ import {
   workspacesTable,
   workspaceTrafficSourcesTable,
 } from "@workspace/db";
+import { testAuthToken as authToken } from "../lib/test-auth-token.ts";
 
 const SAMPLE_WIN_A = "3d1ef3ff-01e2-4340-a029-ec28275f50b4";
 const SAMPLE_WIN_B = "aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee";
@@ -58,9 +59,7 @@ afterEach(async () => {
   }
 });
 
-function authToken(employeeId: number): string {
-  return Buffer.from(`${employeeId}:manual-close:offerops_secret`).toString("base64");
-}
+
 
 async function request(
   method: string,

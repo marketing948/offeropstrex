@@ -16,6 +16,7 @@ import {
   workspaceTrafficSourcesTable,
 } from "@workspace/db";
 import { ensureProductionLiveCampaignSchema } from "../test-utils/ensure-production-live-campaign-schema.ts";
+import { testAuthToken as authToken } from "../lib/test-auth-token.ts";
 
 let server: Server;
 let baseUrl: string;
@@ -50,9 +51,7 @@ afterEach(async () => {
   }
 });
 
-function authToken(employeeId: number): string {
-  return Buffer.from(`${employeeId}:winner-target:offerops_secret`).toString("base64");
-}
+
 
 async function request(method: string, path: string, employeeId: number, body?: Record<string, unknown>) {
   const response = await fetch(`${baseUrl}${path}`, {

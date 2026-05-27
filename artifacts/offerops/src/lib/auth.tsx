@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { Employee, login as apiLogin, LoginBody, logout as apiLogout } from "@workspace/api-client-react";
+import { Employee, getMe, login as apiLogin, LoginBody, logout as apiLogout } from "@workspace/api-client-react";
 import { useLocation } from "wouter";
 
 type Session = {
@@ -23,15 +23,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [, setLocation] = useLocation();
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem("offerops_session");
-      if (stored) {
-        setSession(JSON.parse(stored));
+    void (async () => {
+      try {
+        const stored = localStorage.getItem("offerops_session");
+        if (!stored) return;
+        const parsed = JSON.parse(stored) as Session;
+        const employee = await getMe({
+          headers: { Authorization: `Bearer ${parsed.token}` },
+        });
+        setSession({ employee, token: parsed.token });
+      } catch {
+        localStorage.removeItem("offerops_session");
+        setSession(null);
+      } finally {
+        setIsLoading(false);
       }
-    } catch (e) {
-      // ignore
-    }
-    setIsLoading(false);
+    })();
   }, []);
 
   const login = async (body: LoginBody) => {

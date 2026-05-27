@@ -13,6 +13,7 @@ import {
 } from "@workspace/db";
 import { _resetRegistryForTests } from "../engine/handlers.ts";
 import { _resetRulesGuardForTests, registerAllRules } from "../engine/rules/index.ts";
+import { testAuthToken as authToken } from "../lib/test-auth-token.ts";
 
 let server: Server;
 let baseUrl: string;
@@ -58,9 +59,7 @@ afterEach(async () => {
   }
 });
 
-function authToken(employeeId: number): string {
-  return Buffer.from(`${employeeId}:batch-patch-lifecycle:offerops_secret`).toString("base64");
-}
+
 
 async function request(
   method: string,
