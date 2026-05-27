@@ -112,9 +112,12 @@ async function tick(): Promise<void> {
   }
 }
 
-/** Start the cron. Idempotent — safe to call once at server boot. */
-export function startOverdueTasksCron(): void {
-  if (timer) return;
+export function startOverdueTasksCron(): () => void {
+  if (timer) {
+    return () => {
+      stopOverdueTasksCronTimer();
+    };
+  }
   timer = setInterval(() => {
     void tick();
   }, CRON_INTERVAL_MS);
@@ -124,12 +127,18 @@ export function startOverdueTasksCron(): void {
     { intervalMs: CRON_INTERVAL_MS, thresholdHours: DEFAULT_OVERDUE_THRESHOLD_HOURS },
     "overdue-tasks: cron started",
   );
+
+  return stopOverdueTasksCronTimer;
 }
 
-/** Test-only — stop the cron between tests. */
-export function _stopOverdueTasksCronForTests(): void {
+function stopOverdueTasksCronTimer(): void {
   if (timer) {
     clearInterval(timer);
     timer = null;
   }
+}
+
+/** Test-only — stop the cron between tests. */
+export function _stopOverdueTasksCronForTests(): void {
+  stopOverdueTasksCronTimer();
 }

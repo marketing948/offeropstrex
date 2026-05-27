@@ -104,8 +104,12 @@ async function tick(): Promise<void> {
 }
 
 /** Start the cron. Idempotent — safe to call once at server boot. */
-export function startOptimizationFollowupCron(): void {
-  if (timer) return;
+export function startOptimizationFollowupCron(): () => void {
+  if (timer) {
+    return () => {
+      stopOptimizationFollowupCronTimer();
+    };
+  }
   timer = setInterval(() => {
     void tick();
   }, CRON_INTERVAL_MS);
@@ -114,12 +118,18 @@ export function startOptimizationFollowupCron(): void {
     { intervalMs: CRON_INTERVAL_MS },
     "optimization-followup: cron started",
   );
+
+  return stopOptimizationFollowupCronTimer;
 }
 
-/** Test-only — stop the cron between tests. */
-export function _stopOptimizationFollowupCronForTests(): void {
+function stopOptimizationFollowupCronTimer(): void {
   if (timer) {
     clearInterval(timer);
     timer = null;
   }
+}
+
+/** Test-only — stop the cron between tests. */
+export function _stopOptimizationFollowupCronForTests(): void {
+  stopOptimizationFollowupCronTimer();
 }

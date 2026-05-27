@@ -23,6 +23,8 @@ This runbook covers a fresh internal host or VPS deployment for OfferOps. It is 
   ```
 - Production also requires `AUTH_TOKEN_SECRET` and `CORS_ORIGIN` (comma-separated if multiple frontend origins). Without `CORS_ORIGIN` in production, cross-origin browser requests are rejected. Login rate limiting defaults to 5 failed attempts per 15 minutes per IP+email (`LOGIN_RATE_LIMIT_MAX`, `LOGIN_RATE_LIMIT_WINDOW_MS`; set `LOGIN_RATE_LIMIT_DISABLED=true` only for local debugging).
 - Voluum access keys are encrypted at rest with `SECRETS_ENCRYPTION_KEY` (required in production when credentials are saved). API responses never include raw keys — only `hasVoluumCredentials` and an optional masked suffix.
+- **Background crons (API process):** In-process schedulers start by default (local dev). For cloud-style deployments with **multiple API replicas**, set **`CRON_DISABLED=true`** on the **web / HTTP tier** so each replica does **not** run the same schedules. Run a **separate worker** instance **without** `CRON_DISABLED` (or with `CRON_ENABLED=true`) so overdue tasks, reconciliation, and related jobs still run. If both `CRON_DISABLED` and `CRON_ENABLED` are set, **`CRON_DISABLED=true` wins.** Server logs emit `Background crons enabled` or `Background crons disabled` with a short reason at startup.
+- **Graceful shutdown:** The API handles **SIGTERM** and **SIGINT** by stopping new HTTP connections (`server.close`), stopping background crons, then closing the Postgres pool. If shutdown does not finish in time (default **25s**, override with **`GRACEFUL_SHUTDOWN_TIMEOUT_MS`**, minimum **3000**), the process force-exits.
 - Ports:
   - `5432` for local Postgres from `docker-compose.yml`.
   - API `PORT`, for example `3000`.

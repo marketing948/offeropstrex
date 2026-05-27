@@ -107,19 +107,29 @@ async function tick(): Promise<void> {
 }
 
 /** Start the reconciliation cron. Idempotent — safe to call once at server boot. */
-export function startReconciliationCron(): void {
-  if (timer) return;
+export function startReconciliationCron(): () => void {
+  if (timer) {
+    return () => {
+      stopReconciliationCronTimer();
+    };
+  }
   timer = setInterval(() => {
     void tick();
   }, CRON_INTERVAL_MS);
   if (typeof timer.unref === "function") timer.unref();
   logger.info({ intervalMs: CRON_INTERVAL_MS }, "reconciliation: cron started");
+
+  return stopReconciliationCronTimer;
 }
 
-/** Test-only — stop the cron between tests. */
-export function _stopReconciliationCronForTests(): void {
+function stopReconciliationCronTimer(): void {
   if (timer) {
     clearInterval(timer);
     timer = null;
   }
+}
+
+/** Test-only — stop the cron between tests. */
+export function _stopReconciliationCronForTests(): void {
+  stopReconciliationCronTimer();
 }

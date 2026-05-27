@@ -1,5 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { resolveBackgroundCronsEnabled } from "./lib/background-crons.ts";
+import { registerGracefulShutdown } from "./lib/graceful-shutdown.ts";
 import { startOverdueTasksCron } from "./cron/overdue-tasks.ts";
 import { startReconciliationCron } from "./cron/reconciliation.ts";
 import { startOptimizationFollowupCron } from "./cron/optimization-followup.ts";
@@ -19,7 +21,7 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
+const server = app.listen(port, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
     process.exit(1);
@@ -34,13 +36,37 @@ app.listen(port, (err) => {
     },
     "Server listening",
   );
-  // Phase 7: start the overdue-tasks scanner only after we're listening,
-  // so a crash on boot doesn't surface as a missing port.
-  startOverdueTasksCron();
-  // SPEC Phase 1: reconciliation safety-net cron (15-min interval).
-  startReconciliationCron();
-  // Pivot Phase 4 (Task #27): optimization-followup safety-net cron.
-  startOptimizationFollowupCron();
-  // CampaignOps redesign — 7-day Find Winners scheduler.
-  startFindWinnersScheduler();
+
+  const cronStopHandles: Array<() => void> = [];
+  const cronResolution = resolveBackgroundCronsEnabled();
+
+  if (cronResolution.enabled) {
+    logger.info(
+      { reason: cronResolution.reason },
+      "Background crons enabled",
+    );
+    cronStopHandles.push(startOverdueTasksCron());
+    cronStopHandles.push(startReconciliationCron());
+    cronStopHandles.push(startOptimizationFollowupCron());
+    cronStopHandles.push(startFindWinnersScheduler());
+  } else {
+    logger.info(
+      { reason: cronResolution.reason },
+      "Background crons disabled",
+    );
+  }
+
+  registerGracefulShutdown({
+    log: logger,
+    server,
+    stopCrons: () => {
+      for (const stop of cronStopHandles) {
+        try {
+          stop();
+        } catch (stopErr) {
+          logger.warn({ err: stopErr }, "graceful shutdown: cron stop failed");
+        }
+      }
+    },
+  });
 });

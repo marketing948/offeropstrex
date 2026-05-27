@@ -21,7 +21,8 @@ import {
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const POLL_INTERVAL_MS = 15 * 60 * 1000; // 15 min
 
-let timer: NodeJS.Timeout | null = null;
+let pollTimer: NodeJS.Timeout | null = null;
+let bootTimer: NodeJS.Timeout | null = null;
 
 async function tick(): Promise<void> {
   try {
@@ -131,17 +132,37 @@ async function tick(): Promise<void> {
   }
 }
 
-export function startFindWinnersScheduler(): void {
-  if (timer) return;
-  // Initial tick after a short delay so server boot isn't blocked.
-  setTimeout(() => void tick(), 30_000);
-  timer = setInterval(() => void tick(), POLL_INTERVAL_MS);
+export function startFindWinnersScheduler(): () => void {
+  if (pollTimer || bootTimer) {
+    return () => {
+      stopFindWinnersSchedulerTimers();
+    };
+  }
+
+  bootTimer = setTimeout(() => {
+    bootTimer = null;
+    void tick();
+  }, 30_000);
+
+  pollTimer = setInterval(() => void tick(), POLL_INTERVAL_MS);
+  if (typeof pollTimer.unref === "function") pollTimer.unref();
+
   logger.info("[find-winners-scheduler] started (7-day scan, 15 min poll)");
+
+  return stopFindWinnersSchedulerTimers;
+}
+
+function stopFindWinnersSchedulerTimers(): void {
+  if (bootTimer) {
+    clearTimeout(bootTimer);
+    bootTimer = null;
+  }
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
 }
 
 export function stopFindWinnersScheduler(): void {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
+  stopFindWinnersSchedulerTimers();
 }
