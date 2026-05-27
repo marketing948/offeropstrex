@@ -942,7 +942,7 @@ function WorkspaceFormDialog({
   const [name, setName] = useState(initial?.name ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [accessId, setAccessId] = useState(initial?.voluumAccessId ?? "");
-  const [accessKey, setAccessKey] = useState(initial?.voluumAccessKey ?? "");
+  const [accessKey, setAccessKey] = useState("");
   const [apiBaseUrl, setApiBaseUrl] = useState(initial?.voluumApiBaseUrl ?? "");
   const [voluumWorkspaceId, setVoluumWorkspaceId] = useState(initial?.voluumWorkspaceId ?? "");
   const [syncInterval, setSyncInterval] = useState(initial?.syncInterval ?? "manual");
@@ -979,7 +979,17 @@ function WorkspaceFormDialog({
               </div>
               <div>
                 <Label className="text-xs font-medium">Access Key</Label>
-                <Input className="mt-1 font-mono text-xs" type="password" placeholder="Voluum Access Key" value={accessKey} onChange={e => setAccessKey(e.target.value)} />
+                <Input
+                  className="mt-1 font-mono text-xs"
+                  type="password"
+                  placeholder={
+                    isEdit && (initial as { hasVoluumCredentials?: boolean; voluumAccessKeySuffix?: string | null })?.hasVoluumCredentials
+                      ? `Saved (••••${(initial as { voluumAccessKeySuffix?: string | null }).voluumAccessKeySuffix ?? "????"}). Leave blank to keep.`
+                      : "Voluum Access Key"
+                  }
+                  value={accessKey}
+                  onChange={e => setAccessKey(e.target.value)}
+                />
               </div>
               <div>
                 <Label className="text-xs font-medium">API Base URL <span className="text-muted-foreground font-normal">(optional)</span></Label>
@@ -1377,7 +1387,8 @@ function WorkspaceCard({ ws, onEdit, onDelete }: { ws: VoluumWorkspace; onEdit: 
     } as any);
   };
 
-  const hasCredentials = !!(ws.voluumAccessId && ws.voluumAccessKey);
+  const wsCreds = ws as { hasVoluumCredentials?: boolean; voluumAccessId?: string | null; voluumAccessKey?: string | null };
+  const hasCredentials = wsCreds.hasVoluumCredentials ?? !!(wsCreds.voluumAccessId && wsCreds.voluumAccessKey);
   const isSyncing = syncMutation.isPending;
 
   return (

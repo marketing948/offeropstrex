@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db, employeesTable, workspacesTable } from "@workspace/db";
+import { redactWorkspaceForApi } from "./voluum-credentials.ts";
 
 type EmployeeWithActiveWorkspace = Pick<typeof employeesTable.$inferSelect, "id" | "activeWorkspaceId">;
 type WorkspaceRow = typeof workspacesTable.$inferSelect;
@@ -20,8 +21,9 @@ export function serializeWorkspaceForEmployee(
   allWorkspaces: readonly WorkspaceRow[] = [workspace],
 ) {
   const activeWorkspaceId = effectiveActiveWorkspaceId(employee, allWorkspaces);
+  const redacted = redactWorkspaceForApi(workspace);
   return {
-    ...workspace,
+    ...redacted,
     isActive: workspace.id === activeWorkspaceId,
     lastSyncAt: workspace.lastSyncAt?.toISOString() ?? null,
     createdAt: workspace.createdAt.toISOString(),

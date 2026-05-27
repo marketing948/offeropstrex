@@ -17,10 +17,12 @@ This runbook covers a fresh internal host or VPS deployment for OfferOps. It is 
   export DATABASE_URL=postgres://offerops:offerops_local_only@localhost:5432/offeropstrex
   export AUTH_TOKEN_SECRET=replace-with-a-long-random-secret
   export CORS_ORIGIN=http://localhost:5173
+  export SECRETS_ENCRYPTION_KEY=replace-with-a-long-random-secret
   export ENABLE_VOLUUM=false
   export VITE_ENABLE_VOLUUM=false
   ```
 - Production also requires `AUTH_TOKEN_SECRET` and `CORS_ORIGIN` (comma-separated if multiple frontend origins). Without `CORS_ORIGIN` in production, cross-origin browser requests are rejected. Login rate limiting defaults to 5 failed attempts per 15 minutes per IP+email (`LOGIN_RATE_LIMIT_MAX`, `LOGIN_RATE_LIMIT_WINDOW_MS`; set `LOGIN_RATE_LIMIT_DISABLED=true` only for local debugging).
+- Voluum access keys are encrypted at rest with `SECRETS_ENCRYPTION_KEY` (required in production when credentials are saved). API responses never include raw keys — only `hasVoluumCredentials` and an optional masked suffix.
 - Ports:
   - `5432` for local Postgres from `docker-compose.yml`.
   - API `PORT`, for example `3000`.
@@ -48,6 +50,7 @@ Set runtime environment:
 export DATABASE_URL=postgres://offerops:offerops_local_only@localhost:5432/offeropstrex
 export AUTH_TOKEN_SECRET=replace-with-a-long-random-secret
 export CORS_ORIGIN=http://localhost:5173
+export SECRETS_ENCRYPTION_KEY=replace-with-a-long-random-secret
 export ENABLE_VOLUUM=false
 export VITE_ENABLE_VOLUUM=false
 ```

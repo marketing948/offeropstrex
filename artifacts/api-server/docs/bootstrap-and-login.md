@@ -38,6 +38,8 @@ Bearer tokens are **signed JWTs** (8h expiry). Set **`AUTH_TOKEN_SECRET`** to a 
 
 Set **`CORS_ORIGIN`** to your frontend origin(s) in production (comma-separated). Repeated failed logins return **429** after the configured limit (default 5 failures per 15 minutes per IP+email).
 
+Voluum **access keys** are encrypted in `workspaces.voluum_access_key` using **`SECRETS_ENCRYPTION_KEY`** (required in production). The API never returns the raw key; use Settings to rotate credentials by submitting a new key.
+
 ## Frontend expectations (after successful login)
 
 Workspace state comes from **`GET /api/auth/my-workspaces`**. Without assignments, the list is empty and OfferOps workspace-dependent UI may show loading or **“Workspace configuration unavailable”** rather than seeded defaults — fixing data (bootstrap/membership) resolves that without code changes.

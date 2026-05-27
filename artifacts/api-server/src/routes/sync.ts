@@ -22,6 +22,13 @@ import { upsertSetting } from "../lib/settings-store";
 import { normalizeRawTags, pickValidVoluumTag, validateTrackerCampaignTag, type VoluumTagSkipReason, type TrackerCampaignTagSkipReason } from "../lib/voluum-tag";
 import { isVoluumDryRunEnabled } from "../lib/feature-flags";
 import { recordOperationalEvent } from "../lib/operational-events";
+import {
+  encryptVoluumAccessKeyForStorage,
+  getVoluumCredentialsFromWorkspace,
+  isVoluumFullyConfigured,
+  migrateLegacyVoluumAccessKeyIfNeeded,
+  redactWorkspaceForApi,
+} from "../lib/voluum-credentials.ts";
 // SPEC Phase 1: parseVoluumCampaignName is being phased out as a workflow
 // driver. The structured-name auto-mapping pre-pass it powered has been
 // removed. The remaining call site (device detection in the mapping loop
@@ -1464,10 +1471,8 @@ router.post("/sync/voluum/discovery-preview", async (req, res): Promise<void> =>
     return;
   }
 
-  const accessId = ws.voluumAccessId?.trim() ?? "";
-  const accessKey = ws.voluumAccessKey?.trim() ?? "";
-  const apiBaseUrl = ws.voluumApiBaseUrl?.trim() || DEFAULT_VOLUUM_BASE_URL;
-  const voluumWorkspaceId = ws.voluumWorkspaceId?.trim() || null;
+  const { accessId, accessKey, apiBaseUrl, voluumWorkspaceId } = getVoluumCredentialsFromWorkspace(ws);
+  const resolvedApiBaseUrl = apiBaseUrl || DEFAULT_VOLUUM_BASE_URL;
   const authResult = accessId && accessKey
     ? await validateVoluumCredentialsForDryRun(accessId, accessKey)
     : {
@@ -1483,7 +1488,7 @@ router.post("/sync/voluum/discovery-preview", async (req, res): Promise<void> =>
   if (authResult.token !== null) {
     const previewLog = req.log.child({ workspaceId, voluumWorkspaceId });
     const [trafficSourcesResult, affiliateNetworksResult] = await Promise.allSettled([
-      fetchVoluumMetadataPreview(authResult.token, apiBaseUrl, {
+      fetchVoluumMetadataPreview(authResult.token, resolvedApiBaseUrl, {
         endpoint: "traffic-source",
         collectionKey: "trafficSources",
         idKey: "trafficSourceId",
@@ -1491,7 +1496,7 @@ router.post("/sync/voluum/discovery-preview", async (req, res): Promise<void> =>
         voluumWorkspaceId,
         log: previewLog,
       }),
-      fetchVoluumMetadataPreview(authResult.token, apiBaseUrl, {
+      fetchVoluumMetadataPreview(authResult.token, resolvedApiBaseUrl, {
         endpoint: "affiliate-network",
         collectionKey: "affiliateNetworks",
         idKey: "affiliateNetworkId",
@@ -1575,7 +1580,7 @@ router.get("/sync/voluum/status", async (req, res): Promise<void> => {
     return;
   }
 
-  const isConfigured = !!(ws.voluumAccessId && ws.voluumAccessKey && ws.voluumWorkspaceId);
+  const isConfigured = isVoluumFullyConfigured(ws);
   res.json({
     workspaceId: ws.id,
     workspaceName: ws.name,
@@ -1608,10 +1613,8 @@ router.post("/sync/voluum/trigger", async (req, res): Promise<void> => {
     return;
   }
 
-  const accessId = ws.voluumAccessId;
-  const accessKey = ws.voluumAccessKey;
-  const apiBaseUrl = ws.voluumApiBaseUrl?.trim() || DEFAULT_VOLUUM_BASE_URL;
-  const voluumWorkspaceId = ws.voluumWorkspaceId?.trim() || null;
+  const { accessId, accessKey, apiBaseUrl, voluumWorkspaceId } = getVoluumCredentialsFromWorkspace(ws);
+  const resolvedApiBaseUrl = apiBaseUrl || DEFAULT_VOLUUM_BASE_URL;
 
   if (!accessId || !accessKey) {
     res.status(400).json({ error: "Voluum credentials not configured for this workspace." });
@@ -1629,11 +1632,11 @@ router.post("/sync/voluum/trigger", async (req, res): Promise<void> => {
     : getDefaultDateRange();
 
   const triggerLog = req.log.child({ workspaceId, voluumWorkspaceId });
-  triggerLog.info({ apiBaseUrl, dateFrom, dateTo }, "Starting Voluum report sync");
+  triggerLog.info({ apiBaseUrl: resolvedApiBaseUrl, dateFrom, dateTo }, "Starting Voluum report sync");
 
   try {
     const token = await getVoluumToken(accessId, accessKey);
-    const rawRows = await fetchVoluumReport(token, apiBaseUrl, dateFrom, dateTo, { voluumWorkspaceId, log: triggerLog });
+    const rawRows = await fetchVoluumReport(token, resolvedApiBaseUrl, dateFrom, dateTo, { voluumWorkspaceId, log: triggerLog });
     const { kept: rows } = validateWorkspaceItems(rawRows, voluumWorkspaceId, ws.voluumWorkspaceName, triggerLog, "report-row");
     const mappings = await getAllMappings(workspaceId);
 
@@ -1798,10 +1801,8 @@ router.get("/sync/voluum/campaigns", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Workspace not found" });
     return;
   }
-  const accessId = ws.voluumAccessId;
-  const accessKey = ws.voluumAccessKey;
-  const apiBaseUrl = ws.voluumApiBaseUrl?.trim() || DEFAULT_VOLUUM_BASE_URL;
-  const voluumWorkspaceId = ws.voluumWorkspaceId?.trim() || null;
+  const { accessId, accessKey, apiBaseUrl, voluumWorkspaceId } = getVoluumCredentialsFromWorkspace(ws);
+  const resolvedApiBaseUrl = apiBaseUrl || DEFAULT_VOLUUM_BASE_URL;
 
   if (!accessId || !accessKey) {
     res.status(400).json({ error: "Voluum credentials not configured for this workspace." });
@@ -1815,11 +1816,11 @@ router.get("/sync/voluum/campaigns", async (req, res): Promise<void> => {
   }
 
   const fetchLog = req.log.child({ workspaceId, voluumWorkspaceId });
-  fetchLog.info({ apiBaseUrl }, "Fetching Voluum campaigns (workspace-scoped)");
+  fetchLog.info({ apiBaseUrl: resolvedApiBaseUrl }, "Fetching Voluum campaigns (workspace-scoped)");
 
   try {
     const token = await getVoluumToken(accessId, accessKey);
-    const rawCampaigns = await fetchVoluumCampaignsEnhanced(token, apiBaseUrl, { voluumWorkspaceId, log: fetchLog });
+    const rawCampaigns = await fetchVoluumCampaignsEnhanced(token, resolvedApiBaseUrl, { voluumWorkspaceId, log: fetchLog });
     const { kept: campaigns } = validateWorkspaceItems(rawCampaigns, voluumWorkspaceId, ws.voluumWorkspaceName, fetchLog, "campaign");
     fetchLog.info({ count: campaigns.length }, "Voluum campaigns fetched");
     res.json(campaigns);
@@ -2147,14 +2148,14 @@ router.post("/sync/voluum/workspaces", async (req, res): Promise<void> => {
     name,
     description: description ?? null,
     voluumAccessId: voluumAccessId ?? null,
-    voluumAccessKey: voluumAccessKey ?? null,
+    voluumAccessKey: encryptVoluumAccessKeyForStorage(voluumAccessKey),
     voluumApiBaseUrl: voluumApiBaseUrl ?? null,
     syncInterval: syncInterval ?? "manual",
     isActive: false,
     isDefault: false,
   }).returning();
   req.log.info({ workspaceId: workspace.id, name }, "Workspace created");
-  res.status(201).json(workspace);
+  res.status(201).json(redactWorkspaceForApi(workspace));
 });
 
 // PATCH /sync/voluum/workspaces/:id — admin only
@@ -2167,7 +2168,12 @@ router.patch("/sync/voluum/workspaces/:id", async (req, res): Promise<void> => {
   if (name !== undefined) updates.name = name;
   if (description !== undefined) updates.description = description;
   if (voluumAccessId !== undefined) updates.voluumAccessId = voluumAccessId;
-  if (voluumAccessKey !== undefined) updates.voluumAccessKey = voluumAccessKey;
+  if (voluumAccessKey !== undefined) {
+    const trimmed = typeof voluumAccessKey === "string" ? voluumAccessKey.trim() : "";
+    if (trimmed) {
+      updates.voluumAccessKey = encryptVoluumAccessKeyForStorage(trimmed);
+    }
+  }
   if (voluumApiBaseUrl !== undefined) updates.voluumApiBaseUrl = voluumApiBaseUrl;
   if (voluumWorkspaceId !== undefined) updates.voluumWorkspaceId = voluumWorkspaceId?.trim() || null;
   if (voluumWorkspaceName !== undefined) updates.voluumWorkspaceName = voluumWorkspaceName?.trim() || null;
@@ -2183,8 +2189,13 @@ router.patch("/sync/voluum/workspaces/:id", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Workspace not found" });
     return;
   }
+  await migrateLegacyVoluumAccessKeyIfNeeded(id, workspace.voluumAccessKey);
+  const [freshWorkspace] = await db
+    .select()
+    .from(workspacesTable)
+    .where(eq(workspacesTable.id, id));
   req.log.info({ workspaceId: id }, "Workspace updated");
-  res.json(workspace);
+  res.json(redactWorkspaceForApi(freshWorkspace ?? workspace));
 });
 
 // DELETE /sync/voluum/workspaces/:id — admin only
@@ -2219,15 +2230,12 @@ router.post("/sync/voluum/workspaces/:id/sync", async (req, res): Promise<void> 
   }
   if ((await requireWorkspaceAccess(req, res, id)) === null) return;
 
-  const accessId = ws.voluumAccessId;
-  const accessKey = ws.voluumAccessKey;
-  const apiBaseUrl = (ws.voluumApiBaseUrl?.trim()) || DEFAULT_VOLUUM_BASE_URL;
-  // Always trim the workspace ID — prevents issues from copy-paste whitespace/tabs
-  const voluumWorkspaceId = ws.voluumWorkspaceId?.trim() || null;
+  const { accessId, accessKey, apiBaseUrl, voluumWorkspaceId } = getVoluumCredentialsFromWorkspace(ws);
+  const resolvedApiBaseUrl = apiBaseUrl || DEFAULT_VOLUUM_BASE_URL;
 
   if (!accessId || !accessKey) {
     res.status(400).json({ error: "Workspace has no Voluum credentials configured. Add Access ID and Access Key to sync." });
-    return;
+  return;
   }
   if (!voluumWorkspaceId) {
     res.status(400).json({
@@ -2237,15 +2245,15 @@ router.post("/sync/voluum/workspaces/:id/sync", async (req, res): Promise<void> 
   }
 
   const syncLog = req.log.child({ workspaceId: id, workspaceName: ws.name, voluumWorkspaceId });
-  syncLog.info({ apiBaseUrl, voluumWorkspaceId }, "[Sync] Starting workspace metadata sync");
+  syncLog.info({ apiBaseUrl: resolvedApiBaseUrl, voluumWorkspaceId }, "[Sync] Starting workspace metadata sync");
 
   await db.update(workspacesTable).set({ syncStatus: "syncing", updatedAt: new Date() }).where(eq(workspacesTable.id, id));
 
   try {
     const token = await getVoluumToken(accessId, accessKey);
 
-    const tsResult = await fetchVoluumTrafficSources(token, apiBaseUrl, { voluumWorkspaceId, log: syncLog });
-    const anResult = await fetchVoluumAffiliateNetworks(token, apiBaseUrl, { voluumWorkspaceId, log: syncLog });
+    const tsResult = await fetchVoluumTrafficSources(token, resolvedApiBaseUrl, { voluumWorkspaceId, log: syncLog });
+    const anResult = await fetchVoluumAffiliateNetworks(token, resolvedApiBaseUrl, { voluumWorkspaceId, log: syncLog });
 
     // Hard validation — discard any item that, when self-described, doesn't
     // belong to the configured Voluum workspace. Keeps cross-workspace rows
@@ -2797,13 +2805,8 @@ router.post("/sync/voluum/workspaces/:id/test-metadata", async (req, res): Promi
   }
   if ((await requireWorkspaceAccess(req, res, id)) === null) return;
 
-  const accessId = ws.voluumAccessId;
-  const accessKey = ws.voluumAccessKey;
-  const apiBaseUrl = (ws.voluumApiBaseUrl?.trim()) || DEFAULT_VOLUUM_BASE_URL;
-  // Always trim to prevent tab/whitespace issues from copy-paste
-  // For the test-metadata route we ALLOW a missing voluumWorkspaceId because
-  // its primary purpose is to *discover* workspaces so the admin can pick one.
-  const voluumWorkspaceId = ws.voluumWorkspaceId?.trim() || null;
+  const { accessId, accessKey, apiBaseUrl, voluumWorkspaceId } = getVoluumCredentialsFromWorkspace(ws);
+  const resolvedApiBaseUrl = apiBaseUrl || DEFAULT_VOLUUM_BASE_URL;
 
   if (!accessId || !accessKey) {
     res.status(400).json({ error: "Workspace has no Voluum credentials configured." });
@@ -2811,15 +2814,15 @@ router.post("/sync/voluum/workspaces/:id/test-metadata", async (req, res): Promi
   }
 
   const testLog = req.log.child({ workspaceId: id, workspaceName: ws.name, voluumWorkspaceId });
-  testLog.info({ apiBaseUrl, voluumWorkspaceId }, "[TestMetadata] Starting metadata test");
+  testLog.info({ apiBaseUrl: resolvedApiBaseUrl, voluumWorkspaceId }, "[TestMetadata] Starting metadata test");
 
   try {
     const token = await getVoluumToken(accessId, accessKey);
 
     const [voluumWorkspaces, tsResult, anResult] = await Promise.all([
-      fetchVoluumWorkspaces(token, apiBaseUrl, testLog),
-      fetchVoluumTrafficSources(token, apiBaseUrl, { voluumWorkspaceId, log: testLog }),
-      fetchVoluumAffiliateNetworks(token, apiBaseUrl, { voluumWorkspaceId, log: testLog }),
+      fetchVoluumWorkspaces(token, resolvedApiBaseUrl, testLog),
+      fetchVoluumTrafficSources(token, resolvedApiBaseUrl, { voluumWorkspaceId, log: testLog }),
+      fetchVoluumAffiliateNetworks(token, resolvedApiBaseUrl, { voluumWorkspaceId, log: testLog }),
     ]);
 
     testLog.info({
