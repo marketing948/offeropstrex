@@ -4,6 +4,12 @@ import { db, employeesTable } from "@workspace/db";
 import { LoginBody } from "@workspace/api-zod";
 import crypto from "crypto";
 import { signAuthToken, verifyAuthToken } from "../lib/auth-tokens.ts";
+import {
+  clearLoginAttempts,
+  getClientIp,
+  isLoginRateLimited,
+  recordFailedLogin,
+} from "../lib/login-rate-limit.ts";
 
 const router: IRouter = Router();
 
@@ -23,6 +29,12 @@ router.post("/auth/login", async (req, res): Promise<void> => {
   }
 
   const { email, password } = parsed.data;
+  const clientIp = getClientIp(req);
+
+  if (isLoginRateLimited(clientIp, email)) {
+    res.status(429).json({ error: "Too many login attempts. Try again later." });
+    return;
+  }
 
   const [employee] = await db
     .select()
@@ -30,14 +42,18 @@ router.post("/auth/login", async (req, res): Promise<void> => {
     .where(eq(employeesTable.email, email));
 
   if (!employee || !verifyPassword(password, employee.passwordHash)) {
+    recordFailedLogin(clientIp, email);
     res.status(401).json({ error: "Invalid email or password" });
     return;
   }
 
   if (employee.status === "inactive") {
+    recordFailedLogin(clientIp, email);
     res.status(401).json({ error: "Account is inactive" });
     return;
   }
+
+  clearLoginAttempts(clientIp, email);
 
   let token: string;
   try {

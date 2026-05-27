@@ -1,7 +1,8 @@
 import express, { type Express } from "express";
-import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
+import { createCorsMiddleware } from "./lib/cors-config.ts";
+import { createSecurityHeadersMiddleware } from "./lib/security-headers.ts";
 import { logger } from "./lib/logger";
 // Phase 4 (Task #14): import for side effect — registers all engine
 // rule handlers at server boot, BEFORE any route can call emit().
@@ -28,7 +29,8 @@ app.use(
     },
   }),
 );
-app.use(cors());
+app.use(createSecurityHeadersMiddleware());
+app.use(createCorsMiddleware());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

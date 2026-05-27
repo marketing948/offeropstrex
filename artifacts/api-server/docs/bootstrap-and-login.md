@@ -36,6 +36,8 @@ Login and `/auth/me` do **not** use cookies in this stack; the client stores **`
 
 Bearer tokens are **signed JWTs** (8h expiry). Set **`AUTH_TOKEN_SECRET`** to a long random value in production (required when `NODE_ENV=production`). Local dev may omit it; the API uses a dev-only fallback secret. Legacy base64 tokens are rejected.
 
+Set **`CORS_ORIGIN`** to your frontend origin(s) in production (comma-separated). Repeated failed logins return **429** after the configured limit (default 5 failures per 15 minutes per IP+email).
+
 ## Frontend expectations (after successful login)
 
 Workspace state comes from **`GET /api/auth/my-workspaces`**. Without assignments, the list is empty and OfferOps workspace-dependent UI may show loading or **“Workspace configuration unavailable”** rather than seeded defaults — fixing data (bootstrap/membership) resolves that without code changes.
