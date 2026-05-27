@@ -11,14 +11,14 @@ import {
   notificationsTable, todoTasksTable, offersTable,
   workspacesTable, voluumTrafficSourcesTable, voluumAffiliateNetworksTable,
   voluumCampaignMappingsTable, voluumCampaignsTable, voluumOffersTable,
-  employeesTable, employeeWorkspaceAssignmentsTable,
+  employeesTable, employeeWorkspaceAssignmentsTable, settingsTable,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { getEmployeeFromToken } from "./auth";
 import { checkWorkspaceAccess as sharedCheckWorkspaceAccess, requireWorkspaceFromQuery, requireWorkspaceAccess, requireAdmin } from "../lib/workspace-access";
 import { requireWorkspaceFromBody } from "../lib/require-workspace";
 import { serializeWorkspaceForEmployee, setActiveWorkspaceForEmployee } from "../lib/active-workspace";
-import { upsertSetting } from "../lib/settings-store";
+import { getSettingValue, upsertSetting } from "../lib/settings-store";
 import { normalizeRawTags, pickValidVoluumTag, validateTrackerCampaignTag, type VoluumTagSkipReason, type TrackerCampaignTagSkipReason } from "../lib/voluum-tag";
 import { isVoluumDryRunEnabled } from "../lib/feature-flags";
 import { recordOperationalEvent } from "../lib/operational-events";
@@ -42,6 +42,114 @@ const router: IRouter = Router();
 
 const VOLUUM_AUTH_URL = "https://api.voluum.com/auth/access/session";
 const DEFAULT_VOLUUM_BASE_URL = "https://api.voluum.com";
+const DEFAULT_VOLUUM_SYNC_LOCK_STALE_MS = 15 * 60 * 1000;
+const MIN_VOLUUM_SYNC_LOCK_STALE_MS = 60 * 1000;
+
+function parseVoluumSyncLockStaleMs(): number {
+  const raw = process.env.VOLUUM_SYNC_LOCK_STALE_MS?.trim();
+  if (!raw) return DEFAULT_VOLUUM_SYNC_LOCK_STALE_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < MIN_VOLUUM_SYNC_LOCK_STALE_MS) {
+    return DEFAULT_VOLUUM_SYNC_LOCK_STALE_MS;
+  }
+  return Math.floor(parsed);
+}
+
+type VoluumSyncLockContext = {
+  requestId: string | null;
+  actorId: string | null;
+  source: string;
+};
+
+type VoluumSyncLockConflict = {
+  status: "already_running";
+  startedAt: string | null;
+  ageMs: number | null;
+  requestId: string | null;
+  actorId: string | null;
+  staleAfterMs: number;
+};
+
+type VoluumSyncLockAcquireResult =
+  | { acquired: true; staleAfterMs: number }
+  | { acquired: false; conflict: VoluumSyncLockConflict };
+
+async function acquireVoluumSyncLock(
+  workspaceId: number,
+  lockContext: VoluumSyncLockContext,
+): Promise<VoluumSyncLockAcquireResult> {
+  const staleAfterMs = parseVoluumSyncLockStaleMs();
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - staleAfterMs);
+
+  const acquired = await db.update(workspacesTable)
+    .set({ syncStatus: "syncing", updatedAt: now })
+    .where(and(
+      eq(workspacesTable.id, workspaceId),
+      sql`(${workspacesTable.syncStatus} IS DISTINCT FROM 'syncing' OR ${workspacesTable.updatedAt} < ${staleBefore})`,
+    ))
+    .returning({ id: workspacesTable.id });
+
+  if (acquired.length > 0) {
+    const requestId = typeof lockContext.requestId === "string" ? lockContext.requestId : null;
+    const actorId = typeof lockContext.actorId === "string" ? lockContext.actorId : null;
+    await upsertSetting(workspaceId, "voluum_sync_lock_started_at", now.toISOString());
+    await upsertSetting(workspaceId, "voluum_sync_lock_request_id", requestId);
+    await upsertSetting(workspaceId, "voluum_sync_lock_actor_id", actorId);
+    await upsertSetting(workspaceId, "voluum_sync_lock_source", lockContext.source);
+    return { acquired: true, staleAfterMs };
+  }
+
+  const [current] = await db
+    .select({
+      syncStatus: workspacesTable.syncStatus,
+      updatedAt: workspacesTable.updatedAt,
+    })
+    .from(workspacesTable)
+    .where(eq(workspacesTable.id, workspaceId));
+
+  if (!current || current.syncStatus !== "syncing") {
+    // Race: lock became available between the guarded update and read.
+    return acquireVoluumSyncLock(workspaceId, lockContext);
+  }
+
+  const startedAtSetting = await getSettingValue(workspaceId, "voluum_sync_lock_started_at");
+  const requestId = await getSettingValue(workspaceId, "voluum_sync_lock_request_id");
+  const actorId = await getSettingValue(workspaceId, "voluum_sync_lock_actor_id");
+  const startedAt = startedAtSetting || (current.updatedAt ? current.updatedAt.toISOString() : null);
+  const startedAtMs = startedAt ? Date.parse(startedAt) : NaN;
+  const ageMs = Number.isFinite(startedAtMs) ? Math.max(0, now.getTime() - startedAtMs) : null;
+
+  return {
+    acquired: false,
+    conflict: {
+      status: "already_running",
+      startedAt,
+      ageMs,
+      requestId,
+      actorId,
+      staleAfterMs,
+    },
+  };
+}
+
+async function releaseVoluumSyncLockMetadata(workspaceId: number): Promise<void> {
+  try {
+    await db.update(settingsTable)
+      .set({ value: null })
+      .where(and(
+        eq(settingsTable.workspaceId, workspaceId),
+        inArray(settingsTable.key, [
+          "voluum_sync_lock_started_at",
+          "voluum_sync_lock_request_id",
+          "voluum_sync_lock_actor_id",
+          "voluum_sync_lock_source",
+        ]),
+      ));
+  } catch (err) {
+    logger.warn({ err, workspaceId }, "[Sync] lock metadata release failed");
+  }
+}
 
 // Best-effort device inference from a Voluum campaign name. Returns one of
 // FIXED_DEVICES (`iOS 3G`, `iOS Wifi`, `Android 3G`, `Android Wifi`,
@@ -1627,6 +1735,20 @@ router.post("/sync/voluum/trigger", async (req, res): Promise<void> => {
     return;
   }
 
+  const actor = await getEmployeeFromToken(req);
+  const lock = await acquireVoluumSyncLock(workspaceId, {
+    requestId: typeof (req as { id?: unknown }).id === "string" ? (req as { id: string }).id : null,
+    actorId: actor ? String(actor.id) : null,
+    source: "POST /sync/voluum/trigger",
+  });
+  if (!lock.acquired) {
+    res.status(409).json({
+      error: "Voluum sync already running for this workspace",
+      ...lock.conflict,
+    });
+    return;
+  }
+
   const { dateFrom, dateTo } = req.body?.dateFrom
     ? { dateFrom: req.body.dateFrom, dateTo: req.body.dateTo ?? new Date().toISOString().split("T")[0] }
     : getDefaultDateRange();
@@ -1768,6 +1890,12 @@ router.post("/sync/voluum/trigger", async (req, res): Promise<void> => {
 
     req.log.info({ imported, skipped }, "Voluum sync complete");
 
+    await db.update(workspacesTable).set({
+      syncStatus: "success",
+      lastSyncAt: new Date(syncedAt),
+      updatedAt: new Date(),
+    }).where(eq(workspacesTable.id, workspaceId));
+
     await upsertSetting(workspaceId, "voluum_last_sync_at", syncedAt);
     await upsertSetting(workspaceId, "voluum_last_sync_status", "success");
     await upsertSetting(workspaceId, "voluum_last_sync_message", message);
@@ -1780,12 +1908,19 @@ router.post("/sync/voluum/trigger", async (req, res): Promise<void> => {
 
     req.log.error({ err: errorMsg }, "Voluum sync failed");
 
+    await db.update(workspacesTable).set({
+      syncStatus: "error",
+      updatedAt: new Date(),
+    }).where(eq(workspacesTable.id, workspaceId));
+
     await upsertSetting(workspaceId, "voluum_last_sync_at", syncedAt);
     await upsertSetting(workspaceId, "voluum_last_sync_status", "error");
     await upsertSetting(workspaceId, "voluum_last_sync_message", errorMsg);
     await upsertSetting(workspaceId, "voluum_last_sync_rows", "0");
 
     res.status(500).json({ error: errorMsg });
+  } finally {
+    await releaseVoluumSyncLockMetadata(workspaceId);
   }
 });
 
@@ -2247,7 +2382,19 @@ router.post("/sync/voluum/workspaces/:id/sync", async (req, res): Promise<void> 
   const syncLog = req.log.child({ workspaceId: id, workspaceName: ws.name, voluumWorkspaceId });
   syncLog.info({ apiBaseUrl: resolvedApiBaseUrl, voluumWorkspaceId }, "[Sync] Starting workspace metadata sync");
 
-  await db.update(workspacesTable).set({ syncStatus: "syncing", updatedAt: new Date() }).where(eq(workspacesTable.id, id));
+  const actor = await getEmployeeFromToken(req);
+  const lock = await acquireVoluumSyncLock(id, {
+    requestId: typeof (req as { id?: unknown }).id === "string" ? (req as { id: string }).id : null,
+    actorId: actor ? String(actor.id) : null,
+    source: "POST /sync/voluum/workspaces/:id/sync",
+  });
+  if (!lock.acquired) {
+    res.status(409).json({
+      error: "Voluum sync already running for this workspace",
+      ...lock.conflict,
+    });
+    return;
+  }
 
   try {
     const token = await getVoluumToken(accessId, accessKey);
@@ -2791,6 +2938,8 @@ router.post("/sync/voluum/workspaces/:id/sync", async (req, res): Promise<void> 
     await db.update(workspacesTable).set({ syncStatus: "error", updatedAt: new Date() }).where(eq(workspacesTable.id, id));
     syncLog.error({ err: errorMsg }, "[Sync] Workspace sync failed");
     res.status(500).json({ error: errorMsg });
+  } finally {
+    await releaseVoluumSyncLockMetadata(id);
   }
 });
 

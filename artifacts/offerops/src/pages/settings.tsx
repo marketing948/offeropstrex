@@ -1278,7 +1278,19 @@ function WorkspaceCard({ ws, onEdit, onDelete }: { ws: VoluumWorkspace; onEdit: 
       },
       onError: (err: any) => {
         queryClient.invalidateQueries({ queryKey: getListVoluumWorkspacesQueryKey() });
-        toast({ title: "Sync failed", description: err?.message ?? "Unknown error", variant: "destructive" });
+        const msg = typeof err?.message === "string" ? err.message : "";
+        const alreadyRunning =
+          err?.status === 409 || msg.toLowerCase().includes("already running");
+        if (alreadyRunning) {
+          toast({
+            title: "Sync already running",
+            description:
+              "Voluum sync is already running for this workspace. Wait for it to finish, then try again.",
+            variant: "default",
+          });
+          return;
+        }
+        toast({ title: "Sync failed", description: msg || "Unknown error", variant: "destructive" });
       },
     },
   } as any);
