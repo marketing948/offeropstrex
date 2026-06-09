@@ -9,7 +9,9 @@ The product was originally built around live Voluum sync. After the Phase 1–6 
 - `pnpm run typecheck` — Typecheck all packages
 - `pnpm run build` — Typecheck and build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — Regenerate API hooks and Zod schemas
-- `pnpm --filter @workspace/db run push` — Push DB schema changes (development only)
+- `pnpm --filter @workspace/db run push` — Push DB schema changes (**development only**)
+- `pnpm run db:migrate` — Apply baseline + forward SQL migrations (**staging/production**)
+- `pnpm run db:baseline-align` — One-time marker for databases created with `push` (records baseline without replaying legacy SQL)
 - `pnpm --filter @workspace/api-server run dev` — Run API server locally
 
 Required environment variables:
@@ -109,7 +111,8 @@ A future "automation layer" task can re-enable Voluum end-to-end by setting `ENA
 
 ## Gotchas
 
-- When making DB schema changes, always run `pnpm --filter @workspace/db run push` before running the API server.
+- **Development:** after Drizzle schema changes, run `pnpm --filter @workspace/db run push` before the API server.
+- **Staging/production:** use `pnpm run db:migrate` (never replay legacy migrations `0001`–`0021`). Run `pnpm run db:baseline-align` once if the DB was originally created with `push`. Run bootstrap only **after** migrations complete.
 - Ensure `workspace_id` is passed from `WorkspaceContext` for all frontend data queries to maintain correct data isolation.
 - Voluum routes/UI are fully gated behind `ENABLE_VOLUUM` / `VITE_ENABLE_VOLUUM`. Do not call them from new manual-flow code.
 - Engine handlers must NEVER mutate `testing_batches`, `todo_tasks`, `tracker_campaigns`, `notifications`, or `campaigns` directly — return Actions and let the executor apply them. The lint check enforces this.

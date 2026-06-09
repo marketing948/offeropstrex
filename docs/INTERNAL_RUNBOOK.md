@@ -2,6 +2,35 @@
 
 This runbook covers a fresh internal host or VPS deployment for OfferOps. It is intentionally limited to existing commands and local/internal environment scaffolding.
 
+## Database Migration Policy
+
+- **Schema source of truth:** Drizzle schema in `lib/db/src/schema/`.
+- **Greenfield bootstrap:** `lib/db/migrations/0000_baseline.sql` (full current schema for clean databases).
+- **Legacy history (do not replay on staging/prod):** `0001`–`0021` are incremental dev push-history files; the migration runner skips them automatically.
+- **Forward migrations:** add new SQL files as `0022+` after the baseline policy (see `lib/db/migrations/README.md`).
+- **Development:** `pnpm --filter @workspace/db run push` is allowed for local iteration.
+- **Staging/production command:** `pnpm run db:migrate` only. **Do not use `drizzle-kit push`** unless explicitly approved for an emergency.
+- **Migration tracking table:** `offerops_schema_migrations` (SHA-256 checksum per applied file).
+- **Rule:** migrations must complete before API traffic is served. **Bootstrap runs only after migrations.**
+
+### Clean database (staging/prod bring-up)
+
+```sh
+pnpm run db:migrate
+```
+
+Applies `0000_baseline.sql`, then any `0022+` forward migrations. Never replays `0001`–`0021`.
+
+### Existing push-based database (local/dev schema from drizzle-kit push)
+
+If application tables already exist but no baseline marker is recorded:
+
+```sh
+pnpm run db:baseline-align
+```
+
+This validates key schema markers, records the baseline checksum **without** replaying legacy SQL, then runs forward migrations. `pnpm run db:migrate` alone fails loudly on this state instead of guessing.
+
 ## Host Prerequisites
 
 - Docker with Docker Compose v2.
@@ -65,10 +94,10 @@ npm install -g esbuild@0.27.3
 export ESBUILD_BINARY_PATH="$(command -v esbuild)"
 ```
 
-Push the DB schema:
+Run DB migrations (safe for repeated runs):
 
 ```sh
-pnpm --filter @workspace/db run push
+pnpm run db:migrate
 ```
 
 Bootstrap the first internal admin and workspace:
@@ -80,6 +109,11 @@ BOOTSTRAP_ADMIN_NAME="Internal Admin" \
 BOOTSTRAP_WORKSPACE_NAME="Default Workspace" \
 pnpm --filter @workspace/api-server run bootstrap:internal
 ```
+
+`bootstrap:internal` is idempotent for the same admin email/workspace setup:
+- Reuses or marks an existing default workspace.
+- Upgrades existing user to admin/active if needed.
+- Ensures workspace assignment exists.
 
 Build library declarations before checking the API package:
 
@@ -151,12 +185,45 @@ Local URLs with the example ports:
 - API health: `http://localhost:3000/api/healthz`
 - Frontend: `http://localhost:5173`
 
+## Staging / Production Deploy Order
+
+1. Deploy code/artifact for the target environment.
+2. Set environment-specific `DATABASE_URL` (staging and production must use separate DBs).
+3. Run migrations:
+   ```sh
+   pnpm run db:migrate
+   ```
+4. Run bootstrap only when required (first environment bring-up or admin recovery):
+   ```sh
+   BOOTSTRAP_ADMIN_EMAIL=... \
+   BOOTSTRAP_ADMIN_PASSWORD=... \
+   pnpm --filter @workspace/api-server run bootstrap:internal
+   ```
+5. Start/restart API process after migrations complete.
+
+Never start a new API build against an unmigrated database.
+
+## Rollback Caveats
+
+- OfferOps migrations are forward-only SQL files.
+- If an application deploy must be rolled back, the DB usually stays at the newer schema version.
+- For failed migrations, restore from a pre-deploy DB backup/snapshot rather than manually editing applied migration history.
+- Do not edit already-applied SQL migration files; add a new migration for corrective changes.
+
 ## Troubleshooting
 
 `DATABASE_URL must be set`:
 
 - Export `DATABASE_URL` in the same shell that runs DB, bootstrap, API, or route-test commands.
 - Use `.env.example` as the local placeholder format, but do not commit real secrets.
+
+`Migration command fails`:
+
+- Ensure the target DB user can create tables and run DDL.
+- Re-run `pnpm run db:migrate` (it is repeatable and skips already-applied files with checksum validation).
+- If a migration file was modified after apply, the runner will fail with a checksum mismatch; restore the original file and add a new corrective migration.
+- If the error mentions an existing schema without a baseline marker, run `pnpm run db:baseline-align` once, then `pnpm run db:migrate`.
+- Never replay legacy migrations `0001`–`0021` on staging/production; they are dev-history only.
 
 `ECONNREFUSED` to Postgres:
 

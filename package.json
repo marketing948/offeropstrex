@@ -3,11 +3,13 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
+    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; allowed=0; case \"$npm_config_user_agent\" in pnpm/*) allowed=1 ;; esac; case \"$npm_execpath\" in *pnpm*) allowed=1 ;; esac; [ \"$allowed\" -eq 1 ] || { echo \"Use pnpm instead\" >&2; exit 1; }'",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck && pnpm --filter @workspace/scripts run check:workspace-isolation",
-    "test:workspace-isolation": "pnpm --filter @workspace/scripts run test:workspace-isolation"
+    "test:workspace-isolation": "pnpm --filter @workspace/scripts run test:workspace-isolation",
+    "db:migrate": "pnpm --filter @workspace/db run migrate",
+    "db:baseline-align": "pnpm --filter @workspace/db run baseline-align"
   },
   "private": true,
   "devDependencies": {
