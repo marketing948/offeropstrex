@@ -12,6 +12,7 @@
  * workspace and ON DELETE CASCADE.
  */
 import { Client } from "pg";
+import { signTestAuthToken } from "./lib/test-auth-token";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -247,10 +248,10 @@ try {
   } else {
     process.env.AUTH_TOKEN_SECRET =
       process.env.AUTH_TOKEN_SECRET ?? "workspace-isolation-test-secret";
-    const { signAuthToken } = await import(
-      "../../artifacts/api-server/src/lib/auth-tokens.ts"
+    const token = signTestAuthToken(
+      tempEmployeeA,
+      process.env.AUTH_TOKEN_SECRET,
     );
-    const token = signAuthToken(tempEmployeeA);
     const authHeaders = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
 
     // Make sure the temp employee has access ONLY to workspace B (not A) so we
