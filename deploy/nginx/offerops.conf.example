@@ -1,0 +1,95 @@
+# OfferOps — nginx reverse proxy + static frontend (example)
+#
+# Install:
+#   sudo cp deploy/nginx/offerops.conf.example /etc/nginx/sites-available/offerops
+#   sudo ln -s /etc/nginx/sites-available/offerops /etc/nginx/sites-enabled/
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# Replace:
+#   - staging.offerops.example with your domain
+#   - /opt/offerops/artifacts/offerops/dist/public with your frontend build output
+#
+# HTTPS: use certbot (Let's Encrypt) or your CA after HTTP is working:
+#   sudo certbot --nginx -d staging.offerops.example
+#
+# Postgres must NOT be proxied or exposed through nginx. Bind Postgres to localhost only.
+
+upstream offerops_api {
+    server 127.0.0.1:3000;
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name staging.offerops.example;
+
+    # Redirect to HTTPS once certificates are installed (uncomment after certbot):
+    # return 301 https://$host$request_uri;
+
+    root /opt/offerops/artifacts/offerops/dist/public;
+    index index.html;
+
+    # Readiness probe — use for deploy/orchestration checks (includes DB check).
+    location = /api/readyz {
+        proxy_pass http://offerops_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Liveness (no DB check)
+    location = /api/healthz {
+        proxy_pass http://offerops_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # API routes
+    location /api/ {
+        proxy_pass http://offerops_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+    }
+
+    # SPA static assets
+    location /assets/ {
+        try_files $uri =404;
+        expires 7d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # SPA fallback
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+
+# HTTPS server block — enable after TLS certificates exist:
+#
+# server {
+#     listen 443 ssl http2;
+#     listen [::]:443 ssl http2;
+#     server_name staging.offerops.example;
+#
+#     ssl_certificate     /etc/letsencrypt/live/staging.offerops.example/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/staging.offerops.example/privkey.pem;
+#
+#     root /opt/offerops/artifacts/offerops/dist/public;
+#     index index.html;
+#
+#     location = /api/readyz { ... same proxy_* as above ... }
+#     location = /api/healthz { ... }
+#     location /api/ { ... }
+#     location /assets/ { ... }
+#     location / { try_files $uri $uri/ /index.html; }
+# }

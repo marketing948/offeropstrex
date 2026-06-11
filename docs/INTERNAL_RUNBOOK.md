@@ -203,6 +203,192 @@ Local URLs with the example ports:
 
 Never start a new API build against an unmigrated database.
 
+## VPS Staging Deployment (app + PostgreSQL on same host)
+
+This section covers a first-phase VPS where the API, static frontend, and PostgreSQL all run on one machine. Templates live under `deploy/` (systemd, nginx, example env). **Do not commit real secrets.**
+
+### 1. Host prerequisites
+
+**Node.js 24 + pnpm (Corepack):**
+
+```sh
+# Example: Ubuntu/Debian — install Node 24 from your distro or NodeSource, then:
+corepack enable
+corepack prepare pnpm@latest --activate
+pnpm -v
+node -v   # expect v24.x
+```
+
+**PostgreSQL 16 (native, same VPS):**
+
+```sh
+# Example: Ubuntu/Debian
+sudo apt update
+sudo apt install -y postgresql-16 postgresql-client-16
+
+sudo systemctl enable --now postgresql
+```
+
+**Create database and application user:**
+
+```sh
+sudo -u postgres psql <<'SQL'
+CREATE USER offerops WITH PASSWORD 'replace-with-a-strong-password';
+CREATE DATABASE offeropstrex OWNER offerops;
+GRANT ALL PRIVILEGES ON DATABASE offeropstrex TO offerops;
+SQL
+```
+
+**PostgreSQL must not be exposed publicly:**
+
+- Bind to `127.0.0.1` only (check `listen_addresses` in `postgresql.conf`).
+- Do **not** open port `5432` in the host firewall for the public internet.
+- Use `DATABASE_URL` with `localhost` or `127.0.0.1`, e.g. `postgres://offerops:...@127.0.0.1:5432/offeropstrex`.
+
+**Application layout (example):**
+
+```sh
+sudo useradd -r -m -d /opt/offerops -s /usr/sbin/nologin offerops || true
+sudo mkdir -p /etc/offerops
+sudo cp deploy/env/offerops.example.env /etc/offerops/offerops.env
+sudo chmod 600 /etc/offerops/offerops.env
+# Edit /etc/offerops/offerops.env with real secrets (AUTH_TOKEN_SECRET, DATABASE_URL, CORS_ORIGIN, etc.)
+```
+
+Clone or deploy application code to `/opt/offerops` (or your chosen path) owned by the deploy user.
+
+### 2. Reverse proxy and network shape
+
+- **nginx** (or Caddy) terminates HTTP/HTTPS on ports 80/443.
+- **Frontend:** static files from `artifacts/offerops/dist/public` (after Vite build).
+- **API:** proxy `/api/` to `http://127.0.0.1:3000` (localhost only).
+- **Readiness:** use `GET /api/readyz` (checks DB + rules registry). Use `/api/healthz` for liveness only.
+- **Firewall:** allow 80/443 (and SSH); block public access to API port 3000 and Postgres 5432.
+
+Example nginx config: `deploy/nginx/offerops.conf.example`
+
+```sh
+sudo cp deploy/nginx/offerops.conf.example /etc/nginx/sites-available/offerops
+sudo ln -sf /etc/nginx/sites-available/offerops /etc/nginx/sites-enabled/
+sudo nginx -t
+```
+
+Enable HTTPS with Let's Encrypt (`certbot --nginx`) after DNS points at the VPS. See commented HTTPS block in the nginx example.
+
+### 3. Environment variables
+
+Copy and edit templates:
+
+- Repo reference: `.env.example`
+- VPS file: `deploy/env/offerops.example.env` → `/etc/offerops/offerops.env`
+
+| Variable | When required | Notes |
+|----------|---------------|-------|
+| `NODE_ENV` | Always (prod) | Set `production` on VPS |
+| `PORT` | Always | `3000` — API listens on this port; nginx proxies to it |
+| `DATABASE_URL` | Always | Localhost Postgres only |
+| `AUTH_TOKEN_SECRET` | Always (prod) | JWT signing; **not** `SESSION_SECRET` |
+| `CORS_ORIGIN` | Always (prod) | Must match public site origin, e.g. `https://staging.example.com` |
+| `SECRETS_ENCRYPTION_KEY` | When storing Voluum creds | Required in production for encryption |
+| `ENABLE_VOLUUM` | Optional | Default `false` |
+| `VITE_ENABLE_VOLUUM` | **Build-time only** | Set when building frontend; requires rebuild to change |
+| `BASE_PATH` | **Build-time only** | Usually `/` on VPS |
+| `BOOTSTRAP_*` | **One-time / deployment-only** | First admin bring-up after migrate |
+| `LOG_LEVEL`, `APP_VERSION`, `DEPLOYMENT_TIMESTAMP` | Optional | Observability |
+
+### 4. Deployment command order
+
+Run from the application root (e.g. `/opt/offerops`) as the deploy user, with `/etc/offerops/offerops.env` loaded for migrate/bootstrap/API:
+
+```sh
+# 1. Install dependencies (full install — migrate/bootstrap use tsx)
+set -a && source /etc/offerops/offerops.env && set +a
+pnpm install
+
+# 2. Build API
+pnpm --filter @workspace/api-server run build
+
+# 3. Build frontend (build-time env — VITE_* and BASE_PATH)
+VITE_ENABLE_VOLUUM=false BASE_PATH=/ \
+  pnpm --filter @workspace/offerops run build
+
+# 4. Database migrations (forward-only; never replay 0001–0021 on fresh VPS)
+pnpm run db:migrate
+
+# 5. Bootstrap (first bring-up or admin recovery only)
+BOOTSTRAP_ADMIN_EMAIL=admin@example.internal \
+BOOTSTRAP_ADMIN_PASSWORD='replace-me' \
+BOOTSTRAP_ADMIN_NAME="Staging Admin" \
+BOOTSTRAP_WORKSPACE_NAME="Default Workspace" \
+pnpm --filter @workspace/api-server run bootstrap:internal
+
+# 6. Start or restart API service
+sudo cp deploy/systemd/offerops-api.service.example /etc/systemd/system/offerops-api.service
+# Edit WorkingDirectory/ExecStart paths if not /opt/offerops
+sudo systemctl daemon-reload
+sudo systemctl enable --now offerops-api
+sudo systemctl restart offerops-api
+
+# 7. Reload reverse proxy
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+**Smoke checks:**
+
+```sh
+curl -fsS http://127.0.0.1:3000/api/readyz    # via API directly (localhost)
+curl -fsS https://staging.offerops.example/api/readyz   # via nginx
+curl -fsS https://staging.offerops.example/api/healthz
+```
+
+### 5. systemd API service
+
+Template: `deploy/systemd/offerops-api.service.example`
+
+- Uses `EnvironmentFile=/etc/offerops/offerops.env`
+- Sets `NODE_ENV=production`
+- Runs built artifact: `node --enable-source-maps .../artifacts/api-server/dist/index.mjs`
+- Ensure host firewall blocks external access to port 3000; only nginx on localhost should reach the API.
+
+### 6. PostgreSQL backup and restore (VPS)
+
+Run backups **before** migrations or destructive changes. Store dumps **off the VPS** (object storage, another host, or backup provider).
+
+**Daily backup example (cron as root or postgres user):**
+
+```sh
+# /etc/cron.d/offerops-pg-backup (example — adjust paths and retention)
+0 3 * * * postgres pg_dump -Fc -d offeropstrex -f /var/backups/offerops/offeropstrex-$(date +\%Y\%m\%d).dump && find /var/backups/offerops -name '*.dump' -mtime +14 -delete
+```
+
+Create backup directory first:
+
+```sh
+sudo mkdir -p /var/backups/offerops
+sudo chown postgres:postgres /var/backups/offerops
+```
+
+**Restore example (destructive — test on staging first):**
+
+```sh
+sudo systemctl stop offerops-api
+sudo -u postgres dropdb offeropstrex
+sudo -u postgres createdb offeropstrex -O offerops
+sudo -u postgres pg_restore -d offeropstrex /var/backups/offerops/offeropstrex-YYYYMMDD.dump
+sudo systemctl start offerops-api
+```
+
+**Important:** Practice restore on a non-production database before relying on backups for production recovery.
+
+### 7. Rollback notes (VPS)
+
+| Scenario | Action |
+|----------|--------|
+| **Application rollback** | Deploy previous git tag/build artifacts; `systemctl restart offerops-api`; reload nginx if static assets changed |
+| **Database schema** | Forward-only — rolled-back app may still run against newer schema; prefer compatible releases |
+| **Failed migration** | Do not edit applied migration history; restore DB from pre-migrate backup |
+| **Destructive mistake** | Restore from backup; re-run bootstrap only if admin/workspace data was lost |
+
 ## Rollback Caveats
 
 - OfferOps migrations are forward-only SQL files.

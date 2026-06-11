@@ -16,7 +16,7 @@ The product was originally built around live Voluum sync. After the Phase 1–6 
 
 Required environment variables:
 - `DATABASE_URL` — Postgres connection string (provided by Replit).
-- `SESSION_SECRET` — session signing secret.
+- `AUTH_TOKEN_SECRET` — JWT signing secret for API auth (required in production).
 
 Optional environment variables:
 - `ENABLE_VOLUUM` (default `false`) — gates the dormant Voluum integration. See "Dormant Voluum layer" below.

@@ -1,0 +1,40 @@
+# OfferOps API — systemd unit template
+#
+# Install:
+#   sudo cp deploy/systemd/offerops-api.service.example /etc/systemd/system/offerops-api.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now offerops-api
+#
+# Adjust paths, User/Group, and EnvironmentFile for your VPS.
+
+[Unit]
+Description=OfferOps API server
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=offerops
+Group=offerops
+WorkingDirectory=/opt/offerops
+
+# Runtime secrets and config (no real secrets in repo — create on the VPS).
+EnvironmentFile=/etc/offerops/offerops.env
+
+Environment=NODE_ENV=production
+
+# Built API artifact from: pnpm --filter @workspace/api-server run build
+ExecStart=/usr/bin/node --enable-source-maps /opt/offerops/artifacts/api-server/dist/index.mjs
+
+Restart=on-failure
+RestartSec=5
+
+# Graceful shutdown (API handles SIGTERM; default timeout 25s in app).
+TimeoutStopSec=30
+
+# Hardening (optional — tune for your distro)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
