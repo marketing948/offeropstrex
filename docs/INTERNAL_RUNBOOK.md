@@ -2,6 +2,8 @@
 
 This runbook covers a fresh internal host or VPS deployment for OfferOps. It is intentionally limited to existing commands and local/internal environment scaffolding.
 
+For launch-day sequencing, smoke tests, and the go/no-go gate, use the companion [`docs/STAGING_LAUNCH_CHECKLIST.md`](./STAGING_LAUNCH_CHECKLIST.md).
+
 ## Database Migration Policy
 
 - **Schema source of truth:** Drizzle schema in `lib/db/src/schema/`.
