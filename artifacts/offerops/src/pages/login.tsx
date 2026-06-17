@@ -88,12 +88,6 @@ export default function Login() {
             <Button type="submit" className="w-full font-semibold" disabled={isLoading}>
               {isLoading ? "Signing in…" : "Sign in"}
             </Button>
-            {import.meta.env.DEV && (
-              <div className="text-xs text-muted-foreground text-center space-y-1">
-                <div>Admin: <span className="text-foreground font-medium">admin@offerops.com</span> / password123</div>
-                <div>Employee: <span className="text-foreground font-medium">alice@offerops.com</span> / password123</div>
-              </div>
-            )}
           </CardFooter>
         </form>
       </Card>
