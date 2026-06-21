@@ -1,4 +1,4 @@
-import { and, eq, gte, lt, lte, sql, sum, type SQL } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, lte, sql, sum, type SQL } from "drizzle-orm";
 import {
   batchResultsTable,
   campaignDailyMetricsTable,
@@ -93,6 +93,60 @@ function batchJoin() {
     eq(campaignsTable.batchId, testingBatchesTable.id),
     eq(testingBatchesTable.workspaceId, campaignsTable.workspaceId),
   );
+}
+
+export type CampaignMetricRangeTotals = {
+  campaignId: number;
+  visits: number;
+  conversions: number;
+  cost: number;
+  revenue: number;
+  profit: number;
+  roi: number | null;
+  epc: number | null;
+};
+
+/** Per-campaign summed metrics over an inclusive date range. */
+export async function queryCampaignMetricTotalsMap(
+  workspaceId: number,
+  range: MetricsDateRange,
+  campaignIds: number[],
+): Promise<Map<number, CampaignMetricRangeTotals>> {
+  const map = new Map<number, CampaignMetricRangeTotals>();
+  if (campaignIds.length === 0) return map;
+
+  const rows = await db
+    .select({
+      campaignId: campaignDailyMetricsTable.campaignId,
+      visits: sum(campaignDailyMetricsTable.visits),
+      conversions: sum(campaignDailyMetricsTable.conversions),
+      cost: sum(campaignDailyMetricsTable.cost),
+      revenue: sum(campaignDailyMetricsTable.revenue),
+    })
+    .from(campaignDailyMetricsTable)
+    .where(
+      and(
+        eq(campaignDailyMetricsTable.workspaceId, workspaceId),
+        gte(campaignDailyMetricsTable.date, range.dateFrom),
+        lte(campaignDailyMetricsTable.date, range.dateTo),
+        inArray(campaignDailyMetricsTable.campaignId, campaignIds),
+      ),
+    )
+    .groupBy(campaignDailyMetricsTable.campaignId);
+
+  for (const r of rows) {
+    const totals = totalsFromSums(
+      Number(r.visits ?? 0),
+      Number(r.conversions ?? 0),
+      Number(r.cost ?? 0),
+      Number(r.revenue ?? 0),
+    );
+    map.set(r.campaignId, {
+      campaignId: r.campaignId,
+      ...totals,
+    });
+  }
+  return map;
 }
 
 /** Workspace totals from imported daily metrics (metrics.date inclusive). */

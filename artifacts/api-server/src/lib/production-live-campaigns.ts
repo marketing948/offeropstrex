@@ -8,7 +8,7 @@ import {
   workspaceTrafficSourcesTable,
 } from "@workspace/db";
 
-export const PRODUCTION_CAMPAIGN_PURPOSES = ["working", "scaling"] as const;
+export const PRODUCTION_CAMPAIGN_PURPOSES = ["testing", "working", "scaling"] as const;
 export type ProductionCampaignPurpose = (typeof PRODUCTION_CAMPAIGN_PURPOSES)[number];
 
 /**
@@ -144,13 +144,16 @@ export async function resolveProductionLiveCampaign(
   }
 
   if (input.affiliateNetworkId == null) {
-    throw new Error("affiliateNetworkId is required for working campaigns");
+    throw new Error("affiliateNetworkId is required for working and test campaigns");
   }
   if (input.trafficSourceId == null) {
-    throw new Error("trafficSourceId is required for working campaigns");
+    throw new Error("trafficSourceId is required for working and test campaigns");
   }
   if (input.platform == null) {
-    throw new Error("platform is required for working campaigns");
+    throw new Error("platform is required for working and test campaigns");
+  }
+  if (input.campaignPurpose !== "working" && input.campaignPurpose !== "testing") {
+    throw new Error("campaignPurpose must be working or testing for non-scaling campaigns");
   }
 
   const [network] = await client
@@ -197,7 +200,7 @@ export async function resolveProductionLiveCampaign(
     geoId = byCode.id;
   }
   if (geoId == null) {
-    throw new Error("geoId is required for working campaigns");
+    throw new Error("geoId is required for working and test campaigns");
   }
 
   const [geoRow] = await client
@@ -214,7 +217,7 @@ export async function resolveProductionLiveCampaign(
   return {
     workspaceId: input.workspaceId,
     campaignName: input.campaignName.trim(),
-    campaignPurpose: "working",
+    campaignPurpose: input.campaignPurpose,
     platform: input.platform,
     trafficSourceId: input.trafficSourceId,
     voluumCampaignId,
@@ -309,5 +312,5 @@ export async function insertProductionLiveCampaign(
 export function isProductionCampaignPurpose(
   purpose: string,
 ): purpose is ProductionCampaignPurpose {
-  return purpose === "working" || purpose === "scaling";
+  return purpose === "testing" || purpose === "working" || purpose === "scaling";
 }

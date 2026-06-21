@@ -59,7 +59,7 @@ export function ProductionLiveCampaignForm({
     wsQueryOpts(activeWorkspaceId, getListGeosQueryKey(tsParams)),
   );
 
-  const [campaignPurpose, setCampaignPurpose] = useState<"working" | "scaling">("working");
+  const [campaignPurpose, setCampaignPurpose] = useState<"testing" | "working" | "scaling">("working");
   const [campaignName, setCampaignName] = useState("");
   const [platform, setPlatform] = useState<"ios" | "android">("ios");
   const [trafficSourceId, setTrafficSourceId] = useState("");
@@ -77,6 +77,7 @@ export function ProductionLiveCampaignForm({
   );
 
   const isScaling = campaignPurpose === "scaling";
+  const isTestOrWorking = campaignPurpose === "working" || campaignPurpose === "testing";
 
   async function submit() {
     if (!activeWorkspaceId) return;
@@ -116,7 +117,7 @@ export function ProductionLiveCampaignForm({
         method: "POST",
         body: JSON.stringify(body),
       });
-      toast({ title: "Production campaign added" });
+      toast({ title: "Manual campaign added" });
       void queryClient.invalidateQueries({ queryKey: ["live-campaigns"] });
       void queryClient.invalidateQueries({ queryKey: ["live-campaign-filter-options"] });
       onCreated();
@@ -134,28 +135,29 @@ export function ProductionLiveCampaignForm({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Production campaigns are outside CampaignOps testing. They start <strong>live</strong> immediately
+        Manual campaigns are outside CampaignOps testing batches. They start <strong>live</strong> immediately
         and do not create tasks or advance batches.
       </p>
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
-          <Label className="text-xs">Purpose *</Label>
+          <Label className="text-xs">Campaign Type *</Label>
           <Select
             value={campaignPurpose}
-            onValueChange={(v) => setCampaignPurpose(v as "working" | "scaling")}
+            onValueChange={(v) => setCampaignPurpose(v as "testing" | "working" | "scaling")}
           >
             <SelectTrigger className="mt-1 h-9">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="testing">Test</SelectItem>
               <SelectItem value="working">Working (proven offers)</SelectItem>
               <SelectItem value="scaling">Scaling (derivative)</SelectItem>
             </SelectContent>
           </Select>
         </div>
-        {!isScaling && (
+        {isTestOrWorking && (
           <div>
-            <Label className="text-xs">Platform *</Label>
+            <Label className="text-xs">OS *</Label>
             <Select value={platform} onValueChange={(v) => setPlatform(v as "ios" | "android")}>
               <SelectTrigger className="mt-1 h-9">
                 <SelectValue />
@@ -272,7 +274,7 @@ export function ProductionLiveCampaignForm({
           Cancel
         </Button>
         <Button type="button" size="sm" onClick={() => void submit()} disabled={pending}>
-          {pending ? "Creating…" : "Add production campaign"}
+          {pending ? "Creating…" : "Add manual campaign"}
         </Button>
       </div>
     </div>

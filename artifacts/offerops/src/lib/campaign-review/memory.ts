@@ -70,6 +70,28 @@ export function getReviewEvents(
   return list.filter((e) => e.campaignId === campaignId);
 }
 
+/** Notes submitted from Live Campaigns → Send Campaign to review (local memory only). */
+export function getMediaBuyerNotes(
+  workspaceId: number,
+  employeeId: number,
+): ReviewMemoryEvent[] {
+  return getReviewEvents(workspaceId, employeeId).filter(
+    (e) => e.type === "action_taken" && Boolean(e.note?.trim()),
+  );
+}
+
+export function getLatestMediaBuyerNote(
+  workspaceId: number,
+  employeeId: number,
+  campaignId: number,
+): ReviewMemoryEvent | null {
+  return (
+    getReviewEvents(workspaceId, employeeId, campaignId).find(
+      (e) => e.type === "action_taken" && Boolean(e.note?.trim()),
+    ) ?? null
+  );
+}
+
 export function touchCampaignFirstSeen(
   workspaceId: number,
   employeeId: number,

@@ -2,7 +2,7 @@ import { useLocation } from "wouter";
 import type { AlertRulesConfig } from "@workspace/alert-rules";
 import { DEFAULT_ALERT_RULES } from "@workspace/alert-rules";
 import type { ReviewQueueCampaign, SuggestedReviewAction } from "@/lib/campaign-review/types";
-import { recordReviewEvent, dismissCampaignUntil } from "@/lib/campaign-review/memory";
+import { recordReviewEvent, dismissCampaignUntil, getLatestMediaBuyerNote } from "@/lib/campaign-review/memory";
 import {
   Sheet,
   SheetContent,
@@ -40,6 +40,7 @@ export function ReviewDetailSheet({
 
   if (!item) return null;
   const review = item;
+  const mediaBuyerNote = getLatestMediaBuyerNote(workspaceId, actorEmployeeId, review.campaignId);
 
   function applyAction(action: SuggestedReviewAction) {
     recordReviewEvent(workspaceId, actorEmployeeId, {
@@ -86,6 +87,18 @@ export function ReviewDetailSheet({
         </SheetHeader>
 
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+          {mediaBuyerNote?.note?.trim() && (
+            <div className="rounded-lg border border-primary/25 bg-primary/5 px-3 py-3">
+              <p className="text-xs font-bold uppercase tracking-widest text-primary">
+                Media buyer note
+              </p>
+              <p className="mt-2 whitespace-pre-wrap text-sm">{mediaBuyerNote.note}</p>
+              <p className="mt-2 text-[10px] text-muted-foreground">
+                Captured locally from Live Campaigns — not persisted to backend.
+              </p>
+            </div>
+          )}
+
           <div>
             <p className="mb-2 text-xs font-bold uppercase tracking-widest text-muted-foreground">
               Metrics snapshot
