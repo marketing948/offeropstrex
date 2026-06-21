@@ -44,6 +44,9 @@ const FALLBACK_SLOTS: FocusItem[] = [
     title: "Highest Impact",
     text: "Review revenue pace and prioritize the largest network gap.",
     reason: "Based on current MTD pace vs monthly target.",
+    context: {
+      suggestedAction: "Select a hero goal card above to inspect network gaps.",
+    },
   },
   {
     tier: "secondary",
@@ -51,6 +54,10 @@ const FALLBACK_SLOTS: FocusItem[] = [
     title: "Quick Win",
     text: "Advance one testing batch or working campaign today.",
     reason: "Small operational moves compound toward monthly goals.",
+    context: {
+      suggestedAction: "Pick a network with low activity and start a test batch.",
+      navigationPath: "/testing-batches",
+    },
   },
   {
     tier: "tertiary",
@@ -58,17 +65,29 @@ const FALLBACK_SLOTS: FocusItem[] = [
     title: "Watch",
     text: "Monitor live campaign performance for early winner signals.",
     reason: "Stay ahead of pacing shifts before month-end.",
+    context: {
+      suggestedAction: "Check live campaigns for underperforming sources.",
+      navigationPath: "/live-campaigns",
+    },
   },
 ];
 
-function FocusCard({ item }: { item: FocusItem }) {
+function FocusCard({
+  item,
+  onSelect,
+}: {
+  item: FocusItem;
+  onSelect: (item: FocusItem) => void;
+}) {
   const cfg = TIER_CONFIG[item.tier];
   const LeftIcon = cfg.icon;
   const RightIcon = cfg.rightIcon;
 
   return (
-    <article
-      className={`flex min-h-[140px] flex-col rounded-2xl border-2 p-4 backdrop-blur-sm ${cfg.card} ${cfg.glow}`}
+    <button
+      type="button"
+      onClick={() => onSelect(item)}
+      className={`flex min-h-[140px] w-full cursor-pointer flex-col rounded-2xl border-2 p-4 text-left backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70 ${cfg.card} ${cfg.glow}`}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
@@ -86,7 +105,10 @@ function FocusCard({ item }: { item: FocusItem }) {
           {item.reason}
         </p>
       )}
-    </article>
+      <p className="mt-2 text-[10px] font-semibold uppercase tracking-wider text-violet-300/60">
+        Tap for details
+      </p>
+    </button>
   );
 }
 
@@ -104,15 +126,17 @@ function displayItems(focus: TodaysFocus): FocusItem[] {
 export function TodaysFocusCard({
   focus,
   loading,
+  onSelectFocus,
 }: {
   focus: TodaysFocus;
   loading?: boolean;
+  onSelectFocus: (item: FocusItem) => void;
 }) {
   const items = displayItems(focus);
 
   return (
     <section
-      className="relative overflow-hidden rounded-[20px] border-2 border-violet-500/50 bg-gradient-to-br from-[#0f0a1e] via-violet-950 to-[#0a0614] p-6 shadow-[0_8px_40px_rgba(139,92,246,0.25)] md:p-7"
+      className="relative overflow-hidden rounded-[20px] border-2 border-violet-500/50 bg-gradient-to-br from-[#0f0a1e] via-violet-950 to-[#0a0614] p-5 shadow-[0_8px_40px_rgba(139,92,246,0.25)] md:p-6"
       aria-labelledby="ops-todays-focus"
     >
       <div
@@ -136,24 +160,24 @@ export function TodaysFocusCard({
             </h2>
           </div>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-violet-200/80">
-            Personalized recommendations based on your goals, pace, and operations.
+            Recommendations from your goals, pace, batches, and open tasks.
           </p>
         </div>
         <span className="rounded-full border border-violet-400/50 bg-violet-500/20 px-3 py-1 text-[10px] font-extrabold uppercase tracking-wider text-violet-100 shadow-[0_0_12px_rgba(139,92,246,0.3)]">
-          AI-Powered
+          Goal-based
         </span>
       </div>
 
       {loading ? (
-        <div className="relative mt-6 grid gap-4 md:grid-cols-3">
+        <div className="relative mt-5 grid gap-3 md:grid-cols-3">
           {[1, 2, 3].map((i) => (
             <Skeleton key={i} className="h-36 rounded-2xl bg-violet-900/40" />
           ))}
         </div>
       ) : (
-        <div className="relative mt-6 grid gap-4 md:grid-cols-3">
+        <div className="relative mt-5 grid gap-3 md:grid-cols-3">
           {items.map((item, i) => (
-            <FocusCard key={`${item.tier}-${item.title}-${i}`} item={item} />
+            <FocusCard key={`${item.tier}-${item.title}-${i}`} item={item} onSelect={onSelectFocus} />
           ))}
         </div>
       )}

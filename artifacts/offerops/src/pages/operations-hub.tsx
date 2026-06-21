@@ -31,8 +31,14 @@ import {
   OpsActionDrilldown,
   useOpsDrilldownRoute,
 } from "@/components/operations-hub/ops-action-drilldown";
-import type { GoalKind, OpsCampaignRow } from "@/components/operations-hub/ops-hub-drilldown-data";
-import { classifyOpenTasks } from "@/components/operations-hub/ops-task-counts";
+import type { GoalKind, FocusItem, OpsCampaignRow } from "@/components/operations-hub/ops-hub-drilldown-data";
+import { classifyOpenTasks, type OpenTaskCategory } from "@/components/operations-hub/ops-task-counts";
+import {
+  OpsFocusDetailSheet,
+  OpsTaskListSheet,
+} from "@/components/operations-hub/ops-hub-action-sheets";
+import { TaskDetailDrawer } from "@/components/task-detail-drawer";
+import type { TodoTask } from "@workspace/api-client-react";
 import { CalendarDays, CheckSquare, Hand, Radio, Square, Trophy, Zap } from "lucide-react";
 
 function todayIso(): string {
@@ -92,11 +98,30 @@ export default function OperationsHub() {
 
   const loading = batchesLoading || tasksLoading || drilldown.isLoading;
   const [selectedMetric, setSelectedMetric] = useState<GoalKind>("revenue");
+  const [focusItem, setFocusItem] = useState<FocusItem | null>(null);
+  const [taskSheetCategory, setTaskSheetCategory] = useState<OpenTaskCategory | null>(null);
+  const [taskSheetIds, setTaskSheetIds] = useState<number[] | null>(null);
+  const [selectedTask, setSelectedTask] = useState<TodoTask | null>(null);
+
+  const openTaskCategory = (category: OpenTaskCategory) => {
+    setTaskSheetIds(null);
+    setTaskSheetCategory(category);
+  };
+
+  const openRelatedTasks = (ids: number[]) => {
+    setTaskSheetCategory(null);
+    setTaskSheetIds(ids);
+  };
+
+  const closeTaskSheet = () => {
+    setTaskSheetCategory(null);
+    setTaskSheetIds(null);
+  };
 
   return (
     <TooltipProvider delayDuration={200}>
       <div className="min-h-0 w-full bg-[#f4f6f9] px-4 pt-8 pb-8 md:px-8 md:pt-9">
-        <div className="mx-auto max-w-[1200px] space-y-6">
+        <div className="mx-auto max-w-[1200px] space-y-5">
           <header className="space-y-3">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="flex items-start gap-3">
@@ -155,9 +180,17 @@ export default function OperationsHub() {
             loading={loading}
           />
 
-          <TodaysFocusCard focus={drilldown.focus} loading={loading} />
+          <TodaysFocusCard
+            focus={drilldown.focus}
+            loading={loading}
+            onSelectFocus={setFocusItem}
+          />
 
-          <OpenTasksPanel tasks={tasks} loading={tasksLoading} />
+          <OpenTasksPanel
+            tasks={tasks}
+            loading={tasksLoading}
+            onOpenCategory={openTaskCategory}
+          />
 
           <section aria-labelledby="ops-kpi-strip">
             <h2 id="ops-kpi-strip" className="sr-only">
@@ -180,7 +213,7 @@ export default function OperationsHub() {
                 icon={CheckSquare}
                 theme="amber"
                 loading={loading}
-                onClick={() => nav("/tasks")}
+                onClick={() => openTaskCategory("all")}
               />
               <OpsKpiStripCard
                 label="Tasks Blocked"
@@ -189,7 +222,7 @@ export default function OperationsHub() {
                 icon={Square}
                 theme="red"
                 loading={loading}
-                onClick={() => nav("/tasks")}
+                onClick={() => openTaskCategory("blocked")}
               />
               <OpsKpiStripCard
                 label="Winners Today"
@@ -203,6 +236,34 @@ export default function OperationsHub() {
           </section>
         </div>
       </div>
+
+      <OpsFocusDetailSheet
+        open={focusItem != null}
+        item={focusItem}
+        tasks={tasks}
+        onClose={() => setFocusItem(null)}
+        onOpenTasks={openRelatedTasks}
+        onNavigate={nav}
+      />
+
+      <OpsTaskListSheet
+        open={taskSheetCategory != null || (taskSheetIds?.length ?? 0) > 0}
+        category={taskSheetCategory}
+        taskIds={taskSheetIds}
+        tasks={tasks}
+        today={today}
+        onClose={closeTaskSheet}
+        onSelectTask={(task) => {
+          closeTaskSheet();
+          setSelectedTask(task);
+        }}
+      />
+
+      <TaskDetailDrawer
+        task={selectedTask}
+        open={selectedTask != null}
+        onClose={() => setSelectedTask(null)}
+      />
     </TooltipProvider>
   );
 }

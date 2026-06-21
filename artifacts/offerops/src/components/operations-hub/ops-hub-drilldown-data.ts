@@ -127,12 +127,25 @@ export type GoalCardModel = {
   supportsGeoDrilldown: boolean;
 };
 
+export type FocusItemContext = {
+  network?: string;
+  geo?: string;
+  batchId?: number;
+  batchName?: string;
+  taskIds?: number[];
+  suggestedAction?: string;
+  metricLabel?: string;
+  metricValue?: string;
+  navigationPath?: string;
+};
+
 export type FocusItem = {
   tier: "primary" | "secondary" | "tertiary";
   emoji: string;
   title: string;
   text: string;
   reason?: string;
+  context?: FocusItemContext;
 };
 
 export type TodaysFocus = {
@@ -504,6 +517,14 @@ function computeGoalBasedFocus(
       title: "Highest Impact",
       text: `Launch 3–5 tests in ${top.network} ${top.geo.geo}.`,
       reason: `$${Math.round(top.geo.gap ?? 0).toLocaleString()} revenue gap — biggest opportunity to close this month.`,
+      context: {
+        network: top.network,
+        geo: top.geo.geo,
+        metricLabel: "Revenue gap",
+        metricValue: `$${Math.round(top.geo.gap ?? 0).toLocaleString()}`,
+        suggestedAction: `Review testing pipeline for ${top.network} ${top.geo.geo} and launch new batches.`,
+        navigationPath: "/testing-batches",
+      },
     });
   } else if (testingCard.gap > 0) {
     const net = testingCard.networkRows[0]?.network ?? "your top network";
@@ -513,6 +534,13 @@ function computeGoalBasedFocus(
       title: "Highest Impact",
       text: `Launch more tests in ${net}.`,
       reason: `Testing pipeline is ${testingCard.gap} batch${testingCard.gap === 1 ? "" : "es"} behind the monthly target.`,
+      context: {
+        network: net,
+        metricLabel: "Testing gap",
+        metricValue: `${testingCard.gap} batch${testingCard.gap === 1 ? "" : "es"}`,
+        suggestedAction: "Create or advance testing batches on this network.",
+        navigationPath: "/testing-batches",
+      },
     });
   } else if (revenueCard.pace.paceStatus === "Behind Pace") {
     items.push({
@@ -521,6 +549,12 @@ function computeGoalBasedFocus(
       title: "Highest Impact",
       text: "Push live tests across your top networks today.",
       reason: `Revenue is behind pace — $${Math.round(revenueCard.actual).toLocaleString()} current vs $${Math.round(revenueCard.pace.expectedByToday).toLocaleString()} expected.`,
+      context: {
+        metricLabel: "Revenue vs pace",
+        metricValue: `$${Math.round(revenueCard.actual).toLocaleString()} / $${Math.round(revenueCard.pace.expectedByToday).toLocaleString()}`,
+        suggestedAction: "Prioritize networks with the largest revenue gaps.",
+        navigationPath: "/live-campaigns",
+      },
     });
   } else if (workingCard.gap > 0) {
     items.push({
@@ -529,6 +563,12 @@ function computeGoalBasedFocus(
       title: "Highest Impact",
       text: "Move proven winners to working campaigns.",
       reason: `${workingCard.gap} more working campaign${workingCard.gap === 1 ? "" : "s"} needed to hit target.`,
+      context: {
+        metricLabel: "Working campaigns gap",
+        metricValue: `${workingCard.gap} remaining`,
+        suggestedAction: "Move tested winners to live working campaigns.",
+        navigationPath: "/live-campaigns",
+      },
     });
   }
 
@@ -547,6 +587,12 @@ function computeGoalBasedFocus(
       title: "Quick Win",
       text: `Start a fresh test batch in ${quickWinCandidate.network} ${quickWinCandidate.geo.geo}.`,
       reason: "Low pipeline activity with an open revenue gap — fast to activate.",
+      context: {
+        network: quickWinCandidate.network,
+        geo: quickWinCandidate.geo.geo,
+        suggestedAction: "Spin up a small test batch to validate demand quickly.",
+        navigationPath: "/testing-batches",
+      },
     });
   } else if (quickWinNet) {
     items.push({
@@ -555,6 +601,13 @@ function computeGoalBasedFocus(
       title: "Quick Win",
       text: `Activate ${quickWinNet.network}.`,
       reason: `Zero progress toward the ${quickWinNet.target} network target.`,
+      context: {
+        network: quickWinNet.network,
+        metricLabel: "Network target",
+        metricValue: String(quickWinNet.target),
+        suggestedAction: `Start activity on ${quickWinNet.network}.`,
+        navigationPath: "/testing-batches",
+      },
     });
   } else if (workingCard.gap > 0) {
     items.push({
@@ -563,6 +616,10 @@ function computeGoalBasedFocus(
       title: "Quick Win",
       text: "Move a tested winner to Working on Live Campaigns.",
       reason: "Converts existing test success into working revenue faster than new tests.",
+      context: {
+        suggestedAction: "Promote a proven test winner to a working live campaign.",
+        navigationPath: "/live-campaigns",
+      },
     });
   }
 
@@ -576,6 +633,13 @@ function computeGoalBasedFocus(
       title: "Watch",
       text: `${watchGeo.geo.geo} revenue ${watchGeo.paceStatus === "Behind Pace" ? "dropped behind pace" : "needs monitoring"}.`,
       reason: `${watchGeo.geo.progressPct ?? 0}% of GEO target with ${watchGeo.paceStatus?.toLowerCase() ?? "open"} status.`,
+      context: {
+        network: watchGeo.network,
+        geo: watchGeo.geo.geo,
+        metricLabel: "GEO progress",
+        metricValue: `${watchGeo.geo.progressPct ?? 0}%`,
+        suggestedAction: "Monitor daily revenue and adjust spend or tests if pace slips.",
+      },
     });
   } else if (revenueCard.pace.paceStatus === "Watch") {
     items.push({
@@ -584,6 +648,11 @@ function computeGoalBasedFocus(
       title: "Watch",
       text: "Workspace revenue pacing needs a mid-month push.",
       reason: `${revenueCard.pace.progressPct}% actual vs ${revenueCard.pace.expectedProgressPct}% expected by today.`,
+      context: {
+        metricLabel: "Pace",
+        metricValue: `${revenueCard.pace.progressPct}% vs ${revenueCard.pace.expectedProgressPct}% expected`,
+        suggestedAction: "Review network breakdown and prioritize lagging sources.",
+      },
     });
   } else {
     const behindNet = revenueCard.networkRows.find(
@@ -596,6 +665,12 @@ function computeGoalBasedFocus(
         title: "Watch",
         text: `${behindNet.network} revenue at ${behindNet.progressPct}% of network target.`,
         reason: "Network-level progress is lagging other sources.",
+        context: {
+          network: behindNet.network,
+          metricLabel: "Network progress",
+          metricValue: `${behindNet.progressPct}%`,
+          suggestedAction: `Investigate ${behindNet.network} performance and testing coverage.`,
+        },
       });
     }
   }
@@ -686,6 +761,12 @@ export function computeTodaysFocus(
       reason: row.health
         ? `${recommendationSummary(row.health.recommendations)} — blocking forward progress.`
         : "Batch health flagged as critical.",
+      context: {
+        batchId: row.batch.id,
+        batchName: row.batch.batchName,
+        suggestedAction: "Review batch health and resolve the critical blocker.",
+        navigationPath: `/testing-batches/${row.batch.id}`,
+      },
     });
   }
 
@@ -704,6 +785,15 @@ export function computeTodaysFocus(
       reason: batch
         ? "This batch is blocking new testing activity."
         : "Blocked task is stopping pipeline flow.",
+      context: {
+        batchId: task.relatedBatchId ?? undefined,
+        batchName: batch?.batchName ?? task.batchName ?? undefined,
+        taskIds: blockedTasks.map((t) => t.id),
+        suggestedAction: batch
+          ? "Open the batch and clear the blocked task."
+          : "Complete or unblock the related task.",
+        navigationPath: batch ? `/testing-batches/${batch.id}` : "/tasks",
+      },
     });
   }
 
@@ -719,6 +809,15 @@ export function computeTodaysFocus(
       reason: batch
         ? `Overdue on ${batchLabel(batch)} — due ${task.dueDate?.slice(0, 10) ?? "past due"}.`
         : `Due ${task.dueDate?.slice(0, 10) ?? "past due"} — delays downstream work.`,
+      context: {
+        batchId: task.relatedBatchId ?? undefined,
+        batchName: batch?.batchName ?? task.batchName ?? undefined,
+        taskIds: overdueTasks.map((t) => t.id),
+        suggestedAction: "Complete the overdue task to unblock downstream work.",
+        navigationPath: task.relatedBatchId
+          ? `/testing-batches/${task.relatedBatchId}`
+          : "/tasks",
+      },
     });
   }
 
@@ -735,6 +834,10 @@ export function computeTodaysFocus(
             title: "Quick Win",
             text: `Clear ${blockedTasks.length - 1} other blocked task${blockedTasks.length - 1 === 1 ? "" : "s"}.`,
             reason: "Reduces queue friction before launching new tests.",
+            context: {
+              taskIds: blockedTasks.slice(1).map((t) => t.id),
+              suggestedAction: "Work through remaining blocked tasks in the queue.",
+            },
           }
         : goalItems.find((i) => i.tier === "secondary");
     const tertiary =
@@ -745,6 +848,10 @@ export function computeTodaysFocus(
             title: "Watch",
             text: `${overdueTasks.length} overdue task${overdueTasks.length === 1 ? "" : "s"} need attention.`,
             reason: "Overdue work compounds into batch delays by end of week.",
+            context: {
+              taskIds: overdueTasks.map((t) => t.id),
+              suggestedAction: "Review overdue tasks and reprioritize due dates.",
+            },
           }
         : goalItems.find((i) => i.tier === "tertiary");
 

@@ -2,9 +2,11 @@
  * Operations Hub — Open Tasks summary panel.
  */
 
-import { useLocation } from "wouter";
 import type { TodoTask } from "@workspace/api-client-react";
-import { classifyOpenTasks } from "@/components/operations-hub/ops-task-counts";
+import {
+  classifyOpenTasks,
+  type OpenTaskCategory,
+} from "@/components/operations-hub/ops-task-counts";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -19,11 +21,12 @@ import {
 export function OpenTasksPanel({
   tasks,
   loading,
+  onOpenCategory,
 }: {
   tasks: TodoTask[];
   loading?: boolean;
+  onOpenCategory: (category: OpenTaskCategory) => void;
 }) {
-  const [, nav] = useLocation();
   const counts = classifyOpenTasks(tasks);
 
   return (
@@ -56,7 +59,7 @@ export function OpenTasksPanel({
                 )}
               </div>
               <p className="mt-1.5 text-sm text-slate-600">
-                Critical, blocked, and overdue tasks — review and act now.
+                Critical, blocked, and overdue tasks — tap a category to review.
               </p>
             </div>
             <Button
@@ -64,7 +67,7 @@ export function OpenTasksPanel({
               variant="outline"
               size="sm"
               className="rounded-lg border-slate-300 bg-white px-4 text-xs font-bold shadow-sm hover:bg-slate-50"
-              onClick={() => nav("/tasks")}
+              onClick={() => onOpenCategory("all")}
             >
               View all tasks
               <ChevronRight className="ml-1 h-3.5 w-3.5" />
@@ -83,19 +86,19 @@ export function OpenTasksPanel({
                 label="Critical"
                 value={counts.critical}
                 tone="critical"
-                onClick={() => nav("/tasks")}
+                onClick={() => onOpenCategory("critical")}
               />
               <CounterCard
                 label="Blocked"
                 value={counts.blocked}
                 tone="blocked"
-                onClick={() => nav("/tasks")}
+                onClick={() => onOpenCategory("blocked")}
               />
               <CounterCard
                 label="Overdue"
                 value={counts.overdue}
                 tone="overdue"
-                onClick={() => nav("/tasks")}
+                onClick={() => onOpenCategory("overdue")}
               />
             </div>
           )}
@@ -147,14 +150,14 @@ function CounterCard({
     <button
       type="button"
       onClick={onClick}
-      className={`flex items-center gap-4 rounded-xl border-2 px-4 py-5 text-left transition-all hover:-translate-y-0.5 hover:shadow-md ${s.card}`}
+      className={`flex min-h-[88px] cursor-pointer items-center gap-4 rounded-xl border-2 px-4 py-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-300 ${s.card}`}
     >
       <div
         className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${s.icon}`}
       >
         <Icon className="h-5 w-5" strokeWidth={2.25} />
       </div>
-      <div>
+      <div className="flex flex-col justify-center">
         <p className={`text-[11px] font-extrabold uppercase tracking-wider ${s.label}`}>
           {label}
         </p>

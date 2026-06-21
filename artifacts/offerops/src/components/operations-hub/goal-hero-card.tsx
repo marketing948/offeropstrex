@@ -72,7 +72,7 @@ export function GoalHeroCard({
       type="button"
       onClick={onSelect}
       aria-expanded={selected}
-      className={`relative flex min-h-[310px] w-full flex-col rounded-[18px] border-2 bg-gradient-to-br p-6 text-left shadow-lg transition-all duration-200 hover:shadow-xl ${theme.surface} ${
+      className={`relative flex min-h-[310px] w-full cursor-pointer flex-col rounded-[18px] border-2 bg-gradient-to-br p-6 text-left shadow-lg transition-all duration-200 hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[#f4f6f9] ${theme.surface} ${
         selected
           ? `ring-2 ${theme.ring} ring-offset-2 ring-offset-[#f4f6f9]`
           : "hover:-translate-y-0.5"
