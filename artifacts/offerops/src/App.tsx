@@ -71,6 +71,9 @@ function Router() {
       <Route path="/ops">
         {() => <ProtectedRoute component={OperationsHub} />}
       </Route>
+      <Route path="/operations">
+        {() => <ProtectedRoute component={OperationsHub} />}
+      </Route>
       {/* Internal legacy surface — not linked from sidebar; use /ops instead. */}
       <Route path="/ops/legacy">
         {() => <ProtectedRoute component={OpsQueue} />}

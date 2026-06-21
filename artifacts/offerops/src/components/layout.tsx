@@ -259,6 +259,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const isAdmin = currentEmployee.role === "admin";
 
   const navSections = getNavigationSections(isAdmin);
+  const opsPath = location.split("?")[0] ?? location;
+  const isOpsHub = opsPath === "/ops" || opsPath === "/operations";
 
   // Phase 9e: Bible §9 notification taxonomy. Severity drives the
   // colored ring around the icon (info/warning/high/critical), the
@@ -280,7 +282,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="flex h-screen min-h-0 overflow-hidden bg-background">
       {/* Sidebar */}
       <aside className="w-60 flex flex-col" style={{ background: "hsl(var(--sidebar))" }}>
 
@@ -485,13 +487,21 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-background">
-        <div className="flex-1 overflow-y-auto p-8">
-          <div className="max-w-6xl mx-auto">
-            {children}
+      {/* Main Content — ops hub scrolls on <main> to avoid nested flex-1 blank space */}
+      <main
+        className={
+          isOpsHub
+            ? "min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-background"
+            : "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
+        }
+      >
+        {isOpsHub ? (
+          children
+        ) : (
+          <div className="h-0 min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-8">
+            <div className="mx-auto max-w-6xl">{children}</div>
           </div>
-        </div>
+        )}
       </main>
     </div>
   );

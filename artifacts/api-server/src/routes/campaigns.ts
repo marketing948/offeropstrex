@@ -828,9 +828,12 @@ router.get("/campaigns", async (req, res): Promise<void> => {
   const batchIds = Array.from(
     new Set(rows.map((r) => r.batchId).filter((v): v is number => v != null)),
   );
+  const anIds = Array.from(
+    new Set(rows.map((r) => r.affiliateNetworkId).filter((v): v is number => v != null)),
+  );
   const tsIds = Array.from(new Set(rows.map((r) => r.trafficSourceId).filter((v): v is number => v != null)));
 
-  const [batches, tsources] = await Promise.all([
+  const [batches, affiliateNetworks, tsources] = await Promise.all([
     batchIds.length
       ? db
           .select({
@@ -843,6 +846,12 @@ router.get("/campaigns", async (req, res): Promise<void> => {
           .from(testingBatchesTable)
           .where(inArray(testingBatchesTable.id, batchIds))
       : Promise.resolve([] as { id: number; batchName: string; employeeId: number | null; geo: string | null; affiliateNetwork: string | null }[]),
+    anIds.length
+      ? db
+          .select({ id: affiliateNetworksTable.id, name: affiliateNetworksTable.name })
+          .from(affiliateNetworksTable)
+          .where(inArray(affiliateNetworksTable.id, anIds))
+      : Promise.resolve([] as { id: number; name: string }[]),
     tsIds.length
       ? db
           .select({ id: workspaceTrafficSourcesTable.id, name: workspaceTrafficSourcesTable.name })
@@ -861,17 +870,23 @@ router.get("/campaigns", async (req, res): Promise<void> => {
     : ([] as { id: number; name: string }[]);
 
   const batchMap = new Map(batches.map((b) => [b.id, b]));
+  const anMap = new Map(affiliateNetworks.map((n) => [n.id, n.name]));
   const tsMap = new Map(tsources.map((t) => [t.id, t.name]));
   const empMap = new Map(emps.map((e) => [e.id, e.name]));
 
   res.json(
     rows.map((r) => {
       const b = r.batchId != null ? batchMap.get(r.batchId) : undefined;
+      const affiliateNetworkName =
+        (r.affiliateNetworkId != null ? anMap.get(r.affiliateNetworkId) : null) ??
+        b?.affiliateNetwork ??
+        null;
       return {
         ...serialize(r),
         batchName: b?.batchName ?? null,
         batchGeo: b?.geo ?? null,
-        batchAffiliateNetwork: b?.affiliateNetwork ?? null,
+        affiliateNetworkName,
+        batchAffiliateNetwork: affiliateNetworkName,
         employeeName: b?.employeeId != null ? empMap.get(b.employeeId) ?? null : null,
         trafficSourceName: r.trafficSourceId != null ? tsMap.get(r.trafficSourceId) ?? null : null,
       };

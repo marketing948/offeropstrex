@@ -574,7 +574,10 @@ export interface ClassifyOfferBody {
 
 export interface Performance {
   id: number;
-  batchId: number;
+  /** @nullable */
+  campaignId?: number | null;
+  /** @nullable */
+  batchId?: number | null;
   date: string;
   /** @nullable */
   spend?: number | null;

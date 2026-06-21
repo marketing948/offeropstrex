@@ -32,6 +32,7 @@ export type MetricsAggregateFilters = MetricsDateRange & {
 
 export type PerformanceListRow = {
   id: number;
+  campaignId: number;
   batchId: number | null;
   date: string;
   spend: number;
@@ -118,12 +119,13 @@ export async function queryWorkspaceMetricTotals(
   );
 }
 
-/** One performance-shaped row per (batch_id, metrics.date); visits exposed as clicks. */
+/** One performance-shaped row per (campaign_id, metrics.date); visits exposed as clicks. */
 export async function queryPerformanceListRows(
   filters: MetricsAggregateFilters,
 ): Promise<PerformanceListRow[]> {
   const rows = await db
     .select({
+      campaignId: campaignsTable.id,
       batchId: campaignsTable.batchId,
       date: campaignDailyMetricsTable.date,
       visits: sum(campaignDailyMetricsTable.visits),
@@ -136,8 +138,8 @@ export async function queryPerformanceListRows(
     .innerJoin(campaignsTable, metricsJoin())
     .leftJoin(testingBatchesTable, batchJoin())
     .where(and(...batchFilterConditions(filters)))
-    .groupBy(campaignsTable.batchId, campaignDailyMetricsTable.date)
-    .orderBy(campaignDailyMetricsTable.date, campaignsTable.batchId);
+    .groupBy(campaignsTable.id, campaignsTable.batchId, campaignDailyMetricsTable.date)
+    .orderBy(campaignDailyMetricsTable.date, campaignsTable.id);
 
   return rows.map((r) => {
     const cost = Number(r.cost ?? 0);
@@ -149,6 +151,7 @@ export async function queryPerformanceListRows(
     const clicks = visits;
     return {
       id: Number(r.minId ?? 0),
+      campaignId: r.campaignId,
       batchId: r.batchId,
       date: String(r.date),
       spend: cost,

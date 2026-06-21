@@ -131,6 +131,9 @@ export const DEFAULT_CONFIG: GoalsConfig = {
     { id: "kt3", name: "Optimizations Completed", key: "optimizations", monthlyTarget: 30 },
     { id: "kt4", name: "Winners Found", key: "winners", monthlyTarget: 10 },
     { id: "kt5", name: "Scale Tasks Created", key: "scaleTasks", monthlyTarget: 5 },
+    { id: "kt6", name: "Monthly Revenue", key: "revenue", monthlyTarget: 50000 },
+    { id: "kt7", name: "Working Campaigns", key: "workingCampaigns", monthlyTarget: 10 },
+    { id: "kt8", name: "Testing Pipeline", key: "testingBatches", monthlyTarget: 8 },
   ],
 };
 

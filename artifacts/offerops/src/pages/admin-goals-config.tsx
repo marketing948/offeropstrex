@@ -494,6 +494,9 @@ function KpiTargetsTab({ cfg, onChange }: { cfg: GoalsConfig; onChange: (c: Goal
     { value: "scaleTasks", label: "Scale Tasks (scaleTasks)" },
     { value: "tasksCompleted", label: "Tasks Completed (tasksCompleted)" },
     { value: "retests", label: "Retests (retests)" },
+    { value: "revenue", label: "Monthly Revenue (revenue)" },
+    { value: "workingCampaigns", label: "Working Campaigns (workingCampaigns)" },
+    { value: "testingBatches", label: "Testing Pipeline (testingBatches)" },
   ];
 
   return (
