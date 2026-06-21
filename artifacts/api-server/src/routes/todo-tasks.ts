@@ -10,7 +10,7 @@ import {
   DeleteTodoTaskParams,
   ListTodoTasksQueryParams,
 } from "@workspace/api-zod";
-import { requireWorkspaceFromQuery, requireWorkspaceAccess, requireAdmin } from "../lib/workspace-access";
+import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access";
 import { requireWorkspaceFromBody } from "../lib/require-workspace";
 import {
   INVALID_VOLUUM_OFFER_ID_FORMAT_MESSAGE,
@@ -144,11 +144,17 @@ const createManualTodoTaskBodySchema = z.object({
   /** ISO 8601 datetime stored in `due_date` (text) for list/SLA display. */
   dueAt: z.string().datetime().optional(),
   priority: z.enum(["low", "medium", "high"]).optional(),
+  relatedBatchId: z.number().int().positive().optional(),
+  relatedCampaignId: z.number().int().positive().optional(),
 });
 
-/** Admin-only human reminders — not part of CampaignOps automation. */
+/** Human reminders — admins assign to anyone; workers may self-assign only. */
 router.post("/todo-tasks/manual", async (req, res): Promise<void> => {
-  if ((await requireAdmin(req, res)) === null) return;
+  const employee = await getEmployeeFromToken(req);
+  if (!employee) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
 
   const parsed = createManualTodoTaskBodySchema.safeParse(req.body);
   if (!parsed.success) {
@@ -156,6 +162,12 @@ router.post("/todo-tasks/manual", async (req, res): Promise<void> => {
     return;
   }
   const body = parsed.data;
+
+  if (employee.role !== "admin" && body.assignedEmployeeId !== employee.id) {
+    res.status(403).json({ error: "Only admins can assign tasks to other employees" });
+    return;
+  }
+
   const workspaceId = await requireWorkspaceAccess(req, res, body.workspaceId);
   if (workspaceId === null) return;
 
@@ -181,8 +193,8 @@ router.post("/todo-tasks/manual", async (req, res): Promise<void> => {
     .values({
       workspaceId,
       employeeId: body.assignedEmployeeId,
-      relatedBatchId: null,
-      relatedCampaignId: null,
+      relatedBatchId: body.relatedBatchId ?? null,
+      relatedCampaignId: body.relatedCampaignId ?? null,
       title: body.title,
       description: body.description ?? null,
       taskType: "MANUAL",

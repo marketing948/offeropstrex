@@ -143,8 +143,8 @@ describe("POST /todo-tasks/manual", { concurrency: false }, () => {
     assert.ok(found);
   });
 
-  test("worker cannot create manual task (admin only)", async () => {
-    const workspaceId = await createWorkspace("manual-worker");
+  test("worker can create manual task assigned to self", async () => {
+    const workspaceId = await createWorkspace("manual-worker-self");
     const adminId = await createEmployee("admin");
     const workerId = await createEmployee("employee");
     await assign(adminId, workspaceId);
@@ -153,6 +153,26 @@ describe("POST /todo-tasks/manual", { concurrency: false }, () => {
     const res = await request("POST", "/todo-tasks/manual", workerId, {
       workspaceId,
       assignedEmployeeId: workerId,
+      title: "Review campaign pacing",
+      description: "Source: campaign-review",
+    });
+    assert.equal(res.response.status, 201);
+    assert.equal(res.json!.taskType, "MANUAL");
+    assert.equal(res.json!.employeeId, workerId);
+  });
+
+  test("worker cannot assign manual task to another employee", async () => {
+    const workspaceId = await createWorkspace("manual-worker");
+    const adminId = await createEmployee("admin");
+    const workerId = await createEmployee("employee");
+    const otherId = await createEmployee("employee");
+    await assign(adminId, workspaceId);
+    await assign(workerId, workspaceId);
+    await assign(otherId, workspaceId);
+
+    const res = await request("POST", "/todo-tasks/manual", workerId, {
+      workspaceId,
+      assignedEmployeeId: otherId,
       title: "Should fail",
     });
     assert.equal(res.response.status, 403);
