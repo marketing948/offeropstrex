@@ -26,6 +26,7 @@ import NotFound from "@/pages/not-found";
 import RouteRedirect from "@/pages/route-redirect";
 import Dashboard from "@/pages/dashboard";
 import CampaignReview from "@/pages/campaign-review";
+import PerformanceEnginePage from "@/pages/performance-engine";
 
 const queryClient = new QueryClient();
 
@@ -99,7 +100,10 @@ function Router() {
         {() => <ProtectedRoute component={() => <RouteRedirect to="/ops" />} />}
       </Route>
       <Route path="/performance">
-        {() => <ProtectedRoute component={() => <RouteRedirect to="/ops" />} />}
+        {() => <ProtectedRoute component={PerformanceEnginePage} adminOnly />}
+      </Route>
+      <Route path="/performance/:rest*">
+        {() => <ProtectedRoute component={PerformanceEnginePage} adminOnly />}
       </Route>
 
       <Route path="/employees">
@@ -152,7 +156,7 @@ function Router() {
         {() => { useEffect(() => { setLocation("/profile"); }, []); return null; }}
       </Route>
       <Route path="/admin/goals-config">
-        {() => { useEffect(() => { setLocation("/settings"); }, []); return null; }}
+        {() => { useEffect(() => { setLocation("/performance/monthly-goals"); }, []); return null; }}
       </Route>
 
       <Route component={NotFound} />

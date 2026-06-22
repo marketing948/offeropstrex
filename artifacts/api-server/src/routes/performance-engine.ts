@@ -1,0 +1,343 @@
+import { Router, type IRouter } from "express";
+import { z } from "zod";
+import { and, desc, eq, gte, lt } from "drizzle-orm";
+import {
+  db,
+  employeesTable,
+  operationalActivityFeedTable,
+  xpLedgerTable,
+  campaignWinnersTable,
+  campaignsTable,
+  testingBatchesTable,
+} from "@workspace/db";
+import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access.ts";
+import { getEmployeeFromToken } from "../routes/auth.ts";
+import {
+  buildMonthlyGoalsDashboard,
+} from "../lib/monthly-goals-service.ts";
+import { currentMonthKey, monthKeyToRange } from "../lib/xp-award-service.ts";
+import { loadGoalsConfig, findDuplicateGoal, goalsForMonth } from "../lib/goals-config-server.ts";
+import { getSettingValue, upsertSetting } from "../lib/settings-store.ts";
+import { awardXp, rewardRuleIdempotencyKey } from "../lib/xp-award-service.ts";
+
+const router: IRouter = Router();
+
+const monthKeySchema = z.string().regex(/^\d{4}-\d{2}$/);
+
+const upsertGoalSchema = z.object({
+  workspaceId: z.number().int().positive(),
+  goal: z.object({
+    id: z.string().min(1),
+    employeeId: z.number().int().positive(),
+    employeeName: z.string().optional(),
+    affiliateNetworkId: z.number().int().positive().nullable().optional(),
+    affiliateNetworkName: z.string().nullable().optional(),
+    geoId: z.number().int().positive().nullable().optional(),
+    geoCode: z.string().nullable().optional(),
+    metricKey: z.enum(["revenue", "testingBatches", "workingCampaigns"]),
+    monthlyTarget: z.number().positive(),
+    isActive: z.boolean(),
+    monthKey: z.string().regex(/^\d{4}-\d{2}$/).nullable().optional(),
+    xpReward: z.number().int().nonnegative().nullable().optional(),
+    overachieveXpReward: z.number().int().nonnegative().nullable().optional(),
+    notes: z.string().optional(),
+  }),
+  replaceExisting: z.boolean().optional(),
+});
+
+router.get("/performance/monthly-goals", async (req, res): Promise<void> => {
+  const workspaceId = await requireWorkspaceFromQuery(req, res);
+  if (workspaceId === null) return;
+
+  const monthRaw = req.query.month;
+  const monthKey =
+    typeof monthRaw === "string" && monthKeySchema.safeParse(monthRaw).success
+      ? monthRaw
+      : currentMonthKey();
+
+  const dashboard = await buildMonthlyGoalsDashboard(workspaceId, monthKey);
+  res.json(dashboard);
+});
+
+router.get("/performance/xp-history", async (req, res): Promise<void> => {
+  const workspaceId = await requireWorkspaceFromQuery(req, res);
+  if (workspaceId === null) return;
+
+  const employeeId = Number(req.query.employee_id);
+  if (!Number.isInteger(employeeId) || employeeId <= 0) {
+    res.status(400).json({ error: "employee_id is required" });
+    return;
+  }
+
+  const monthKey =
+    typeof req.query.month === "string" && monthKeySchema.safeParse(req.query.month).success
+      ? req.query.month
+      : currentMonthKey();
+
+  const { dateFrom, dateToExclusive } = monthKeyToRange(monthKey);
+  const rows = await db
+    .select()
+    .from(xpLedgerTable)
+    .where(
+      and(
+        eq(xpLedgerTable.workspaceId, workspaceId),
+        eq(xpLedgerTable.employeeId, employeeId),
+        eq(xpLedgerTable.monthKey, monthKey),
+        gte(xpLedgerTable.createdAt, dateFrom),
+        lt(xpLedgerTable.createdAt, dateToExclusive),
+      ),
+    )
+    .orderBy(xpLedgerTable.createdAt);
+
+  const cumulative: { date: string; xp: number; cumulative: number }[] = [];
+  let running = 0;
+  for (const row of rows) {
+    running += row.amount;
+    cumulative.push({
+      date: row.createdAt.toISOString().slice(0, 10),
+      xp: row.amount,
+      cumulative: running,
+    });
+  }
+
+  res.json({ monthKey, employeeId, entries: rows, chart: cumulative, totalXp: running });
+});
+
+router.get("/performance/worker-breakdown", async (req, res): Promise<void> => {
+  const workspaceId = await requireWorkspaceFromQuery(req, res);
+  if (workspaceId === null) return;
+
+  const employeeId = Number(req.query.employee_id);
+  if (!Number.isInteger(employeeId) || employeeId <= 0) {
+    res.status(400).json({ error: "employee_id is required" });
+    return;
+  }
+
+  const monthKey =
+    typeof req.query.month === "string" && monthKeySchema.safeParse(req.query.month).success
+      ? req.query.month
+      : currentMonthKey();
+
+  const cfg = await loadGoalsConfig(workspaceId);
+  const goals = goalsForMonth(cfg.workerGoalTargets, monthKey).filter(
+    (g) => g.employeeId === employeeId,
+  );
+
+  const networks = new Map<string, { target: number; current: number }>();
+  const geos = new Map<string, { target: number; current: number }>();
+  for (const g of goals) {
+    if (g.affiliateNetworkName) {
+      const k = g.affiliateNetworkName;
+      const ex = networks.get(k) ?? { target: 0, current: 0 };
+      ex.target += g.monthlyTarget;
+      networks.set(k, ex);
+    }
+    if (g.geoCode) {
+      const k = g.geoCode;
+      const ex = geos.get(k) ?? { target: 0, current: 0 };
+      ex.target += g.monthlyTarget;
+      geos.set(k, ex);
+    }
+  }
+
+  const range = monthKeyToRange(monthKey);
+  const winners = await db
+    .select({
+      offerId: campaignWinnersTable.offerId,
+      campaignId: campaignWinnersTable.campaignId,
+      geo: testingBatchesTable.geo,
+      network: testingBatchesTable.affiliateNetwork,
+      batchName: testingBatchesTable.batchName,
+    })
+    .from(campaignWinnersTable)
+    .innerJoin(campaignsTable, eq(campaignWinnersTable.campaignId, campaignsTable.id))
+    .innerJoin(testingBatchesTable, eq(campaignsTable.batchId, testingBatchesTable.id))
+    .where(
+      and(
+        eq(campaignWinnersTable.workspaceId, workspaceId),
+        eq(testingBatchesTable.employeeId, employeeId),
+        gte(campaignWinnersTable.createdAt, range.dateFrom),
+        lt(campaignWinnersTable.createdAt, range.dateToExclusive),
+      ),
+    )
+    .orderBy(desc(campaignWinnersTable.createdAt))
+    .limit(10);
+
+  res.json({
+    networks: [...networks.entries()].map(([name, v]) => ({ name, ...v })),
+    geos: [...geos.entries()].map(([code, v]) => ({ code, ...v })),
+    topWinners: winners.map((w) => ({
+      name: w.batchName ?? `Campaign #${w.campaignId}`,
+      geo: w.geo ?? "—",
+      network: w.network ?? "—",
+    })),
+  });
+});
+
+router.get("/performance/worker-activity", async (req, res): Promise<void> => {
+  const workspaceId = await requireWorkspaceFromQuery(req, res);
+  if (workspaceId === null) return;
+
+  const employeeId = Number(req.query.employee_id);
+  if (!Number.isInteger(employeeId) || employeeId <= 0) {
+    res.status(400).json({ error: "employee_id is required" });
+    return;
+  }
+
+  const monthKey =
+    typeof req.query.month === "string" && monthKeySchema.safeParse(req.query.month).success
+      ? req.query.month
+      : currentMonthKey();
+
+  const { dateFrom, dateToExclusive } = monthKeyToRange(monthKey);
+  const rows = await db
+    .select()
+    .from(operationalActivityFeedTable)
+    .where(
+      and(
+        eq(operationalActivityFeedTable.workspaceId, workspaceId),
+        eq(operationalActivityFeedTable.actorEmployeeId, employeeId),
+        gte(operationalActivityFeedTable.createdAt, dateFrom),
+        lt(operationalActivityFeedTable.createdAt, dateToExclusive),
+      ),
+    )
+    .orderBy(desc(operationalActivityFeedTable.createdAt))
+    .limit(50);
+
+  const xpRows = await db
+    .select()
+    .from(xpLedgerTable)
+    .where(
+      and(
+        eq(xpLedgerTable.workspaceId, workspaceId),
+        eq(xpLedgerTable.employeeId, employeeId),
+        eq(xpLedgerTable.monthKey, monthKey),
+      ),
+    )
+    .orderBy(desc(xpLedgerTable.createdAt))
+    .limit(20);
+
+  res.json({
+    activity: rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      description: r.description,
+      eventType: r.eventType,
+      createdAt: r.createdAt.toISOString(),
+    })),
+    xpEvents: xpRows.map((r) => ({
+      id: r.id,
+      amount: r.amount,
+      sourceType: r.sourceType,
+      label:
+        r.sourceType === "goal_completion"
+          ? `Goal completed: ${r.metricKey ?? "goal"}`
+          : `Reward: ${r.actionType ?? r.rewardRuleId ?? "rule"}`,
+      createdAt: r.createdAt.toISOString(),
+    })),
+  });
+});
+
+router.post("/performance/worker-goals", async (req, res): Promise<void> => {
+  const employee = await getEmployeeFromToken(req);
+  if (!employee || employee.role !== "admin") {
+    res.status(employee ? 403 : 401).json({ error: employee ? "Admin access required" : "Unauthorized" });
+    return;
+  }
+
+  const parsed = upsertGoalSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const { workspaceId, goal, replaceExisting } = parsed.data;
+  if ((await requireWorkspaceAccess(req, res, workspaceId)) === null) return;
+
+  const raw = await getSettingValue(workspaceId, "goals_config");
+  let cfg: Record<string, unknown> = {};
+  try {
+    cfg = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+  } catch {
+    cfg = {};
+  }
+
+  const targets = Array.isArray(cfg.workerGoalTargets)
+    ? (cfg.workerGoalTargets as typeof parsed.data.goal[])
+    : [];
+
+  const dup = findDuplicateGoal(targets, {
+    ...goal,
+    monthKey: goal.monthKey ?? null,
+  }, goal.id);
+
+  if (dup && !replaceExisting) {
+    res.status(409).json({
+      error: "duplicate_goal",
+      message: "A goal already exists for this worker/month/metric/network/GEO.",
+      existingGoal: dup,
+    });
+    return;
+  }
+
+  const nextGoal = {
+    ...goal,
+    monthKey: goal.monthKey ?? null,
+    createdAt: dup?.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  let nextTargets;
+  if (dup && replaceExisting) {
+    nextTargets = targets.map((g) => (g.id === dup.id ? { ...g, ...nextGoal, id: dup.id } : g));
+  } else if (targets.some((g) => g.id === goal.id)) {
+    nextTargets = targets.map((g) => (g.id === goal.id ? { ...g, ...nextGoal } : g));
+  } else {
+    nextTargets = [...targets, nextGoal];
+  }
+
+  cfg.workerGoalTargets = nextTargets;
+  await upsertSetting(workspaceId, "goals_config", JSON.stringify(cfg));
+
+  res.json({ ok: true, goal: nextGoal });
+});
+
+export default router;
+
+// Re-export for task XP wiring
+export async function awardTaskCompletionXp(
+  workspaceId: number,
+  employeeId: number,
+  taskType: string,
+  taskId: number,
+  client: Parameters<typeof awardXp>[0] = db,
+): Promise<void> {
+  const cfg = await loadGoalsConfig(workspaceId);
+  const actionMap: Record<string, string> = {
+    GO_LIVE: "campaignLive",
+    take_campaign_live: "campaignLive",
+    OPTIMIZATION_FOLLOWUP: "optimizationCompleted",
+    MOVE_WINNERS_TO_SCALED_CAMPAIGN: "scaleTaskCompleted",
+    FIND_WINNERS: "taskCompleted",
+    find_winners: "taskCompleted",
+    review_winners_target: "winnerFound",
+    MANUAL: "taskCompleted",
+  };
+  const actionId = actionMap[taskType] ?? "taskCompleted";
+  const action = cfg.pointActions.find((a) => a.id === actionId && a.enabled);
+  if (!action || action.points <= 0) return;
+
+  const monthKey = currentMonthKey();
+  await awardXp(client, {
+    workspaceId,
+    employeeId,
+    monthKey,
+    amount: action.points,
+    sourceType: "reward_rule",
+    idempotencyKey: rewardRuleIdempotencyKey(workspaceId, employeeId, actionId, taskType, String(taskId)),
+    rewardRuleId: actionId,
+    actionType: taskType,
+    entityId: String(taskId),
+    metadata: { actionName: action.name },
+  });
+}

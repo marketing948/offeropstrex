@@ -1,9 +1,9 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useAuth } from "@/lib/auth";
 import {
   useGoalsConfig, useUpdateGoalsConfig, useGoalsAuditLog,
-  computeScores, getRankForScore, RANK_COLORS, DEFAULT_CONFIG,
+  computeScores, getRankForScore, RANK_COLORS, DEFAULT_CONFIG, ensureGoalsConfig,
   type GoalsConfig, type PointAction, type ComboBonus, type RankTier,
   type Penalty, type BonusEvent, type KpiTarget,
 } from "@/lib/goals-config";
@@ -24,8 +24,10 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Save, RotateCcw, Plus, Trash2, ToggleLeft, ToggleRight, Eye, EyeOff,
   Zap, Target, Star, TrendingUp, Crown, Trophy, Award, Shield, Settings,
-  ChevronUp, ChevronDown, Clock, Activity, BadgeDollarSign, Layers, History,
+  ChevronUp, ChevronDown, Clock, Activity, BadgeDollarSign, Layers, History, Users, Sparkles,
 } from "lucide-react";
+import { WorkerGoalsTab } from "@/components/admin-goals/worker-goals-tab";
+import { EventPointRulesTab } from "@/components/admin-goals/event-point-rules-tab";
 
 // ─────────────────────────────────────────────────────────────────
 // Constants
@@ -51,7 +53,7 @@ const PENALTY_TRIGGERS = [
   { value: "incorrect_workflow", label: "Incorrect workflow usage" },
 ];
 
-type Tab = "points" | "ranks" | "combos" | "penalties" | "events" | "kpis" | "audit";
+type Tab = "points" | "ranks" | "combos" | "penalties" | "events" | "workerGoals" | "eventRules" | "kpis" | "audit";
 
 // ─────────────────────────────────────────────────────────────────
 // Shared field components
@@ -502,7 +504,9 @@ function KpiTargetsTab({ cfg, onChange }: { cfg: GoalsConfig; onChange: (c: Goal
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">Monthly targets shown as KPI progress bars on the Goals page.</p>
+        <p className="text-sm text-muted-foreground">
+          Global KPI targets are fallback targets. Worker Goals provide the detailed targets used by Operation Hub and Reports.
+        </p>
         <Button variant="outline" size="sm" onClick={addKpi} className="h-8 text-xs">
           <Plus size={12} className="mr-1" /> Add KPI Target
         </Button>
@@ -660,19 +664,31 @@ function PreviewPanel({ savedCfg, draftCfg }: { savedCfg: GoalsConfig; draftCfg:
 // ─────────────────────────────────────────────────────────────────
 // Main page
 // ─────────────────────────────────────────────────────────────────
-export default function AdminGoalsConfig({ embedded = false }: { embedded?: boolean }) {
+export default function AdminGoalsConfig({
+  embedded = false,
+  initialTab = "points",
+  allowedTabs,
+}: {
+  embedded?: boolean;
+  initialTab?: Tab;
+  /** When set, only these tabs appear in the sidebar (Performance Engine sub-pages). */
+  allowedTabs?: Tab[];
+}) {
   const { currentEmployee } = useAuth();
   const { toast } = useToast();
   const scope = useWorkspaceSettingsScope();
   const { workspaceLabel } = scope;
   const { data: savedCfg } = useGoalsConfig();
-  const cfg = savedCfg ?? DEFAULT_CONFIG;
+  const cfg = ensureGoalsConfig(savedCfg ?? DEFAULT_CONFIG);
   const updateCfg = useUpdateGoalsConfig();
 
   const [draft, setDraft] = useState<GoalsConfig | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>("points");
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const editCfg = draft ?? cfg;
+  const editCfg = ensureGoalsConfig(draft ?? cfg);
   const isDirty = draft !== null;
 
   function resetToSaved() { setDraft(null); }
@@ -682,7 +698,8 @@ export default function AdminGoalsConfig({ embedded = false }: { embedded?: bool
     if (!draft) return;
     const tabLabel: Record<Tab, string> = {
       points: "Point System", ranks: "Ranks & Bonuses", combos: "Combo Bonuses",
-      penalties: "Penalties", events: "Bonus Events", kpis: "KPI Targets", audit: "Audit Log",
+      penalties: "Penalties", events: "Bonus Events", workerGoals: "Worker Goals",
+      eventRules: "Event Point Rules", kpis: "KPI Targets", audit: "Audit Log",
     };
     updateCfg.mutate({
       config: draft,
@@ -699,15 +716,20 @@ export default function AdminGoalsConfig({ embedded = false }: { embedded?: bool
   const gate = workspaceSettingsTabGate(scope);
   if (gate.blocked) return gate.element;
 
-  const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
+  const ALL_TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
     { id: "points",   label: "Point System",   icon: Activity },
     { id: "ranks",    label: "Ranks & Bonuses", icon: Crown },
     { id: "combos",   label: "Combo Bonuses",   icon: Zap },
     { id: "penalties",label: "Penalties",        icon: Shield },
     { id: "events",   label: "Bonus Events",    icon: BadgeDollarSign },
+    { id: "workerGoals", label: "Worker Goals", icon: Users },
+    { id: "eventRules", label: "Event Rules",   icon: Sparkles },
     { id: "kpis",     label: "KPI Targets",     icon: Target },
     { id: "audit",    label: "Audit Log",        icon: History },
   ];
+  const TABS = allowedTabs
+    ? ALL_TABS.filter((t) => allowedTabs.includes(t.id))
+    : ALL_TABS.filter((t) => t.id !== "workerGoals");
 
   return (
     <div className="space-y-0 max-w-6xl">
@@ -789,6 +811,8 @@ export default function AdminGoalsConfig({ embedded = false }: { embedded?: bool
               {activeTab === "combos"    && <CombosTab cfg={editCfg} onChange={setDraft} />}
               {activeTab === "penalties" && <PenaltiesTab cfg={editCfg} onChange={setDraft} />}
               {activeTab === "events"    && <BonusEventsTab cfg={editCfg} onChange={setDraft} />}
+              {activeTab === "workerGoals" && <WorkerGoalsTab cfg={editCfg} onChange={setDraft} />}
+              {activeTab === "eventRules"  && <EventPointRulesTab cfg={editCfg} onChange={setDraft} />}
               {activeTab === "kpis"      && <KpiTargetsTab cfg={editCfg} onChange={setDraft} />}
               {activeTab === "audit"     && <AuditLogTab />}
             </CardContent>

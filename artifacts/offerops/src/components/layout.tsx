@@ -261,6 +261,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const navSections = getNavigationSections(isAdmin);
   const opsPath = location.split("?")[0] ?? location;
   const isOpsHub = opsPath === "/ops" || opsPath === "/operations";
+  const isPerformanceEngine = opsPath.startsWith("/performance");
 
   // Phase 9e: Bible §9 notification taxonomy. Severity drives the
   // colored ring around the icon (info/warning/high/critical), the
@@ -490,12 +491,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
       {/* Main Content — ops hub scrolls on <main> to avoid nested flex-1 blank space */}
       <main
         className={
-          isOpsHub
+          isOpsHub || isPerformanceEngine
             ? "min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-background"
             : "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
         }
       >
-        {isOpsHub ? (
+        {isOpsHub || isPerformanceEngine ? (
           children
         ) : (
           <div className="h-0 min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-8">

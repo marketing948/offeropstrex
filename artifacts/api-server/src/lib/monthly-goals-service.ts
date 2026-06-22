@@ -1,0 +1,396 @@
+import { and, eq, gte, inArray, lt, lte, sql } from "drizzle-orm";
+import {
+  campaignsTable,
+  db,
+  employeeWorkspaceAssignmentsTable,
+  employeesTable,
+  testingBatchesTable,
+} from "@workspace/db";
+import {
+  queryDashboardBreakdowns,
+  type MetricsDateRange,
+} from "./campaign-daily-metrics-aggregate.ts";
+import {
+  awardXp,
+  currentMonthKey,
+  goalCompletionIdempotencyKey,
+  monthKeyToRange,
+  sumXpByEmployeeForMonth,
+  xpLeaderboard,
+} from "./xp-award-service.ts";
+import {
+  findDuplicateGoal,
+  goalsForMonth,
+  loadGoalsConfig,
+  type ServerWorkerGoalTarget,
+} from "./goals-config-server.ts";
+
+const ACTIVE_TESTING_STATUSES = [
+  "NEW_BATCH",
+  "WAITING_FOR_TRACKER_CAMPAIGNS",
+  "OFFER_READY_FOR_LIVE_TESTING",
+  "LIVE_TESTS",
+] as const;
+
+export type WorkerGoalStatus = "Strong" | "On track" | "Watch" | "Behind";
+
+export type MonthlyGoalsKpi = {
+  metricKey: string;
+  label: string;
+  current: number;
+  target: number;
+  progressPct: number;
+  xpAvailable: number;
+  theme: "revenue" | "testing" | "working";
+};
+
+export type WorkerMonthlyRow = {
+  employeeId: number;
+  name: string;
+  email: string;
+  initials: string;
+  revenue: { current: number; target: number; progressPct: number };
+  testing: { current: number; target: number; progressPct: number };
+  working: { current: number; target: number; progressPct: number };
+  profit: number | null;
+  xpEarned: number;
+  status: WorkerGoalStatus;
+  progressSegments: number;
+};
+
+export type MonthlyGoalsDashboard = {
+  monthKey: string;
+  kpis: MonthlyGoalsKpi[];
+  workers: WorkerMonthlyRow[];
+  leaderboard: { employeeId: number; name: string; initials: string; xp: number; rank: number }[];
+};
+
+function initialsFor(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function progressPct(current: number, target: number): number {
+  if (target <= 0) return 0;
+  return Math.min(100, Math.round((current / target) * 100));
+}
+
+function sumGoalsForMetric(
+  goals: ServerWorkerGoalTarget[],
+  metricKey: string,
+  employeeId?: number,
+): { target: number; xpAvailable: number } {
+  const filtered = goals.filter((g) => {
+    if (g.metricKey !== metricKey) return false;
+    if (employeeId != null && g.employeeId !== employeeId) return false;
+    return true;
+  });
+  return {
+    target: filtered.reduce((s, g) => s + g.monthlyTarget, 0),
+    xpAvailable: filtered.reduce((s, g) => s + (g.xpReward ?? 0), 0),
+  };
+}
+
+export function deriveWorkerStatus(
+  metrics: { revenue: { current: number; target: number }; testing: { current: number; target: number }; working: { current: number; target: number } },
+  monthKey: string,
+  now = new Date(),
+): WorkerGoalStatus {
+  const pcts: number[] = [];
+  for (const m of [metrics.revenue, metrics.testing, metrics.working]) {
+    if (m.target > 0) pcts.push(progressPct(m.current, m.target));
+  }
+  if (pcts.length === 0) return "On track";
+
+  const avg = pcts.reduce((a, b) => a + b, 0) / pcts.length;
+  const [y, mo] = monthKey.split("-").map(Number);
+  const monthStart = new Date(y, mo - 1, 1);
+  const monthEnd = new Date(y, mo, 0);
+  const totalDays = monthEnd.getDate();
+  const dayOfMonth = now.getFullYear() === y && now.getMonth() === mo - 1 ? now.getDate() : totalDays;
+  const expectedPct = Math.min(100, Math.round((dayOfMonth / totalDays) * 100));
+
+  if (avg >= 95 || avg >= expectedPct + 15) return "Strong";
+  if (avg >= expectedPct - 5) return "On track";
+  if (avg >= expectedPct - 20) return "Watch";
+  return "Behind";
+}
+
+function progressSegments(status: WorkerGoalStatus, avgPct: number): number {
+  const filled = Math.max(1, Math.min(5, Math.round(avgPct / 20)));
+  if (status === "Behind") return Math.max(1, filled - 2);
+  if (status === "Watch") return Math.max(2, filled - 1);
+  return filled;
+}
+
+async function queryEmployeeMetrics(
+  workspaceId: number,
+  range: MetricsDateRange,
+): Promise<Map<number, { revenue: number; profit: number }>> {
+  const breakdown = await queryDashboardBreakdowns(workspaceId, range);
+  const map = new Map<number, { revenue: number; profit: number }>();
+  for (const row of breakdown.byWorker) {
+    const employeeId = Number(row.key);
+    if (!Number.isFinite(employeeId)) continue;
+    map.set(employeeId, { revenue: row.revenue, profit: row.profit });
+  }
+  return map;
+}
+
+async function queryTestingCounts(workspaceId: number): Promise<Map<number, number>> {
+  const rows = await db
+    .select({
+      employeeId: testingBatchesTable.employeeId,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(testingBatchesTable)
+    .where(
+      and(
+        eq(testingBatchesTable.workspaceId, workspaceId),
+        inArray(testingBatchesTable.status, [...ACTIVE_TESTING_STATUSES]),
+      ),
+    )
+    .groupBy(testingBatchesTable.employeeId);
+
+  const map = new Map<number, number>();
+  for (const r of rows) map.set(r.employeeId, Number(r.count ?? 0));
+  return map;
+}
+
+async function queryWorkingCounts(workspaceId: number): Promise<Map<number, number>> {
+  const rows = await db
+    .select({
+      employeeId: testingBatchesTable.employeeId,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(campaignsTable)
+    .innerJoin(
+      testingBatchesTable,
+      and(
+        eq(campaignsTable.batchId, testingBatchesTable.id),
+        eq(testingBatchesTable.workspaceId, campaignsTable.workspaceId),
+      ),
+    )
+    .where(
+      and(
+        eq(campaignsTable.workspaceId, workspaceId),
+        eq(campaignsTable.status, "live"),
+        eq(campaignsTable.campaignPurpose, "working"),
+      ),
+    )
+    .groupBy(testingBatchesTable.employeeId);
+
+  const map = new Map<number, number>();
+  for (const r of rows) map.set(r.employeeId, Number(r.count ?? 0));
+  return map;
+}
+
+async function syncGoalCompletionXp(
+  workspaceId: number,
+  monthKey: string,
+  goals: ServerWorkerGoalTarget[],
+  actuals: Map<number, { revenue: number; testing: number; working: number }>,
+): Promise<void> {
+  const metricActual = (employeeId: number, metricKey: string): number => {
+    const a = actuals.get(employeeId);
+    if (!a) return 0;
+    if (metricKey === "revenue") return a.revenue;
+    if (metricKey === "testingBatches") return a.testing;
+    if (metricKey === "workingCampaigns") return a.working;
+    return 0;
+  };
+
+  for (const goal of goals) {
+    const xp = goal.xpReward ?? 0;
+    if (xp <= 0) continue;
+    const actual = metricActual(goal.employeeId, goal.metricKey);
+    if (actual < goal.monthlyTarget) continue;
+
+    await awardXp(db, {
+      workspaceId,
+      employeeId: goal.employeeId,
+      monthKey,
+      amount: xp,
+      sourceType: "goal_completion",
+      idempotencyKey: goalCompletionIdempotencyKey(
+        workspaceId,
+        goal.employeeId,
+        goal.id,
+        goal.metricKey,
+        monthKey,
+      ),
+      goalId: goal.id,
+      metricKey: goal.metricKey,
+      metadata: {
+        actual,
+        target: goal.monthlyTarget,
+        affiliateNetworkName: goal.affiliateNetworkName,
+        geoCode: goal.geoCode,
+      },
+    });
+
+    const overXp = goal.overachieveXpReward ?? 0;
+    if (overXp > 0 && actual > goal.monthlyTarget) {
+      await awardXp(db, {
+        workspaceId,
+        employeeId: goal.employeeId,
+        monthKey,
+        amount: overXp,
+        sourceType: "goal_completion",
+        idempotencyKey: `${goalCompletionIdempotencyKey(workspaceId, goal.employeeId, goal.id, goal.metricKey, monthKey)}:overachieve`,
+        goalId: goal.id,
+        metricKey: goal.metricKey,
+        metadata: { kind: "overachieve", actual, target: goal.monthlyTarget },
+      });
+    }
+  }
+}
+
+export async function buildMonthlyGoalsDashboard(
+  workspaceId: number,
+  monthKey = currentMonthKey(),
+): Promise<MonthlyGoalsDashboard> {
+  const range: MetricsDateRange = {
+    dateFrom: monthKeyToRange(monthKey).dateFromIso,
+    dateTo: monthKeyToRange(monthKey).dateToIso,
+  };
+
+  const cfg = await loadGoalsConfig(workspaceId);
+  const monthGoals = goalsForMonth(cfg.workerGoalTargets, monthKey);
+
+  const [employees, revenueProfit, testingCounts, workingCounts] = await Promise.all([
+    db
+      .select({
+        id: employeesTable.id,
+        name: employeesTable.name,
+        email: employeesTable.email,
+      })
+      .from(employeesTable)
+      .innerJoin(
+        employeeWorkspaceAssignmentsTable,
+        eq(employeeWorkspaceAssignmentsTable.employeeId, employeesTable.id),
+      )
+      .where(eq(employeeWorkspaceAssignmentsTable.workspaceId, workspaceId)),
+    queryEmployeeMetrics(workspaceId, range),
+    queryTestingCounts(workspaceId),
+    queryWorkingCounts(workspaceId),
+  ]);
+
+  const actuals = new Map<number, { revenue: number; testing: number; working: number }>();
+  for (const emp of employees) {
+    const rp = revenueProfit.get(emp.id);
+    actuals.set(emp.id, {
+      revenue: rp?.revenue ?? 0,
+      testing: testingCounts.get(emp.id) ?? 0,
+      working: workingCounts.get(emp.id) ?? 0,
+    });
+  }
+
+  await syncGoalCompletionXp(workspaceId, monthKey, monthGoals, actuals);
+
+  const xpByEmployee = await sumXpByEmployeeForMonth(workspaceId, monthKey);
+
+  const revTeam = sumGoalsForMetric(monthGoals, "revenue");
+  const testTeam = sumGoalsForMetric(monthGoals, "testingBatches");
+  const workTeam = sumGoalsForMetric(monthGoals, "workingCampaigns");
+
+  const teamRevenue = [...actuals.values()].reduce((s, a) => s + a.revenue, 0);
+  const teamTesting = [...actuals.values()].reduce((s, a) => s + a.testing, 0);
+  const teamWorking = [...actuals.values()].reduce((s, a) => s + a.working, 0);
+
+  const kpis: MonthlyGoalsKpi[] = [
+    {
+      metricKey: "revenue",
+      label: "Revenue Goals",
+      current: teamRevenue,
+      target: revTeam.target,
+      progressPct: progressPct(teamRevenue, revTeam.target),
+      xpAvailable: revTeam.xpAvailable,
+      theme: "revenue",
+    },
+    {
+      metricKey: "testingBatches",
+      label: "Testing Goals",
+      current: teamTesting,
+      target: testTeam.target,
+      progressPct: progressPct(teamTesting, testTeam.target),
+      xpAvailable: testTeam.xpAvailable,
+      theme: "testing",
+    },
+    {
+      metricKey: "workingCampaigns",
+      label: "Working Campaigns",
+      current: teamWorking,
+      target: workTeam.target,
+      progressPct: progressPct(teamWorking, workTeam.target),
+      xpAvailable: workTeam.xpAvailable,
+      theme: "working",
+    },
+  ];
+
+  const workers: WorkerMonthlyRow[] = employees.map((emp) => {
+    const a = actuals.get(emp.id) ?? { revenue: 0, testing: 0, working: 0 };
+    const rev = sumGoalsForMetric(monthGoals, "revenue", emp.id);
+    const tst = sumGoalsForMetric(monthGoals, "testingBatches", emp.id);
+    const wrk = sumGoalsForMetric(monthGoals, "workingCampaigns", emp.id);
+    const metrics = {
+      revenue: { current: a.revenue, target: rev.target },
+      testing: { current: a.testing, target: tst.target },
+      working: { current: a.working, target: wrk.target },
+    };
+    const status = deriveWorkerStatus(metrics, monthKey);
+    const avgPct =
+      [metrics.revenue, metrics.testing, metrics.working]
+        .filter((m) => m.target > 0)
+        .map((m) => progressPct(m.current, m.target))
+        .reduce((s, p, _, arr) => s + p / arr.length, 0) || 0;
+
+    return {
+      employeeId: emp.id,
+      name: emp.name,
+      email: emp.email,
+      initials: initialsFor(emp.name),
+      revenue: {
+        current: a.revenue,
+        target: rev.target,
+        progressPct: progressPct(a.revenue, rev.target),
+      },
+      testing: {
+        current: a.testing,
+        target: tst.target,
+        progressPct: progressPct(a.testing, tst.target),
+      },
+      working: {
+        current: a.working,
+        target: wrk.target,
+        progressPct: progressPct(a.working, wrk.target),
+      },
+      profit: revenueProfit.get(emp.id)?.profit ?? null,
+      xpEarned: xpByEmployee.get(emp.id) ?? 0,
+      status,
+      progressSegments: progressSegments(status, avgPct),
+    };
+  });
+
+  workers.sort((a, b) => b.xpEarned - a.xpEarned || a.name.localeCompare(b.name));
+
+  const board = await xpLeaderboard(workspaceId, monthKey, 10);
+  const nameById = new Map(employees.map((e) => [e.id, e]));
+
+  const leaderboard = board.map((row, idx) => {
+    const emp = nameById.get(row.employeeId);
+    return {
+      employeeId: row.employeeId,
+      name: emp?.name ?? `Employee #${row.employeeId}`,
+      initials: initialsFor(emp?.name ?? "?"),
+      xp: row.totalXp,
+      rank: idx + 1,
+    };
+  });
+
+  return { monthKey, kpis, workers, leaderboard };
+}
+
+export { findDuplicateGoal, workerGoalRowKey } from "./goals-config-server.ts";

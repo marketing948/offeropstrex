@@ -1,0 +1,120 @@
+import { Link, useLocation } from "wouter";
+import {
+  Trophy,
+  LayoutDashboard,
+  Target,
+  Zap,
+  Crown,
+  Shield,
+  BadgeDollarSign,
+  History,
+  Settings,
+  ChevronDown,
+} from "lucide-react";
+import { useAuth } from "@/lib/auth";
+import { InitialsBadge } from "@/components/performance-engine/initials-badge";
+import { useGoalsConfig, ensureGoalsConfig, DEFAULT_CONFIG, getRankForScore, getNextRank } from "@/lib/goals-config";
+import { useQuery } from "@tanstack/react-query";
+import { useWorkspace } from "@/lib/workspace-context";
+import { fetchMonthlyGoalsDashboard, currentMonthKey } from "@/lib/performance-engine/api";
+
+const NAV = [
+  { href: "/performance/overview", label: "Overview", icon: LayoutDashboard },
+  { href: "/performance/monthly-goals", label: "Monthly Goals", icon: Target },
+  { href: "/performance/xp-rules", label: "XP Rules", icon: Zap },
+  { href: "/performance/ranks", label: "Ranks & Bonuses", icon: Crown },
+  { href: "/performance/penalties", label: "Penalty Rules", icon: Shield },
+  { href: "/performance/bonus-events", label: "Bonus Events", icon: BadgeDollarSign },
+  { href: "/performance/audit", label: "Audit Log", icon: History },
+  { href: "/performance/settings", label: "Settings", icon: Settings },
+] as const;
+
+function workerInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
+
+export function PerformanceEngineLayout({ children }: { children: React.ReactNode }) {
+  const [location] = useLocation();
+  const { currentEmployee } = useAuth();
+  const { activeWorkspaceId } = useWorkspace();
+  const { data: cfgRaw } = useGoalsConfig();
+  const cfg = ensureGoalsConfig(cfgRaw ?? DEFAULT_CONFIG);
+
+  const dashQ = useQuery({
+    queryKey: ["pe-rank-xp", activeWorkspaceId, currentEmployee?.id],
+    enabled: !!activeWorkspaceId && !!currentEmployee,
+    queryFn: () => fetchMonthlyGoalsDashboard(activeWorkspaceId!, currentMonthKey()),
+  });
+
+  const myXp =
+    dashQ.data?.workers.find((w) => w.employeeId === currentEmployee?.id)?.xpEarned ?? 0;
+  const rank = getRankForScore(myXp, cfg);
+  const nextRank = getNextRank(rank, cfg);
+  const progressToNext =
+    nextRank && rank
+      ? Math.min(100, Math.round((myXp / nextRank.minScore) * 100))
+      : 100;
+
+  return (
+    <div className="flex min-h-full gap-0 -m-8">
+      <aside className="w-56 shrink-0 border-r bg-slate-50/80 flex flex-col min-h-[calc(100vh-0px)]">
+        <div className="px-4 py-4 border-b flex items-center gap-2">
+          <Trophy size={20} className="text-blue-600" />
+          <span className="font-bold text-sm">Performance Engine</span>
+        </div>
+
+        <nav className="flex-1 p-2 space-y-0.5">
+          {NAV.map((item) => {
+            const active = location === item.href || location.startsWith(`${item.href}/`);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  active
+                    ? "bg-blue-600 text-white"
+                    : "text-muted-foreground hover:bg-white hover:text-foreground"
+                }`}
+              >
+                <item.icon size={16} />
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+
+        <div className="p-3 border-t space-y-3">
+          <div className="rounded-lg border bg-white p-3 text-xs shadow-sm">
+            <p className="text-muted-foreground mb-1">Your Current Rank</p>
+            <p className="font-bold text-purple-700">{rank?.name ?? "Unranked"}</p>
+            <p className="text-muted-foreground mt-1">
+              {myXp.toLocaleString()}
+              {nextRank ? ` / ${nextRank.minScore.toLocaleString()} XP` : " XP"}
+            </p>
+            <div className="h-1.5 rounded-full bg-slate-100 mt-2 overflow-hidden">
+              <div className="h-full bg-purple-500 rounded-full" style={{ width: `${progressToNext}%` }} />
+            </div>
+            <Link href="/performance/ranks" className="text-blue-600 hover:underline mt-2 inline-block">
+              View all ranks
+            </Link>
+          </div>
+
+          {currentEmployee && (
+            <div className="flex items-center gap-2 px-1">
+              <InitialsBadge initials={workerInitials(currentEmployee.name)} size="sm" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold truncate">{currentEmployee.name}</p>
+                <p className="text-[10px] text-muted-foreground capitalize">{currentEmployee.role}</p>
+              </div>
+              <ChevronDown size={14} className="text-muted-foreground shrink-0" />
+            </div>
+          )}
+        </div>
+      </aside>
+
+      <div className="flex-1 min-w-0 bg-background">{children}</div>
+    </div>
+  );
+}

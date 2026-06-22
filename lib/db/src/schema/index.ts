@@ -30,3 +30,4 @@ export * from "./campaign-winners";
 export * from "./campaign-daily-metrics";
 export * from "./operational-activity-feed";
 export * from "./worker-affiliate-networks";
+export * from "./xp-ledger";
