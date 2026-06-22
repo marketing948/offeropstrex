@@ -44,6 +44,24 @@ export function fetchMonthlyGoalsDashboard(
 
 export type MetricBreakdownKind = "revenue" | "testing" | "working";
 
+export type MetricBreakdownGeoRow = {
+  key: string;
+  label: string;
+  current: number;
+  target: number;
+  percent: number;
+};
+
+export type MetricBreakdownNetworkRow = {
+  key: string;
+  label: string;
+  networkId: string;
+  current: number;
+  target: number;
+  percent: number;
+  geos: MetricBreakdownGeoRow[];
+};
+
 export type MetricBreakdownResult = {
   metric: MetricBreakdownKind;
   scope: {
@@ -57,8 +75,8 @@ export type MetricBreakdownResult = {
     percent: number;
     xpAvailable: number;
   };
-  networks: { key: string; label: string; current: number; target: number; percent: number }[];
-  geos: { key: string; label: string; current: number; target: number; percent: number }[];
+  networks: MetricBreakdownNetworkRow[];
+  geos: MetricBreakdownGeoRow[];
   items: { name: string; network: string; geo: string; detail?: string }[];
 };
 

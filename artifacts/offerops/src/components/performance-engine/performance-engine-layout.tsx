@@ -17,6 +17,7 @@ import { useGoalsConfig, ensureGoalsConfig, DEFAULT_CONFIG, getRankForScore, get
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { fetchMonthlyGoalsDashboard, currentMonthKey } from "@/lib/performance-engine/api";
+import { CurrentRankCard } from "@/components/performance-engine/current-rank-card";
 
 const NAV = [
   { href: "/performance/overview", label: "Overview", icon: LayoutDashboard },
@@ -86,20 +87,13 @@ export function PerformanceEngineLayout({ children }: { children: React.ReactNod
         </nav>
 
         <div className="p-3 border-t space-y-3">
-          <div className="rounded-lg border bg-white p-3 text-xs shadow-sm">
-            <p className="text-muted-foreground mb-1">Your Current Rank</p>
-            <p className="font-bold text-purple-700">{rank?.name ?? "Unranked"}</p>
-            <p className="text-muted-foreground mt-1">
-              {myXp.toLocaleString()}
-              {nextRank ? ` / ${nextRank.minScore.toLocaleString()} XP` : " XP"}
-            </p>
-            <div className="h-1.5 rounded-full bg-slate-100 mt-2 overflow-hidden">
-              <div className="h-full bg-purple-500 rounded-full" style={{ width: `${progressToNext}%` }} />
-            </div>
-            <Link href="/performance/ranks" className="text-blue-600 hover:underline mt-2 inline-block">
-              View all ranks
-            </Link>
-          </div>
+          <CurrentRankCard
+            rank={rank}
+            nextRank={nextRank}
+            myXp={myXp}
+            progressToNext={progressToNext}
+            xpReady={dashQ.isSuccess}
+          />
 
           {currentEmployee && (
             <div className="flex items-center gap-2 px-1">

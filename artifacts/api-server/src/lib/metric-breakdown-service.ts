@@ -21,12 +21,22 @@ const ACTIVE_TESTING_STATUSES = [
 
 export type MetricBreakdownKind = "revenue" | "testing" | "working";
 
-export type BreakdownRow = {
+export type BreakdownGeoRow = {
   key: string;
   label: string;
   current: number;
   target: number;
   percent: number;
+};
+
+export type NetworkBreakdownRow = {
+  key: string;
+  label: string;
+  networkId: string;
+  current: number;
+  target: number;
+  percent: number;
+  geos: BreakdownGeoRow[];
 };
 
 export type MetricBreakdownResult = {
@@ -42,10 +52,14 @@ export type MetricBreakdownResult = {
     percent: number;
     xpAvailable: number;
   };
-  networks: BreakdownRow[];
-  geos: BreakdownRow[];
+  networks: NetworkBreakdownRow[];
+  /** @deprecated Global GEO breakdown — always empty; use networks[].geos */
+  geos: BreakdownGeoRow[];
   items: { name: string; network: string; geo: string; detail?: string }[];
 };
+
+/** network name → geo → current value */
+type NetworkGeoMap = Map<string, Map<string, number>>;
 
 function progressPct(current: number, target: number): number {
   if (target <= 0) return 0;
@@ -56,6 +70,15 @@ function metricKeyFor(kind: MetricBreakdownKind): ServerWorkerGoalTarget["metric
   if (kind === "revenue") return "revenue";
   if (kind === "testing") return "testingBatches";
   return "workingCampaigns";
+}
+
+function addNetworkGeo(map: NetworkGeoMap, network: string, geo: string, value: number): void {
+  let geoMap = map.get(network);
+  if (!geoMap) {
+    geoMap = new Map();
+    map.set(network, geoMap);
+  }
+  geoMap.set(geo, (geoMap.get(geo) ?? 0) + value);
 }
 
 function sumGoalTargets(
@@ -86,11 +109,11 @@ function sumGoalTargets(
   };
 }
 
-async function queryRevenueByNetworkGeo(
+async function queryRevenueNetworkGeo(
   workspaceId: number,
   range: MetricsDateRange,
   employeeId: number | null,
-): Promise<{ byNetwork: Map<string, number>; byGeo: Map<string, number> }> {
+): Promise<NetworkGeoMap> {
   const conditions = [eq(testingBatchesTable.workspaceId, workspaceId)];
   if (employeeId != null) {
     conditions.push(eq(testingBatchesTable.employeeId, employeeId));
@@ -106,26 +129,23 @@ async function queryRevenueByNetworkGeo(
     .where(and(...conditions));
 
   const metricsByBatch = await queryBatchMetricTotalsMap(workspaceId, range);
-  const byNetwork = new Map<string, number>();
-  const byGeo = new Map<string, number>();
+  const map: NetworkGeoMap = new Map();
 
   for (const b of batches) {
     const m = metricsByBatch.get(b.batchId);
     if (!m) continue;
-    const rev = m.revenue;
     const net = b.network?.trim() || "(unset)";
     const geo = b.geo?.trim() || "(unset)";
-    byNetwork.set(net, (byNetwork.get(net) ?? 0) + rev);
-    byGeo.set(geo, (byGeo.get(geo) ?? 0) + rev);
+    addNetworkGeo(map, net, geo, m.revenue);
   }
 
-  return { byNetwork, byGeo };
+  return map;
 }
 
-async function queryTestingByNetworkGeo(
+async function queryTestingNetworkGeo(
   workspaceId: number,
   employeeId: number | null,
-): Promise<{ byNetwork: Map<string, number>; byGeo: Map<string, number> }> {
+): Promise<NetworkGeoMap> {
   const conditions = [
     eq(testingBatchesTable.workspaceId, workspaceId),
     inArray(testingBatchesTable.status, [...ACTIVE_TESTING_STATUSES]),
@@ -144,22 +164,19 @@ async function queryTestingByNetworkGeo(
     .where(and(...conditions))
     .groupBy(testingBatchesTable.affiliateNetwork, testingBatchesTable.geo);
 
-  const byNetwork = new Map<string, number>();
-  const byGeo = new Map<string, number>();
+  const map: NetworkGeoMap = new Map();
   for (const r of rows) {
     const net = r.network?.trim() || "(unset)";
     const geo = r.geo?.trim() || "(unset)";
-    const c = Number(r.count ?? 0);
-    byNetwork.set(net, (byNetwork.get(net) ?? 0) + c);
-    byGeo.set(geo, (byGeo.get(geo) ?? 0) + c);
+    addNetworkGeo(map, net, geo, Number(r.count ?? 0));
   }
-  return { byNetwork, byGeo };
+  return map;
 }
 
-async function queryWorkingByNetworkGeo(
+async function queryWorkingNetworkGeo(
   workspaceId: number,
   employeeId: number | null,
-): Promise<{ byNetwork: Map<string, number>; byGeo: Map<string, number> }> {
+): Promise<NetworkGeoMap> {
   const conditions = [
     eq(campaignsTable.workspaceId, workspaceId),
     eq(campaignsTable.status, "live"),
@@ -186,50 +203,91 @@ async function queryWorkingByNetworkGeo(
     .where(and(...conditions))
     .groupBy(testingBatchesTable.affiliateNetwork, testingBatchesTable.geo);
 
-  const byNetwork = new Map<string, number>();
-  const byGeo = new Map<string, number>();
+  const map: NetworkGeoMap = new Map();
   for (const r of rows) {
     const net = r.network?.trim() || "(unset)";
     const geo = r.geo?.trim() || "(unset)";
-    const c = Number(r.count ?? 0);
-    byNetwork.set(net, (byNetwork.get(net) ?? 0) + c);
-    byGeo.set(geo, (byGeo.get(geo) ?? 0) + c);
+    addNetworkGeo(map, net, geo, Number(r.count ?? 0));
   }
-  return { byNetwork, byGeo };
+  return map;
 }
 
-function mergeBreakdownRows(
-  currentMap: Map<string, number>,
+function buildNetworkBreakdown(
+  networkGeoCurrent: NetworkGeoMap,
   goals: ServerWorkerGoalTarget[],
   metricKey: ServerWorkerGoalTarget["metricKey"],
   employeeId: number | null,
-  dim: "network" | "geo",
-): BreakdownRow[] {
-  const goalDimKey = dim === "network" ? "affiliateNetworkName" : "geoCode";
-  const targetByKey = new Map<string, number>();
-
+): NetworkBreakdownRow[] {
+  const networkKeys = new Set<string>();
+  for (const net of networkGeoCurrent.keys()) networkKeys.add(net);
   for (const g of goals) {
     if (g.metricKey !== metricKey) continue;
     if (employeeId != null && g.employeeId !== employeeId) continue;
-    const key = g[goalDimKey]?.trim();
-    if (!key) continue;
-    targetByKey.set(key, (targetByKey.get(key) ?? 0) + g.monthlyTarget);
+    const net = g.affiliateNetworkName?.trim();
+    if (net) networkKeys.add(net);
   }
 
-  const keys = new Set([...currentMap.keys(), ...targetByKey.keys()]);
-  return [...keys]
-    .filter((k) => k !== "(unset)" || currentMap.get(k) || targetByKey.get(k))
-    .map((key) => {
-      const current = currentMap.get(key) ?? 0;
-      const target = targetByKey.get(key) ?? 0;
+  return [...networkKeys]
+    .filter((k) => k !== "(unset)" || networkGeoCurrent.has(k))
+    .map((networkKey) => {
+      const geoCurrent = networkGeoCurrent.get(networkKey) ?? new Map<string, number>();
+
+      const geoKeys = new Set<string>([...geoCurrent.keys()]);
+      for (const g of goals) {
+        if (g.metricKey !== metricKey) continue;
+        if (employeeId != null && g.employeeId !== employeeId) continue;
+        if (g.affiliateNetworkName?.trim() === networkKey && g.geoCode?.trim()) {
+          geoKeys.add(g.geoCode.trim());
+        }
+      }
+
+      const geos: BreakdownGeoRow[] = [...geoKeys]
+        .filter((k) => k !== "(unset)" || geoCurrent.get(k))
+        .map((geoKey) => {
+          const current = geoCurrent.get(geoKey) ?? 0;
+          const target = goals
+            .filter(
+              (g) =>
+                g.metricKey === metricKey &&
+                g.affiliateNetworkName?.trim() === networkKey &&
+                g.geoCode?.trim() === geoKey &&
+                (employeeId == null || g.employeeId === employeeId),
+            )
+            .reduce((s, g) => s + g.monthlyTarget, 0);
+          return {
+            key: geoKey,
+            label: geoKey,
+            current,
+            target,
+            percent: progressPct(current, target),
+          };
+        })
+        .sort((a, b) => b.target - a.target || b.current - a.current || a.label.localeCompare(b.label));
+
+      const current = [...geoCurrent.values()].reduce((s, v) => s + v, 0);
+      const networkOnlyTarget = goals
+        .filter(
+          (g) =>
+            g.metricKey === metricKey &&
+            g.affiliateNetworkName?.trim() === networkKey &&
+            !g.geoCode &&
+            (employeeId == null || g.employeeId === employeeId),
+        )
+        .reduce((s, g) => s + g.monthlyTarget, 0);
+      const geoTargetSum = geos.reduce((s, g) => s + g.target, 0);
+      const target = networkOnlyTarget > 0 ? networkOnlyTarget : geoTargetSum;
+
       return {
-        key,
-        label: key,
+        key: networkKey,
+        label: networkKey,
+        networkId: networkKey,
         current,
         target,
         percent: progressPct(current, target),
+        geos,
       };
     })
+    .filter((n) => n.target > 0 || n.current > 0)
     .sort((a, b) => b.target - a.target || b.current - a.current || a.label.localeCompare(b.label));
 }
 
@@ -249,21 +307,19 @@ export async function buildMetricBreakdown(
   const monthGoals = goalsForMonth(cfg.workerGoalTargets, monthKey);
   const metricKey = metricKeyFor(metric);
 
-  let byNetwork: Map<string, number>;
-  let byGeo: Map<string, number>;
-
+  let networkGeo: NetworkGeoMap;
   if (metric === "revenue") {
-    ({ byNetwork, byGeo } = await queryRevenueByNetworkGeo(workspaceId, range, employeeId));
+    networkGeo = await queryRevenueNetworkGeo(workspaceId, range, employeeId);
   } else if (metric === "testing") {
-    ({ byNetwork, byGeo } = await queryTestingByNetworkGeo(workspaceId, employeeId));
+    networkGeo = await queryTestingNetworkGeo(workspaceId, employeeId);
   } else {
-    ({ byNetwork, byGeo } = await queryWorkingByNetworkGeo(workspaceId, employeeId));
+    networkGeo = await queryWorkingNetworkGeo(workspaceId, employeeId);
   }
 
-  const totalCurrent =
-    metric === "revenue"
-      ? [...byNetwork.values()].reduce((s, v) => s + v, 0)
-      : [...byNetwork.values()].reduce((s, v) => s + v, 0);
+  const totalCurrent = [...networkGeo.values()].reduce(
+    (sum, geoMap) => sum + [...geoMap.values()].reduce((s, v) => s + v, 0),
+    0,
+  );
 
   const totalGoals = sumGoalTargets(monthGoals, metricKey, employeeId, "total");
   const scopedTarget =
@@ -285,8 +341,7 @@ export async function buildMetricBreakdown(
     })
     .reduce((s, g) => s + (g.xpReward ?? 0), 0);
 
-  const networks = mergeBreakdownRows(byNetwork, monthGoals, metricKey, employeeId, "network");
-  const geos = mergeBreakdownRows(byGeo, monthGoals, metricKey, employeeId, "geo");
+  const networks = buildNetworkBreakdown(networkGeo, monthGoals, metricKey, employeeId);
 
   const items: MetricBreakdownResult["items"] = [];
   if (metric === "revenue" || metric === "working") {
@@ -300,7 +355,6 @@ export async function buildMetricBreakdown(
     }
     const winners = await db
       .select({
-        offerId: campaignWinnersTable.offerId,
         campaignId: campaignWinnersTable.campaignId,
         geo: testingBatchesTable.geo,
         network: testingBatchesTable.affiliateNetwork,
@@ -331,7 +385,7 @@ export async function buildMetricBreakdown(
       xpAvailable,
     },
     networks,
-    geos,
+    geos: [],
     items,
   };
 }
