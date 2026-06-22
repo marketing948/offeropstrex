@@ -34,10 +34,51 @@ export type MonthlyGoalsDashboard = {
 export function fetchMonthlyGoalsDashboard(
   workspaceId: number,
   monthKey: string,
+  employeeId?: number,
 ): Promise<MonthlyGoalsDashboard> {
+  const emp = employeeId != null ? `&employee_id=${employeeId}` : "";
   return authedJson(
-    `/api/performance/monthly-goals?workspace_id=${workspaceId}&month=${encodeURIComponent(monthKey)}`,
+    `/api/performance/monthly-goals?workspace_id=${workspaceId}&month=${encodeURIComponent(monthKey)}${emp}`,
   );
+}
+
+export type MetricBreakdownKind = "revenue" | "testing" | "working";
+
+export type MetricBreakdownResult = {
+  metric: MetricBreakdownKind;
+  scope: {
+    workspaceId: number;
+    employeeId: number | null;
+    month: string;
+  };
+  summary: {
+    current: number;
+    target: number;
+    percent: number;
+    xpAvailable: number;
+  };
+  networks: { key: string; label: string; current: number; target: number; percent: number }[];
+  geos: { key: string; label: string; current: number; target: number; percent: number }[];
+  items: { name: string; network: string; geo: string; detail?: string }[];
+};
+
+export function fetchMetricBreakdown(
+  workspaceId: number,
+  monthKey: string,
+  metric: MetricBreakdownKind,
+  employeeId?: number,
+): Promise<MetricBreakdownResult> {
+  const emp = employeeId != null ? `&employee_id=${employeeId}` : "";
+  return authedJson(
+    `/api/performance/metric-breakdown?workspace_id=${workspaceId}&month=${encodeURIComponent(monthKey)}&metric=${metric}${emp}`,
+  );
+}
+
+export function kpiMetricToBreakdown(metricKey: string): MetricBreakdownKind | null {
+  if (metricKey === "revenue") return "revenue";
+  if (metricKey === "testingBatches") return "testing";
+  if (metricKey === "workingCampaigns") return "working";
+  return null;
 }
 
 export function fetchWorkerBreakdown(workspaceId: number, employeeId: number, monthKey: string) {

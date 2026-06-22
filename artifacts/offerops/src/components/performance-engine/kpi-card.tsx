@@ -5,6 +5,7 @@ const THEMES = {
   revenue: {
     border: "border-green-200",
     bg: "bg-green-50/50",
+    activeBorder: "border-green-400 ring-2 ring-green-200",
     icon: "text-green-600 bg-green-100",
     bar: "bg-green-500",
     xp: "text-green-700",
@@ -12,6 +13,7 @@ const THEMES = {
   testing: {
     border: "border-purple-200",
     bg: "bg-purple-50/50",
+    activeBorder: "border-purple-400 ring-2 ring-purple-200",
     icon: "text-purple-600 bg-purple-100",
     bar: "bg-purple-500",
     xp: "text-purple-700",
@@ -19,6 +21,7 @@ const THEMES = {
   working: {
     border: "border-orange-200",
     bg: "bg-orange-50/50",
+    activeBorder: "border-orange-400 ring-2 ring-orange-200",
     icon: "text-orange-600 bg-orange-100",
     bar: "bg-orange-500",
     xp: "text-orange-700",
@@ -42,12 +45,28 @@ function formatValue(kpi: MonthlyGoalsKpi): string {
   return `${kpi.current.toLocaleString()} / ${kpi.target.toLocaleString()} Campaigns`;
 }
 
-export function KpiCard({ kpi }: { kpi: MonthlyGoalsKpi }) {
+export function KpiCard({
+  kpi,
+  selected,
+  onClick,
+}: {
+  kpi: MonthlyGoalsKpi;
+  selected?: boolean;
+  onClick?: () => void;
+}) {
   const t = THEMES[kpi.theme];
   const pct = kpi.target > 0 ? Math.min(100, kpi.progressPct) : 0;
+  const interactive = Boolean(onClick);
 
   return (
-    <div className={`rounded-xl border p-4 shadow-sm ${t.border} ${t.bg}`}>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!interactive}
+      className={`rounded-xl border p-4 shadow-sm text-left w-full transition-all ${
+        interactive ? "cursor-pointer hover:shadow-md" : ""
+      } ${selected ? t.activeBorder : t.border} ${t.bg}`}
+    >
       <div className="flex items-start gap-3">
         <Icon theme={kpi.theme} />
         <div className="min-w-0 flex-1">
@@ -62,8 +81,11 @@ export function KpiCard({ kpi }: { kpi: MonthlyGoalsKpi }) {
               +{kpi.xpAvailable.toLocaleString()} XP available
             </p>
           )}
+          {interactive && (
+            <p className="text-[11px] text-muted-foreground mt-2">Click for breakdown</p>
+          )}
         </div>
       </div>
-    </div>
+    </button>
   );
 }

@@ -251,6 +251,7 @@ async function syncGoalCompletionXp(
 export async function buildMonthlyGoalsDashboard(
   workspaceId: number,
   monthKey = currentMonthKey(),
+  scopeEmployeeId?: number,
 ): Promise<MonthlyGoalsDashboard> {
   const range: MetricsDateRange = {
     dateFrom: monthKeyToRange(monthKey).dateFromIso,
@@ -292,40 +293,46 @@ export async function buildMonthlyGoalsDashboard(
 
   const xpByEmployee = await sumXpByEmployeeForMonth(workspaceId, monthKey);
 
-  const revTeam = sumGoalsForMetric(monthGoals, "revenue");
-  const testTeam = sumGoalsForMetric(monthGoals, "testingBatches");
-  const workTeam = sumGoalsForMetric(monthGoals, "workingCampaigns");
+  const revGoals = sumGoalsForMetric(monthGoals, "revenue", scopeEmployeeId);
+  const testGoals = sumGoalsForMetric(monthGoals, "testingBatches", scopeEmployeeId);
+  const workGoals = sumGoalsForMetric(monthGoals, "workingCampaigns", scopeEmployeeId);
 
   const teamRevenue = [...actuals.values()].reduce((s, a) => s + a.revenue, 0);
   const teamTesting = [...actuals.values()].reduce((s, a) => s + a.testing, 0);
   const teamWorking = [...actuals.values()].reduce((s, a) => s + a.working, 0);
 
+  const scopedActuals =
+    scopeEmployeeId != null ? actuals.get(scopeEmployeeId) : undefined;
+  const kpiRevenue = scopedActuals?.revenue ?? teamRevenue;
+  const kpiTesting = scopedActuals?.testing ?? teamTesting;
+  const kpiWorking = scopedActuals?.working ?? teamWorking;
+
   const kpis: MonthlyGoalsKpi[] = [
     {
       metricKey: "revenue",
       label: "Revenue Goals",
-      current: teamRevenue,
-      target: revTeam.target,
-      progressPct: progressPct(teamRevenue, revTeam.target),
-      xpAvailable: revTeam.xpAvailable,
+      current: kpiRevenue,
+      target: revGoals.target,
+      progressPct: progressPct(kpiRevenue, revGoals.target),
+      xpAvailable: revGoals.xpAvailable,
       theme: "revenue",
     },
     {
       metricKey: "testingBatches",
       label: "Testing Goals",
-      current: teamTesting,
-      target: testTeam.target,
-      progressPct: progressPct(teamTesting, testTeam.target),
-      xpAvailable: testTeam.xpAvailable,
+      current: kpiTesting,
+      target: testGoals.target,
+      progressPct: progressPct(kpiTesting, testGoals.target),
+      xpAvailable: testGoals.xpAvailable,
       theme: "testing",
     },
     {
       metricKey: "workingCampaigns",
       label: "Working Campaigns",
-      current: teamWorking,
-      target: workTeam.target,
-      progressPct: progressPct(teamWorking, workTeam.target),
-      xpAvailable: workTeam.xpAvailable,
+      current: kpiWorking,
+      target: workGoals.target,
+      progressPct: progressPct(kpiWorking, workGoals.target),
+      xpAvailable: workGoals.xpAvailable,
       theme: "working",
     },
   ];

@@ -9,12 +9,15 @@ import {
   campaignWinnersTable,
   campaignsTable,
   testingBatchesTable,
+  affiliateNetworksTable,
+  workerAffiliateNetworksTable,
 } from "@workspace/db";
 import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access.ts";
 import { getEmployeeFromToken } from "../routes/auth.ts";
 import {
   buildMonthlyGoalsDashboard,
 } from "../lib/monthly-goals-service.ts";
+import { buildMetricBreakdown } from "../lib/metric-breakdown-service.ts";
 import { currentMonthKey, monthKeyToRange } from "../lib/xp-award-service.ts";
 import { loadGoalsConfig, findDuplicateGoal, goalsForMonth } from "../lib/goals-config-server.ts";
 import { getSettingValue, upsertSetting } from "../lib/settings-store.ts";
@@ -59,8 +62,55 @@ router.get("/performance/monthly-goals", async (req, res): Promise<void> => {
       ? monthRaw
       : currentMonthKey();
 
-  const dashboard = await buildMonthlyGoalsDashboard(workspaceId, monthKey);
+  const employeeIdRaw = req.query.employee_id;
+  let scopeEmployeeId: number | undefined;
+  if (employeeIdRaw != null && employeeIdRaw !== "") {
+    const n = Number(employeeIdRaw);
+    if (!Number.isInteger(n) || n <= 0) {
+      res.status(400).json({ error: "employee_id must be a positive integer" });
+      return;
+    }
+    scopeEmployeeId = n;
+  }
+
+  const dashboard = await buildMonthlyGoalsDashboard(workspaceId, monthKey, scopeEmployeeId);
   res.json(dashboard);
+});
+
+router.get("/performance/metric-breakdown", async (req, res): Promise<void> => {
+  const workspaceId = await requireWorkspaceFromQuery(req, res);
+  if (workspaceId === null) return;
+
+  const metricRaw = req.query.metric;
+  const metricParsed = z.enum(["revenue", "testing", "working"]).safeParse(metricRaw);
+  if (!metricParsed.success) {
+    res.status(400).json({ error: "metric must be revenue, testing, or working" });
+    return;
+  }
+
+  const monthKey =
+    typeof req.query.month === "string" && monthKeySchema.safeParse(req.query.month).success
+      ? req.query.month
+      : currentMonthKey();
+
+  const employeeIdRaw = req.query.employee_id;
+  let employeeId: number | null = null;
+  if (employeeIdRaw != null && employeeIdRaw !== "") {
+    const n = Number(employeeIdRaw);
+    if (!Number.isInteger(n) || n <= 0) {
+      res.status(400).json({ error: "employee_id must be a positive integer" });
+      return;
+    }
+    employeeId = n;
+  }
+
+  const breakdown = await buildMetricBreakdown(
+    workspaceId,
+    monthKey,
+    metricParsed.data,
+    employeeId,
+  );
+  res.json(breakdown);
 });
 
 router.get("/performance/xp-history", async (req, res): Promise<void> => {
@@ -257,6 +307,40 @@ router.post("/performance/worker-goals", async (req, res): Promise<void> => {
 
   const { workspaceId, goal, replaceExisting } = parsed.data;
   if ((await requireWorkspaceAccess(req, res, workspaceId)) === null) return;
+
+  if (goal.affiliateNetworkId || goal.affiliateNetworkName) {
+    let networkId = goal.affiliateNetworkId ?? null;
+    if (!networkId && goal.affiliateNetworkName) {
+      const [net] = await db
+        .select({ id: affiliateNetworksTable.id })
+        .from(affiliateNetworksTable)
+        .where(
+          and(
+            eq(affiliateNetworksTable.workspaceId, workspaceId),
+            eq(affiliateNetworksTable.name, goal.affiliateNetworkName),
+          ),
+        )
+        .limit(1);
+      networkId = net?.id ?? null;
+    }
+    if (networkId) {
+      const [assign] = await db
+        .select({ id: workerAffiliateNetworksTable.id })
+        .from(workerAffiliateNetworksTable)
+        .where(
+          and(
+            eq(workerAffiliateNetworksTable.workspaceId, workspaceId),
+            eq(workerAffiliateNetworksTable.employeeId, goal.employeeId),
+            eq(workerAffiliateNetworksTable.affiliateNetworkId, networkId),
+          ),
+        )
+        .limit(1);
+      if (!assign) {
+        res.status(403).json({ error: "Worker does not have access to this affiliate network." });
+        return;
+      }
+    }
+  }
 
   const raw = await getSettingValue(workspaceId, "goals_config");
   let cfg: Record<string, unknown> = {};

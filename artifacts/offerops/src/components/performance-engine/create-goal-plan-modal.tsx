@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -25,6 +25,8 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { ChevronDown, AlertTriangle } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { authedJson } from "@/lib/api-fetch";
 import {
   upsertWorkerGoal,
   DuplicateGoalError,
@@ -87,7 +89,6 @@ export function CreateGoalPlanModal({
   workspaceId,
   monthKey,
   employees,
-  networks,
   geos,
   onSaved,
 }: {
@@ -96,7 +97,6 @@ export function CreateGoalPlanModal({
   workspaceId: number;
   monthKey: string;
   employees: Employee[];
-  networks: Network[];
   geos: Geo[];
   onSaved: () => void;
 }) {
@@ -110,6 +110,29 @@ export function CreateGoalPlanModal({
   const [rows, setRows] = useState(emptyRows);
   const [networkName, setNetworkName] = useState("");
   const [geoCode, setGeoCode] = useState("");
+
+  const workerNetworksQ = useQuery({
+    queryKey: ["worker-affiliate-networks", workspaceId, employeeId],
+    enabled: open && workspaceId > 0 && employeeId > 0,
+    queryFn: () =>
+      authedJson<
+        { affiliateNetworkId: number; affiliateNetworkName: string | null }[]
+      >(`/api/worker-affiliate-networks?workspace_id=${workspaceId}&employee_id=${employeeId}`),
+  });
+
+  const workerNetworks: Network[] = useMemo(
+    () =>
+      (workerNetworksQ.data ?? [])
+        .filter((r) => r.affiliateNetworkName)
+        .map((r) => ({ id: r.affiliateNetworkId, name: r.affiliateNetworkName! })),
+    [workerNetworksQ.data],
+  );
+
+  useEffect(() => {
+    if (networkName && !workerNetworks.some((n) => n.name === networkName)) {
+      setNetworkName("");
+    }
+  }, [employeeId, networkName, workerNetworks]);
 
   function resetForm() {
     setRows(emptyRows());
@@ -132,7 +155,7 @@ export function CreateGoalPlanModal({
       employeeName: emp?.name,
       monthKey: month,
       isActive: true,
-      affiliateNetworkId: networkName ? networks.find((n) => n.name === networkName)?.id ?? null : null,
+      affiliateNetworkId: networkName ? workerNetworks.find((n) => n.name === networkName)?.id ?? null : null,
       affiliateNetworkName: networkName || null,
       geoId: geoCode ? geos.find((g) => g.code === geoCode)?.id ?? null : null,
       geoCode: geoCode || null,
@@ -214,7 +237,10 @@ export function CreateGoalPlanModal({
           </div>
           <div>
             <Label>Worker</Label>
-            <Select value={String(employeeId)} onValueChange={(v) => setEmployeeId(Number(v))}>
+            <Select value={String(employeeId)} onValueChange={(v) => {
+              setEmployeeId(Number(v));
+              setNetworkName("");
+            }}>
               <SelectTrigger className="mt-1"><SelectValue placeholder="Select worker" /></SelectTrigger>
               <SelectContent>
                 {employees.map((e) => (
@@ -296,15 +322,31 @@ export function CreateGoalPlanModal({
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <Label>Affiliate Network</Label>
-                <Select value={networkName || "none"} onValueChange={(v) => setNetworkName(v === "none" ? "" : v)}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Any network</SelectItem>
-                    {networks.map((n) => (
-                      <SelectItem key={n.id} value={n.name}>{n.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {employeeId <= 0 ? (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Select a worker first to choose from their available networks.
+                  </p>
+                ) : workerNetworksQ.isLoading ? (
+                  <p className="mt-1 text-xs text-muted-foreground">Loading networks…</p>
+                ) : workerNetworks.length === 0 ? (
+                  <p className="mt-1 text-xs text-amber-700">
+                    No affiliate networks assigned to this worker.
+                  </p>
+                ) : (
+                  <Select
+                    value={networkName || "none"}
+                    onValueChange={(v) => setNetworkName(v === "none" ? "" : v)}
+                    disabled={employeeId <= 0}
+                  >
+                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Any network</SelectItem>
+                      {workerNetworks.map((n) => (
+                        <SelectItem key={n.id} value={n.name}>{n.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
               <div>
                 <Label>GEO</Label>

@@ -3,7 +3,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
   ChevronRight,
-  ChevronRight as RowChevron,
   Filter,
   HelpCircle,
   Plus,
@@ -16,10 +15,8 @@ import {
 } from "lucide-react";
 import {
   useListEmployees,
-  useListAffiliateNetworks,
   useListGeos,
   getListEmployeesQueryKey,
-  getListAffiliateNetworksQueryKey,
   getListGeosQueryKey,
 } from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
@@ -33,15 +30,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { KpiCard } from "@/components/performance-engine/kpi-card";
+import { KpiBreakdownPanel } from "@/components/performance-engine/kpi-breakdown-panel";
 import { InitialsBadge } from "@/components/performance-engine/initials-badge";
 import { SegmentedProgress } from "@/components/performance-engine/segmented-progress";
-import { WorkerGoalsDrawer } from "@/components/performance-engine/worker-goals-drawer";
 import { CreateGoalPlanModal } from "@/components/performance-engine/create-goal-plan-modal";
 import {
   currentMonthKey,
   fetchMonthlyGoalsDashboard,
   formatMonthLabel,
   shiftMonthKey,
+  kpiMetricToBreakdown,
+  type MetricBreakdownKind,
   type WorkerMonthlyRow,
 } from "@/lib/performance-engine/api";
 import { Link } from "wouter";
@@ -93,28 +92,31 @@ export function MonthlyGoalsPage() {
   const [monthKey, setMonthKey] = useState(currentMonthKey());
   const [workerFilter, setWorkerFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [selectedWorker, setSelectedWorker] = useState<WorkerMonthlyRow | null>(null);
+  const [selectedBreakdown, setSelectedBreakdown] = useState<MetricBreakdownKind | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [howOpen, setHowOpen] = useState(false);
 
+  const scopeEmployeeId = workerFilter !== "all" ? Number(workerFilter) : undefined;
+
   const dashQ = useQuery({
-    queryKey: ["monthly-goals", wsId, monthKey],
+    queryKey: ["monthly-goals", wsId, monthKey, scopeEmployeeId ?? "all"],
     enabled: wsId > 0,
-    queryFn: () => fetchMonthlyGoalsDashboard(wsId, monthKey),
+    queryFn: () => fetchMonthlyGoalsDashboard(wsId, monthKey, scopeEmployeeId),
   });
 
   const { data: employees = [] } = useListEmployees(
     wsParams,
     wsQueryOpts(activeWorkspaceId, getListEmployeesQueryKey(wsParams)),
   );
-  const { data: networks = [] } = useListAffiliateNetworks(
-    wsParams,
-    wsQueryOpts(activeWorkspaceId, getListAffiliateNetworksQueryKey(wsParams)),
-  );
   const { data: geos = [] } = useListGeos(
     wsParams,
     wsQueryOpts(activeWorkspaceId, getListGeosQueryKey(wsParams)),
   );
+
+  const selectedWorkerName =
+    workerFilter !== "all"
+      ? (dashQ.data?.workers ?? []).find((w) => String(w.employeeId) === workerFilter)?.name
+      : undefined;
 
   const filteredWorkers = useMemo(() => {
     let rows = dashQ.data?.workers ?? [];
@@ -129,6 +131,13 @@ export function MonthlyGoalsPage() {
 
   function refresh() {
     void qc.invalidateQueries({ queryKey: ["monthly-goals", wsId, monthKey] });
+    void qc.invalidateQueries({ queryKey: ["metric-breakdown", wsId, monthKey] });
+  }
+
+  function toggleBreakdown(metricKey: string) {
+    const kind = kpiMetricToBreakdown(metricKey);
+    if (!kind) return;
+    setSelectedBreakdown((prev) => (prev === kind ? null : kind));
   }
 
   const dashErrorMessage =
@@ -171,7 +180,10 @@ export function MonthlyGoalsPage() {
       )}
 
       <div className="flex flex-wrap gap-2 mb-6">
-        <Select value={workerFilter} onValueChange={setWorkerFilter}>
+        <Select value={workerFilter} onValueChange={(v) => {
+          setWorkerFilter(v);
+          setSelectedBreakdown(null);
+        }}>
           <SelectTrigger className="w-[160px] h-9">
             <SelectValue placeholder="All Workers" />
           </SelectTrigger>
@@ -222,11 +234,30 @@ export function MonthlyGoalsPage() {
       {dashQ.isLoading ? (
         <p className="text-muted-foreground text-sm mb-6">Loading goals…</p>
       ) : dashQ.isError ? null : (
-        <div className="grid gap-4 md:grid-cols-3 mb-8">
-          {(dashQ.data?.kpis ?? []).map((kpi) => (
-            <KpiCard key={kpi.metricKey} kpi={kpi} />
-          ))}
+        <div className="grid gap-4 md:grid-cols-3 mb-4">
+          {(dashQ.data?.kpis ?? []).map((kpi) => {
+            const breakdownKind = kpiMetricToBreakdown(kpi.metricKey);
+            return (
+              <KpiCard
+                key={kpi.metricKey}
+                kpi={kpi}
+                selected={breakdownKind != null && selectedBreakdown === breakdownKind}
+                onClick={() => toggleBreakdown(kpi.metricKey)}
+              />
+            );
+          })}
         </div>
+      )}
+
+      {selectedBreakdown && !dashQ.isError && (
+        <KpiBreakdownPanel
+          workspaceId={wsId}
+          monthKey={monthKey}
+          metric={selectedBreakdown}
+          employeeId={scopeEmployeeId}
+          workerName={selectedWorkerName}
+          onClose={() => setSelectedBreakdown(null)}
+        />
       )}
 
       {/* Team table */}
@@ -247,29 +278,24 @@ export function MonthlyGoalsPage() {
                 <th className="px-4 py-3 font-medium">XP Earned</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium min-w-[100px]">Progress</th>
-                <th className="px-4 py-3 w-10" />
               </tr>
             </thead>
             <tbody>
               {dashQ.isLoading ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">
+                  <td colSpan={8} className="px-4 py-10 text-center text-muted-foreground">
                     Loading team goals…
                   </td>
                 </tr>
               ) : filteredWorkers.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">
+                  <td colSpan={8} className="px-4 py-10 text-center text-muted-foreground">
                     No workers match the current filters. Create a monthly goal plan to get started.
                   </td>
                 </tr>
               ) : (
                 filteredWorkers.map((w) => (
-                  <tr
-                    key={w.employeeId}
-                    className="border-t hover:bg-slate-50/80 cursor-pointer"
-                    onClick={() => setSelectedWorker(w)}
-                  >
+                  <tr key={w.employeeId} className="border-t hover:bg-slate-50/80">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2.5">
                         <InitialsBadge initials={w.initials} size="sm" />
@@ -299,9 +325,6 @@ export function MonthlyGoalsPage() {
                     <td className="px-4 py-3"><StatusPill status={w.status} /></td>
                     <td className="px-4 py-3">
                       <SegmentedProgress filled={w.progressSegments} status={w.status} />
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      <RowChevron size={16} />
                     </td>
                   </tr>
                 ))
@@ -368,20 +391,12 @@ export function MonthlyGoalsPage() {
       </div>
       )}
 
-      <WorkerGoalsDrawer
-        worker={selectedWorker}
-        monthKey={monthKey}
-        open={!!selectedWorker}
-        onClose={() => setSelectedWorker(null)}
-      />
-
       <CreateGoalPlanModal
         open={createOpen}
         onOpenChange={setCreateOpen}
         workspaceId={wsId}
         monthKey={monthKey}
         employees={employees.map((e) => ({ id: e.id, name: e.name }))}
-        networks={networks.map((n) => ({ id: n.id, name: n.name }))}
         geos={geos.map((g) => ({ id: g.id, code: g.code }))}
         onSaved={refresh}
       />
