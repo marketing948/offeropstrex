@@ -361,9 +361,14 @@ export function buildReportsGoalDashboard(
   entities: ReportEntityRow[],
   employees: { id: number; name: string }[],
   kpiTargets: KpiTarget[] | undefined,
+  workerPe?: {
+    revenue: { current: number; target: number };
+    testing: { current: number; target: number };
+    working: { current: number; target: number };
+  } | null,
 ): ReportsGoalDashboardModel {
   const safeKpiTargets = kpiTargets ?? [];
-  return {
+  const base: ReportsGoalDashboardModel = {
     revenue: buildSection(entities, employees, safeKpiTargets, {
       filterType: "all",
       kpiKey: "revenue",
@@ -388,5 +393,31 @@ export function buildReportsGoalDashboard(
       metric: "count",
       noGoalMessage: "No working campaigns goal configured",
     }),
+  };
+
+  if (!workerPe) return base;
+
+  const applyPe = (
+    section: GoalSectionModel,
+    current: number,
+    target: number,
+    noGoalMessage: string,
+  ): GoalSectionModel => ({
+    ...section,
+    summary: {
+      current,
+      target,
+      targetConfigured: target > 0,
+      usingFallback: false,
+      remaining: target > 0 ? gapRemaining(current, target) : null,
+      progressPct: target > 0 ? progressPct(current, target) : null,
+      noGoalMessage: target > 0 ? null : noGoalMessage,
+    },
+  });
+
+  return {
+    revenue: applyPe(base.revenue, workerPe.revenue.current, workerPe.revenue.target, "No revenue goal configured"),
+    testing: applyPe(base.testing, workerPe.testing.current, workerPe.testing.target, "No testing pipeline goal configured"),
+    working: applyPe(base.working, workerPe.working.current, workerPe.working.target, "No working campaigns goal configured"),
   };
 }

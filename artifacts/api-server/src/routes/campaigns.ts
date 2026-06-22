@@ -29,9 +29,14 @@ import {
   requireWorkspaceAccess,
 } from "../lib/workspace-access";
 import {
+  loadAssignedNetworksForEmployee,
   networkIdAllowed,
   networkNameAllowed,
   requireWorkspaceWithNetworkScope,
+  enforceEmployeeIdAccess,
+  workerCampaignNetworkSqlFilter,
+  workerHasNoAssignedNetworks,
+  type WorkerNetworkScope,
 } from "../lib/worker-network-access";
 import { applyAction } from "../engine/executor.ts";
 import { emit } from "../engine/event-bus";
@@ -551,6 +556,23 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
   const offset = parseOffset(req.query["offset"], res);
   if (offset === null) return;
 
+  let workerScope: WorkerNetworkScope | null = null;
+  if (access.employee.role !== "admin") {
+    const assigned = await loadAssignedNetworksForEmployee(wsId, access.employee.id);
+    workerScope = {
+      isAdmin: false,
+      employeeId: access.employee.id,
+      role: access.employee.role,
+      allowedNetworkIds: assigned.ids,
+      allowedNetworkNames: assigned.names,
+    };
+    if (!enforceEmployeeIdAccess(res, workerScope, requestedWorkerId ?? undefined)) return;
+    if (workerHasNoAssignedNetworks(workerScope)) {
+      res.json({ items: [], pagination: { limit, offset, total: 0 } });
+      return;
+    }
+  }
+
   const conditions = [
     eq(campaignsTable.workspaceId, wsId),
     eq(campaignsTable.status, status as LiveCampaignStatus),
@@ -572,6 +594,10 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
   }
   if (req.query["affiliate_network"] != null && req.query["affiliate_network"] !== "") {
     const network = String(req.query["affiliate_network"]);
+    if (workerScope && !networkNameAllowed(workerScope, network)) {
+      res.status(403).json({ error: "Affiliate network not assigned to you" });
+      return;
+    }
     conditions.push(
       or(
         eq(testingBatchesTable.affiliateNetwork, network),
@@ -591,21 +617,20 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
         )!,
       );
     }
-  } else {
+  } else if (workerScope) {
+    const netFilter = workerCampaignNetworkSqlFilter(
+      workerScope,
+      testingBatchesTable.affiliateNetwork,
+      affiliateNetworksTable.name,
+      campaignsTable.affiliateNetworkId,
+    );
+    if (netFilter) conditions.push(netFilter);
     conditions.push(
       or(
         inArray(campaignsTable.campaignPurpose, ["working", "scaling"]),
         eq(testingBatchesTable.employeeId, access.employee.id),
       )!,
     );
-    if (requestedWorkerId !== null) {
-      conditions.push(
-        or(
-          inArray(campaignsTable.campaignPurpose, ["working", "scaling"]),
-          eq(testingBatchesTable.employeeId, requestedWorkerId),
-        )!,
-      );
-    }
   }
 
   const batchJoin = and(

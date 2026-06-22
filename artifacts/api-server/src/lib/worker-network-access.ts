@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { and, eq, inArray, sql, type AnyColumn, type SQL } from "drizzle-orm";
+import { and, eq, inArray, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import {
   db,
   workerAffiliateNetworksTable,
@@ -167,4 +167,35 @@ export function breakdownScopeFromWorker(scope: WorkerNetworkScope): {
     employeeId: scope.employeeId,
     allowedNetworkNames: scope.allowedNetworkNames ?? [],
   };
+}
+
+/**
+ * SQL filter: campaign row belongs to one of the worker's assigned affiliate networks.
+ * Matches batch affiliate_network text, joined affiliate_networks.name, or campaign.affiliate_network_id.
+ */
+export function workerCampaignNetworkSqlFilter(
+  scope: WorkerNetworkScope,
+  batchNetworkCol: AnyColumn,
+  affiliateNetworkNameCol: AnyColumn,
+  campaignNetworkIdCol: AnyColumn,
+): SQL | undefined {
+  if (scope.isAdmin) return undefined;
+  const names = scope.allowedNetworkNames ?? [];
+  const ids = scope.allowedNetworkIds ?? [];
+  if (names.length === 0 && ids.length === 0) return sql`1 = 0`;
+
+  const parts: SQL[] = [];
+  if (names.length > 0) {
+    parts.push(inArray(batchNetworkCol, names));
+    parts.push(inArray(affiliateNetworkNameCol, names));
+  }
+  if (ids.length > 0) {
+    parts.push(inArray(campaignNetworkIdCol, ids));
+  }
+  return or(...parts)!;
+}
+
+/** Worker has zero assigned networks — caller should return an empty list response. */
+export function workerHasNoAssignedNetworks(scope: WorkerNetworkScope): boolean {
+  return !scope.isAdmin && (scope.allowedNetworkNames?.length ?? 0) === 0;
 }

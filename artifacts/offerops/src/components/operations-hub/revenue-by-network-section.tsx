@@ -3,6 +3,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type {
   GoalCardModel,
   GoalKind,
@@ -20,6 +21,13 @@ import {
   goalKindToViewButtonLabel,
 } from "@/components/operations-hub/operational-metric-dropdown";
 import { useGoalsConfig, DEFAULT_CONFIG } from "@/lib/goals-config";
+import { useAuth } from "@/lib/auth";
+import { useWorkspace } from "@/lib/workspace-context";
+import {
+  currentMonthKey,
+  fetchMetricBreakdown,
+  type MetricBreakdownKind,
+} from "@/lib/performance-engine/api";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -78,6 +86,12 @@ const METRIC_THEMES: Record<GoalKind, MetricTheme> = {
     Icon: Radio,
   },
 };
+
+function metricKindForGoal(kind: GoalKind): MetricBreakdownKind {
+  if (kind === "revenue") return "revenue";
+  if (kind === "testing") return "testing";
+  return "working";
+}
 
 function fmt$(n: number) {
   if (n >= 1000) return `$${(n / 1000).toFixed(1)}K`;
@@ -213,6 +227,7 @@ function GeoMetricRow({
   progressPctValue,
   configured,
   theme,
+  format = "currency",
 }: {
   label: string;
   actual: number;
@@ -220,6 +235,7 @@ function GeoMetricRow({
   progressPctValue: number | null;
   configured: boolean;
   theme: MetricTheme;
+  format?: "currency" | "count";
 }) {
   const pct = progressPctValue ?? 0;
   const barWidth = configured && progressPctValue != null ? Math.min(100, pct) : 0;
@@ -231,9 +247,20 @@ function GeoMetricRow({
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-400" />
         <span className="min-w-0 flex-1 text-sm font-semibold text-slate-700">{label}</span>
         <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-600">
-          {fmt$(actual)}
-          {configured && target != null && (
-            <span className="font-medium text-slate-400"> / {fmt$(target)}</span>
+          {format === "currency" ? (
+            <>
+              {fmt$(actual)}
+              {configured && target != null && (
+                <span className="font-medium text-slate-400"> / {fmt$(target)}</span>
+              )}
+            </>
+          ) : (
+            <>
+              {actual}
+              {configured && target != null && (
+                <span className="font-medium text-slate-400"> / {target}</span>
+              )}
+            </>
           )}
         </span>
         <span
@@ -269,10 +296,29 @@ export function RevenueByNetworkSection({
   unattributedRevenueMtd: number;
   loading?: boolean;
 }) {
+  const { currentEmployee } = useAuth();
+  const { activeWorkspaceId } = useWorkspace();
+  const isWorker = currentEmployee?.role !== "admin";
   const { data: cfgRaw } = useGoalsConfig();
   const kpiTargets = (cfgRaw ?? DEFAULT_CONFIG).kpiTargets;
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [viewOpen, setViewOpen] = useState(true);
+
+  const breakdownQ = useQuery({
+    queryKey: ["ops-metric-breakdown", activeWorkspaceId, selectedMetric, currentEmployee?.id, currentMonthKey()],
+    enabled: !!activeWorkspaceId && !!currentEmployee,
+    staleTime: 60_000,
+    queryFn: () =>
+      fetchMetricBreakdown(
+        activeWorkspaceId!,
+        currentMonthKey(),
+        metricKindForGoal(selectedMetric),
+        isWorker ? currentEmployee!.id : undefined,
+      ),
+  });
+
+  const breakdown = breakdownQ.data;
+  const usePeBreakdown = !!breakdown;
 
   const activeCard = useMemo(
     () => goalCards.find((c) => c.kind === selectedMetric),
@@ -306,6 +352,11 @@ export function RevenueByNetworkSection({
 
   const countRows = activeCard?.networkRows ?? [];
 
+  const breakdownNetworks = breakdown?.networks ?? [];
+  const breakdownHasRows = usePeBreakdown
+    ? breakdownNetworks.length > 0 || (breakdown?.summary.target ?? 0) > 0
+    : false;
+
   function toggleNetwork(network: string) {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -315,8 +366,22 @@ export function RevenueByNetworkSection({
     });
   }
 
-  const hasRows =
-    selectedMetric === "revenue" ? revenueGroups.length > 0 : countRows.length > 0;
+  const hasRows = usePeBreakdown
+    ? breakdownHasRows
+    : selectedMetric === "revenue"
+      ? revenueGroups.length > 0
+      : countRows.length > 0;
+
+  const summaryTarget = usePeBreakdown ? breakdown!.summary.target : activeCard?.target ?? null;
+  const summaryCurrent = usePeBreakdown ? breakdown!.summary.current : activeCard?.actual ?? 0;
+  const summaryConfigured = usePeBreakdown
+    ? (summaryTarget ?? 0) > 0
+    : (activeCard?.target ?? 0) > 0;
+  const summaryPct = usePeBreakdown
+    ? breakdown!.summary.percent
+    : summaryConfigured && summaryTarget
+      ? progressPct(summaryCurrent, summaryTarget)
+      : null;
 
   return (
     <section
@@ -354,13 +419,81 @@ export function RevenueByNetworkSection({
         </Button>
       </div>
 
-      {loading ? (
+      {loading || breakdownQ.isLoading ? (
         <div className="mt-5 space-y-3">
           <Skeleton className="h-16 w-full rounded-xl" />
           <Skeleton className="h-16 w-full rounded-xl" />
         </div>
       ) : !viewOpen ? null : !hasRows ? (
         <p className="mt-5 text-sm text-slate-500">{emptyMessage}</p>
+      ) : usePeBreakdown ? (
+        <div className="mt-5 space-y-3">
+          <div className={`rounded-xl border px-4 py-4 ${theme.rowBg}`}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="text-sm font-bold uppercase tracking-wide text-slate-600">Total</span>
+              <span className="text-sm font-bold tabular-nums text-slate-800">
+                {formatActualTarget(
+                  summaryCurrent,
+                  summaryConfigured ? summaryTarget : null,
+                  summaryConfigured,
+                  format,
+                  unitLabel,
+                )}
+              </span>
+              <span
+                className={`rounded-full border px-2.5 py-0.5 text-xs font-bold tabular-nums ${pctPillClass(summaryPct, summaryConfigured)}`}
+              >
+                {summaryConfigured && summaryPct != null ? `${summaryPct}%` : "—"}
+              </span>
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200/70">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${summaryConfigured ? theme.bar : theme.barMuted}`}
+                style={{ width: `${summaryConfigured && summaryPct != null ? Math.min(100, summaryPct) : 0}%` }}
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            {breakdownNetworks.map((net) => {
+              const configured = net.target > 0;
+              const isExpanded = expanded.has(net.key);
+              const visibleGeos = net.geos ?? [];
+              return (
+                <div
+                  key={net.key}
+                  className="overflow-hidden rounded-xl border border-slate-200/60 bg-white shadow-sm"
+                >
+                  <NetworkMetricRow
+                    label={net.label}
+                    actual={net.current}
+                    target={configured ? net.target : null}
+                    progressPctValue={configured ? net.percent : null}
+                    configured={configured}
+                    format={format}
+                    unitLabel={unitLabel}
+                    theme={theme}
+                    expandable={visibleGeos.length > 0}
+                    expanded={isExpanded}
+                    onToggle={() => toggleNetwork(net.key)}
+                  />
+                  {isExpanded &&
+                    visibleGeos.map((geo) => (
+                      <GeoMetricRow
+                        key={`${net.key}-${geo.key}`}
+                        label={geo.label}
+                        actual={geo.current}
+                        target={geo.target > 0 ? geo.target : null}
+                        progressPctValue={geo.target > 0 ? geo.percent : null}
+                        configured={geo.target > 0}
+                        theme={theme}
+                        format={format}
+                      />
+                    ))}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       ) : selectedMetric === "revenue" ? (
         <div className="mt-5 space-y-2">
           {revenueGroups.map((group) => {

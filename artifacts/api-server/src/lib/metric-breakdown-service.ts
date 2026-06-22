@@ -357,7 +357,14 @@ export async function buildMetricBreakdown(
     })
     .reduce((s, g) => s + (g.xpReward ?? 0), 0);
 
-  const networks = buildNetworkBreakdown(networkGeo, monthGoals, metricKey, employeeId);
+  const networksBuilt = buildNetworkBreakdown(networkGeo, monthGoals, metricKey, employeeId);
+  const networks =
+    allowedNetworkNames != null
+      ? networksBuilt.filter((n) => {
+          const allowed = new Set(allowedNetworkNames.map((name) => name.trim()).filter(Boolean));
+          return allowed.has(n.key) || allowed.has(n.label);
+        })
+      : networksBuilt;
 
   const items: MetricBreakdownResult["items"] = [];
   if (metric === "revenue" || metric === "working") {

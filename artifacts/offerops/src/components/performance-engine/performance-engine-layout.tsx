@@ -13,11 +13,8 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { InitialsBadge } from "@/components/performance-engine/initials-badge";
-import { useGoalsConfig, ensureGoalsConfig, DEFAULT_CONFIG, getRankForScore, getNextRank } from "@/lib/goals-config";
-import { useQuery } from "@tanstack/react-query";
-import { useWorkspace } from "@/lib/workspace-context";
-import { fetchMonthlyGoalsDashboard, currentMonthKey } from "@/lib/performance-engine/api";
 import { CurrentRankCard } from "@/components/performance-engine/current-rank-card";
+import { useCurrentRank } from "@/lib/performance-engine/use-current-rank";
 
 const NAV = [
   { href: "/performance/overview", label: "Overview", icon: LayoutDashboard },
@@ -39,24 +36,7 @@ function workerInitials(name: string): string {
 export function PerformanceEngineLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const { currentEmployee } = useAuth();
-  const { activeWorkspaceId } = useWorkspace();
-  const { data: cfgRaw } = useGoalsConfig();
-  const cfg = ensureGoalsConfig(cfgRaw ?? DEFAULT_CONFIG);
-
-  const dashQ = useQuery({
-    queryKey: ["pe-rank-xp", activeWorkspaceId, currentEmployee?.id],
-    enabled: !!activeWorkspaceId && !!currentEmployee,
-    queryFn: () => fetchMonthlyGoalsDashboard(activeWorkspaceId!, currentMonthKey()),
-  });
-
-  const myXp =
-    dashQ.data?.workers.find((w) => w.employeeId === currentEmployee?.id)?.xpEarned ?? 0;
-  const rank = getRankForScore(myXp, cfg);
-  const nextRank = getNextRank(rank, cfg);
-  const progressToNext =
-    nextRank && rank
-      ? Math.min(100, Math.round((myXp / nextRank.minScore) * 100))
-      : 100;
+  const rankData = useCurrentRank();
 
   return (
     <div className="flex min-h-0 flex-1 w-full min-w-0">
@@ -88,11 +68,12 @@ export function PerformanceEngineLayout({ children }: { children: React.ReactNod
 
         <div className="p-3 border-t space-y-3">
           <CurrentRankCard
-            rank={rank}
-            nextRank={nextRank}
-            myXp={myXp}
-            progressToNext={progressToNext}
-            xpReady={dashQ.isSuccess}
+            variant="sidebar"
+            rank={rankData.rank}
+            nextRank={rankData.nextRank}
+            myXp={rankData.myXp}
+            progressToNext={rankData.progressToNext}
+            xpReady={rankData.xpReady}
           />
 
           {currentEmployee && (

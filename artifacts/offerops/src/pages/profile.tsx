@@ -8,27 +8,24 @@ import {
 import { useAuth } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace-context";
 import {
-  useGoalsConfig, computeScores, computeMetrics, getRankForScore, getNextRank,
+  useGoalsConfig, computeScores, computeMetrics, getRankForScore,
   RANK_COLORS, DEFAULT_CONFIG,
 } from "@/lib/goals-config";
 import type { EmployeeScores } from "@/lib/goals-config";
 import {
-  EXP_POINTS_THIS_MONTH,
   expComboReward,
   expLeaderboardTotal,
   expRankThreshold,
 } from "@/lib/exp-labels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Trophy, Star, Target, TrendingUp, Zap, Crown, Award, BarChart3, User, Network,
+  Trophy, Star, Target, Zap, Crown, Award, BarChart3, User, Network,
 } from "lucide-react";
 import { authedJson } from "@/lib/api-fetch";
 import { useWorkerMonthlyGoals } from "@/lib/performance-engine/use-worker-monthly-goals";
+import { useCurrentRank } from "@/lib/performance-engine/use-current-rank";
+import { CurrentRankCard } from "@/components/performance-engine/current-rank-card";
 import { OpsActivityCounters } from "@/components/operations-hub/ops-activity-counters";
-
-const ICON_MAP: Record<string, React.ElementType> = {
-  Target, Star, TrendingUp, Zap, Crown, Trophy, Award,
-};
 
 function ProgressBar({ label, value, max, color = "bg-primary", sub }: {
   label: string; value: number; max: number; color?: string; sub?: string;
@@ -50,25 +47,9 @@ function ProgressBar({ label, value, max, color = "bg-primary", sub }: {
   );
 }
 
-function ScoreBreakdown({ score }: { score: EmployeeScores }) {
-  const cats = [
-    { label: "Activity", val: score.activityRaw, w: 0.40, cls: "text-blue-700 bg-blue-50 border-blue-200" },
-    { label: "Winners", val: score.winnerRaw, w: 0.35, cls: "text-green-700 bg-green-50 border-green-200" },
-    { label: "Optimization", val: score.optimizationRaw, w: 0.15, cls: "text-orange-700 bg-orange-50 border-orange-200" },
-    { label: "Discipline", val: score.disciplineRaw, w: 0.10, cls: "text-purple-700 bg-purple-50 border-purple-200" },
-  ];
-  return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-      {cats.map(c => (
-        <div key={c.label} className={`rounded-lg border px-3 py-2.5 ${c.cls}`}>
-          <p className="text-xs font-semibold opacity-80">{c.label}</p>
-          <p className="text-xl font-black">{Math.round(c.val * c.w)}</p>
-          <p className="text-[10px] opacity-60">raw {c.val} × {(c.w * 100).toFixed(0)}%</p>
-        </div>
-      ))}
-    </div>
-  );
-}
+const ICON_MAP: Record<string, React.ElementType> = {
+  Target, Star, Zap, Crown, Trophy, Award,
+};
 
 export default function Profile() {
   const { currentEmployee } = useAuth();
@@ -89,14 +70,13 @@ export default function Profile() {
   );
 
   const myScore = scores.find(s => s.employeeId === currentEmployee?.id);
-  const myRank = myScore ? getRankForScore(myScore.total, cfg) : null;
-  const myNextRank = myRank ? getNextRank(myRank, cfg) : null;
-  const myColors = myRank ? (RANK_COLORS[myRank.color] ?? RANK_COLORS.slate) : RANK_COLORS.slate;
-  const MyIcon = myRank ? (ICON_MAP[myRank.icon] ?? Target) : Target;
+  const rankData = useCurrentRank();
   const sortedRanks = [...cfg.ranks].sort((a, b) => a.minScore - b.minScore);
   const kpiTargets = cfg.kpiTargets;
   const myLeaderboardPos = scores.findIndex(s => s.employeeId === currentEmployee?.id) + 1;
   const { isWorker, workerRow, isLoading: workerGoalsLoading } = useWorkerMonthlyGoals();
+  const myRank = rankData.rank;
+  const myColors = myRank ? (RANK_COLORS[myRank.color] ?? RANK_COLORS.slate) : RANK_COLORS.slate;
 
   const { data: assignedNetworks = [], isLoading: networksLoading } = useQuery({
     queryKey: ["profile-affiliate-networks", activeWorkspaceId, currentEmployee?.id],
@@ -146,67 +126,60 @@ export default function Profile() {
         </div>
       </div>
 
-      {/* Score Card */}
-      {myScore && myRank && (
-        <Card className={`border-2 ${myColors.border} shadow-sm`}>
-          <CardContent className="p-5">
-            <div className="flex items-start justify-between flex-wrap gap-4">
-              <div className="flex items-center gap-4">
-                <div className={`w-16 h-16 rounded-2xl flex items-center justify-center ${myColors.bg} flex-shrink-0`}>
-                  <MyIcon size={30} className={myColors.text} />
-                </div>
-                <div>
-                  <p className={`text-xs font-bold uppercase tracking-widest ${myColors.text}`}>{myRank.name}</p>
-                  <p className="text-4xl font-black leading-none">{myScore.total.toLocaleString()}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{EXP_POINTS_THIS_MONTH}</p>
-                </div>
-              </div>
+      {/* 1. Rank / XP — same source as sidebar */}
+      <CurrentRankCard
+        variant="profile"
+        rank={rankData.rank}
+        nextRank={rankData.nextRank}
+        myXp={rankData.myXp}
+        progressToNext={rankData.progressToNext}
+        xpReady={rankData.xpReady}
+      />
 
-              {myNextRank ? (
-                <div className="flex-1 min-w-[180px]">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-xs text-muted-foreground">Next rank</span>
-                    <span className={`text-xs font-bold ${(RANK_COLORS[myNextRank.color] ?? RANK_COLORS.slate).text}`}>
-                      {myNextRank.name}
-                    </span>
-                  </div>
-                  <div className="h-3 rounded-full bg-muted overflow-hidden">
-                    {(() => {
-                      const pct = Math.min(100, Math.round(
-                        ((myScore.total - myRank.minScore) / (myNextRank.minScore - myRank.minScore)) * 100
-                      ));
-                      return <div className="h-full rounded-full transition-all bg-primary" style={{ width: `${pct}%` }} />;
-                    })()}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    <span className="font-semibold text-foreground">{(myNextRank.minScore - myScore.total).toLocaleString()}</span>{" "}
-                    EXP Points to {myNextRank.name}
-                  </p>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-purple-100 text-purple-700">
-                  <Crown size={16} /><span className="text-sm font-bold">Max Rank!</span>
-                </div>
-              )}
-            </div>
-            <div className="mt-4"><ScoreBreakdown score={myScore} /></div>
-            {myScore.earnedCombos.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {myScore.earnedCombos.map(n => (
-                  <span key={n} className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
-                    <Star size={10} /> {n}
-                  </span>
-                ))}
-              </div>
-            )}
-            {myScore.comboBonus > 0 && (
-              <p className="text-xs text-amber-700 mt-1.5 font-medium">+{myScore.comboBonus} combo EXP bonus included</p>
-            )}
+      {/* 2. Monthly goals (PE for workers) */}
+      {isWorker && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Target size={15} className="text-muted-foreground" />
+              {isWorker ? "My Monthly Goals" : "KPI Progress"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {isWorker && workerRow ? (
+              <>
+                <ProgressBar
+                  label="Revenue"
+                  value={workerRow.revenue.current}
+                  max={workerRow.revenue.target}
+                  color="bg-blue-500"
+                  sub={
+                    workerRow.revenue.target > 0 && workerRow.revenue.current >= workerRow.revenue.target
+                      ? "Target reached"
+                      : undefined
+                  }
+                />
+                <ProgressBar
+                  label="Testing Pipeline"
+                  value={workerRow.testing.current}
+                  max={workerRow.testing.target}
+                  color="bg-green-500"
+                />
+                <ProgressBar
+                  label="Working Campaigns"
+                  value={workerRow.working.current}
+                  max={workerRow.working.target}
+                  color="bg-orange-500"
+                />
+              </>
+            ) : isWorker && workerGoalsLoading ? (
+              <p className="text-sm text-muted-foreground">Loading goals…</p>
+            ) : null}
           </CardContent>
         </Card>
       )}
 
-      {/* Assigned affiliate networks */}
+      {/* 3. Assigned affiliate networks */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
@@ -233,61 +206,45 @@ export default function Profile() {
         </CardContent>
       </Card>
 
+      {/* 4. Activity counters (workers) */}
+      {isWorker && myMetrics && (
+        <OpsActivityCounters
+          loading={workerGoalsLoading}
+          rows={[
+            { label: "Batches Created", value: myMetrics.batches },
+            { label: "Live Campaigns", value: myMetrics.liveCampaigns },
+            { label: "Optimizations Completed", value: myMetrics.optimizations },
+            { label: "Winners Found", value: myMetrics.winners },
+            { label: "Scale Tasks Created", value: myMetrics.scaleTasks },
+          ]}
+        />
+      )}
+
+      {!isWorker && (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* KPI Progress */}
+        {/* KPI Progress (admin legacy) */}
         {myScore && (
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
-                <Target size={15} className="text-muted-foreground" />
-                {isWorker ? "My Monthly Goals" : "KPI Progress"}
+                <Target size={15} className="text-muted-foreground" /> KPI Progress
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {isWorker && workerRow ? (
-                <>
+              {kpiTargets.map((kt, i) => {
+                const val = myScore[kt.key as keyof EmployeeScores] as number ?? 0;
+                const colors = ["bg-blue-500","bg-green-500","bg-orange-500","bg-yellow-500","bg-purple-500","bg-pink-500"];
+                return (
                   <ProgressBar
-                    label="Revenue"
-                    value={workerRow.revenue.current}
-                    max={workerRow.revenue.target}
-                    color="bg-blue-500"
-                    sub={
-                      workerRow.revenue.target > 0 && workerRow.revenue.current >= workerRow.revenue.target
-                        ? "🏆 Target reached!"
-                        : undefined
-                    }
+                    key={kt.id}
+                    label={kt.name}
+                    value={val}
+                    max={kt.monthlyTarget}
+                    color={colors[i % colors.length]}
+                    sub={val >= kt.monthlyTarget ? "Target reached" : undefined}
                   />
-                  <ProgressBar
-                    label="Testing Pipeline"
-                    value={workerRow.testing.current}
-                    max={workerRow.testing.target}
-                    color="bg-green-500"
-                  />
-                  <ProgressBar
-                    label="Working Campaigns"
-                    value={workerRow.working.current}
-                    max={workerRow.working.target}
-                    color="bg-orange-500"
-                  />
-                </>
-              ) : isWorker && workerGoalsLoading ? (
-                <p className="text-sm text-muted-foreground">Loading goals…</p>
-              ) : (
-                kpiTargets.map((kt, i) => {
-                  const val = myScore[kt.key as keyof EmployeeScores] as number ?? 0;
-                  const colors = ["bg-blue-500","bg-green-500","bg-orange-500","bg-yellow-500","bg-purple-500","bg-pink-500"];
-                  return (
-                    <ProgressBar
-                      key={kt.id}
-                      label={kt.name}
-                      value={val}
-                      max={kt.monthlyTarget}
-                      color={colors[i % colors.length]}
-                      sub={val >= kt.monthlyTarget ? "🏆 Target reached!" : undefined}
-                    />
-                  );
-                })
-              )}
+                );
+              })}
             </CardContent>
           </Card>
         )}
@@ -333,20 +290,10 @@ export default function Profile() {
           </CardContent>
         </Card>
       </div>
-
-      {isWorker && myMetrics && (
-        <OpsActivityCounters
-          loading={workerGoalsLoading}
-          rows={[
-            { label: "Batches Created", value: myMetrics.batches },
-            { label: "Live Campaigns", value: myMetrics.liveCampaigns },
-            { label: "Optimizations Completed", value: myMetrics.optimizations },
-            { label: "Winners Found", value: myMetrics.winners },
-            { label: "Scale Tasks Created", value: myMetrics.scaleTasks },
-          ]}
-        />
       )}
 
+      {!isWorker && (
+      <>
       {/* Combo Bonuses */}
       <Card>
         <CardHeader className="pb-3">
@@ -398,7 +345,10 @@ export default function Profile() {
           </div>
         </CardContent>
       </Card>
+      </>
+      )}
 
+      {/* Account info */}
       {/* Admin-only: Bonus Payout Overview */}
       {isAdmin && scores.length > 0 && (
         <Card>

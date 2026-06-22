@@ -63,6 +63,7 @@ import {
   buildReportsGoalDashboard,
   scopeEntitiesForDashboard,
 } from "@/lib/reports/reports-goal-dashboard";
+import { useWorkerMonthlyGoals } from "@/lib/performance-engine/use-worker-monthly-goals";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   AreaChart, Area, Cell,
@@ -472,6 +473,24 @@ export default function Reports() {
 
   const { data: goalsConfigRaw } = useGoalsConfig();
   const kpiTargets = (goalsConfigRaw ?? DEFAULT_CONFIG).kpiTargets ?? [];
+  const { isWorker, workerRow } = useWorkerMonthlyGoals();
+
+  const { data: assignedNetworks = [] } = useQuery({
+    queryKey: ["reports-assigned-networks", activeWorkspaceId, currentEmployee?.id],
+    enabled: isWorker && !!activeWorkspaceId && !!currentEmployee,
+    queryFn: () =>
+      authedJson<{ affiliateNetworkName: string | null }[]>(
+        `/api/worker-affiliate-networks?workspace_id=${activeWorkspaceId}&employee_id=${currentEmployee!.id}`,
+      ),
+  });
+
+  const workerPe = workerRow
+    ? {
+        revenue: { current: workerRow.revenue.current, target: workerRow.revenue.target },
+        testing: { current: workerRow.testing.current, target: workerRow.testing.target },
+        working: { current: workerRow.working.current, target: workerRow.working.target },
+      }
+    : null;
 
   const dashboardEntities = useMemo(
     () => scopeEntitiesForDashboard(filteredReportEntities, isAdmin, currentEmployee?.id),
@@ -479,20 +498,24 @@ export default function Reports() {
   );
 
   const goalDashboard = useMemo(
-    () => buildReportsGoalDashboard(dashboardEntities, employees, kpiTargets),
-    [dashboardEntities, employees, kpiTargets],
+    () => buildReportsGoalDashboard(dashboardEntities, employees, isWorker ? [] : kpiTargets, workerPe),
+    [dashboardEntities, employees, isWorker, kpiTargets, workerPe],
   );
 
-  // Master filter catalogs — full workspace dimensions, not filtered rows only
-  const networks = useMemo(
-    () =>
-      buildMasterStringOptions(
-        affiliateNetworks.map((n) => n.name),
-        ...batches.map((b) => b.affiliateNetwork),
-        ...liveCampaigns.map((c) => c.batchAffiliateNetwork),
-      ),
-    [affiliateNetworks, batches, liveCampaigns],
-  );
+  // Master filter catalogs — worker sees only assigned networks in dropdown
+  const networks = useMemo(() => {
+    if (isWorker) {
+      return buildMasterStringOptions(
+        assignedNetworks.map((n) => n.affiliateNetworkName).filter((n): n is string => !!n),
+        ...filteredReportEntities.map((r) => r.network),
+      );
+    }
+    return buildMasterStringOptions(
+      affiliateNetworks.map((n) => n.name),
+      ...batches.map((b) => b.affiliateNetwork),
+      ...liveCampaigns.map((c) => c.batchAffiliateNetwork),
+    );
+  }, [isWorker, assignedNetworks, affiliateNetworks, batches, liveCampaigns, filteredReportEntities]);
   const geos = useMemo(
     () =>
       buildMasterStringOptions(

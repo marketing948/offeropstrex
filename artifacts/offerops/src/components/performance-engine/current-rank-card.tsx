@@ -1,5 +1,5 @@
+import { useLocation } from "wouter";
 import { useEffect, useRef, useState } from "react";
-import { Link } from "wouter";
 import type { RankTier } from "@/lib/goals-config";
 import { RANK_COLORS } from "@/lib/goals-config";
 import { rankIconFor } from "@/components/performance-engine/rank-icons";
@@ -11,19 +11,22 @@ export function CurrentRankCard({
   progressToNext,
   xpReady,
   variant = "default",
+  href = "/profile",
 }: {
   rank: RankTier | null;
   nextRank: RankTier | null;
   myXp: number;
   progressToNext: number;
   xpReady: boolean;
-  variant?: "default" | "sidebar";
+  variant?: "default" | "sidebar" | "profile";
+  href?: string;
 }) {
   const prevXpRef = useRef<number | null>(null);
   const [xpBurst, setXpBurst] = useState<{ delta: number; id: number } | null>(null);
   const [barWidth, setBarWidth] = useState(progressToNext);
   const RankIcon = rankIconFor(rank);
   const colors = rank ? (RANK_COLORS[rank.color] ?? RANK_COLORS.slate) : RANK_COLORS.slate;
+  const [, setLocation] = useLocation();
 
   useEffect(() => {
     if (!xpReady) return undefined;
@@ -50,25 +53,47 @@ export function CurrentRankCard({
   }, [myXp, progressToNext, xpReady]);
 
   const isSidebar = variant === "sidebar";
+  const isProfile = variant === "profile";
+  const navigable = !isProfile;
   const shellClass = isSidebar
-    ? "relative rounded-lg border p-3 text-xs overflow-visible"
-    : "relative rounded-lg border bg-white p-3 text-xs shadow-sm overflow-visible";
+    ? "relative rounded-lg border p-3 text-xs overflow-visible cursor-pointer transition-colors hover:brightness-[1.02]"
+    : isProfile
+      ? "relative rounded-2xl border-2 p-5 overflow-visible shadow-sm"
+      : "relative rounded-lg border bg-white p-3 text-xs shadow-sm overflow-visible cursor-pointer transition-shadow hover:shadow-md";
   const shellStyle = isSidebar
     ? {
         borderColor: "hsl(var(--sidebar-border))",
         background: "hsl(var(--sidebar-accent) / 0.35)",
       }
-    : undefined;
+    : isProfile && rank
+      ? { borderColor: `var(--tw-${rank.color}-200, hsl(var(--border)))` }
+      : undefined;
   const labelClass = isSidebar
     ? "text-[hsl(var(--sidebar-foreground)/0.55)]"
     : "text-muted-foreground";
   const trackClass = isSidebar ? "bg-[hsl(var(--sidebar-foreground)/0.12)]" : "bg-slate-100";
-  const linkClass = isSidebar
-    ? "text-[hsl(var(--sidebar-primary))] hover:underline mt-2 inline-block"
-    : "text-blue-600 hover:underline mt-2 inline-block";
+  const titleSize = isProfile ? "text-4xl font-black" : "font-bold";
+  const iconSize = isProfile ? 30 : 14;
+  const iconBox = isProfile ? "w-16 h-16 rounded-2xl" : "h-7 w-7 rounded-md";
 
   return (
-    <div className={shellClass} style={shellStyle}>
+    <div
+      className={shellClass}
+      style={shellStyle}
+      role={navigable ? "link" : undefined}
+      tabIndex={navigable ? 0 : undefined}
+      onClick={navigable ? () => setLocation(href) : undefined}
+      onKeyDown={
+        navigable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setLocation(href);
+              }
+            }
+          : undefined
+      }
+    >
       {xpBurst && (
         <span
           key={xpBurst.id}
@@ -78,27 +103,44 @@ export function CurrentRankCard({
         </span>
       )}
 
-      <div className="flex items-center gap-2 mb-1">
-        <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${colors.bg} ${colors.text}`}>
-          <RankIcon size={14} strokeWidth={2.25} />
+      <div className={`flex items-center ${isProfile ? "gap-4" : "gap-2"} mb-1`}>
+        <div className={`flex ${iconBox} shrink-0 items-center justify-center ${colors.bg} ${colors.text}`}>
+          <RankIcon size={iconSize} strokeWidth={2.25} />
         </div>
-        <p className={labelClass}>Your Current Rank</p>
+        <div>
+          <p className={`text-xs font-bold uppercase tracking-widest ${colors.text}`}>
+            {rank?.name ?? "Unranked"}
+          </p>
+          {!isProfile && <p className={labelClass}>Your Current Rank</p>}
+        </div>
       </div>
 
-      <p className={`font-bold ${colors.text}`}>{rank?.name ?? "Unranked"}</p>
-      <p className={`${labelClass} mt-1`}>
-        {myXp.toLocaleString()}
-        {nextRank ? ` / ${nextRank.minScore.toLocaleString()} XP` : " XP"}
+      {!isProfile && <p className={`font-bold ${colors.text}`}>{rank?.name ?? "Unranked"}</p>}
+      <p className={`${isProfile ? titleSize : ""} ${labelClass} mt-1`}>
+        <span className={isProfile ? "text-foreground" : ""}>{myXp.toLocaleString()}</span>
+        {nextRank ? (
+          <span className={isProfile ? " text-muted-foreground text-base font-normal" : ""}>
+            {isProfile ? " / " : " / "}
+            {nextRank.minScore.toLocaleString()} XP
+          </span>
+        ) : (
+          " XP"
+        )}
       </p>
-      <div className={`h-1.5 rounded-full ${trackClass} mt-2 overflow-hidden`}>
+      <div className={`${isProfile ? "h-3" : "h-1.5"} rounded-full ${trackClass} mt-2 overflow-hidden`}>
         <div
-          className="h-full bg-purple-500 rounded-full transition-[width] duration-700 ease-out"
+          className={`h-full rounded-full transition-[width] duration-700 ease-out ${isProfile ? "bg-primary" : "bg-purple-500"}`}
           style={{ width: `${barWidth}%` }}
         />
       </div>
-      <Link href="/performance/ranks" className={linkClass}>
-        {isSidebar ? "View ranks" : "View all ranks"}
-      </Link>
+      {isProfile && nextRank && (
+        <p className="text-xs text-muted-foreground mt-2">
+          <span className="font-semibold text-foreground">
+            {(nextRank.minScore - myXp).toLocaleString()}
+          </span>{" "}
+          XP to {nextRank.name}
+        </p>
+      )}
 
       <style>{`
         @keyframes pe-xp-burst {
