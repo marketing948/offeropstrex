@@ -27,16 +27,21 @@ import { useCurrentRank } from "@/lib/performance-engine/use-current-rank";
 import { CurrentRankCard } from "@/components/performance-engine/current-rank-card";
 import { OpsActivityCounters } from "@/components/operations-hub/ops-activity-counters";
 
-function ProgressBar({ label, value, max, color = "bg-primary", sub }: {
-  label: string; value: number; max: number; color?: string; sub?: string;
+function fmtUsd(n: number) {
+  return `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+function ProgressBar({ label, value, max, color = "bg-primary", sub, format = "number" }: {
+  label: string; value: number; max: number; color?: string; sub?: string; format?: "number" | "currency";
 }) {
   const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
+  const fmt = (n: number) => (format === "currency" ? fmtUsd(n) : String(n));
   return (
     <div className="space-y-1">
       <div className="flex justify-between text-sm">
         <span className="font-medium">{label}</span>
         <span className="text-xs text-muted-foreground">
-          {value} / {max} <span className="font-semibold text-foreground">({pct}%)</span>
+          {fmt(value)} / {fmt(max)} <span className="font-semibold text-foreground">({pct}%)</span>
         </span>
       </div>
       <div className="h-2.5 rounded-full bg-muted overflow-hidden">
@@ -136,7 +141,40 @@ export default function Profile() {
         xpReady={rankData.xpReady}
       />
 
-      {/* 2. Monthly goals (PE for workers) */}
+      {/* 2. Rank tiers — all ranks from config */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Award size={15} className="text-muted-foreground" /> Rank Tiers
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            {sortedRanks.map((r) => {
+              const col = RANK_COLORS[r.color] ?? RANK_COLORS.slate;
+              const Ic = ICON_MAP[r.icon] ?? Target;
+              const isCurrent = myRank?.id === r.id;
+              const unlocked = (rankData.myXp ?? 0) >= r.minScore;
+              return (
+                <div
+                  key={r.id}
+                  className={`rounded-lg border text-center p-3 ${isCurrent ? `${col.border} border-2 ${col.bg}` : unlocked ? "border-border bg-muted/30" : "border-border bg-muted/10 opacity-75"}`}
+                >
+                  <Ic size={20} className={`mx-auto mb-1 ${col.text}`} />
+                  <p className={`text-xs font-bold ${col.text}`}>{r.name}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{expRankThreshold(r.minScore)}</p>
+                  {isCurrent && <p className="text-[10px] font-bold text-primary mt-1">Current</p>}
+                  {!isCurrent && unlocked && (
+                    <p className="text-[10px] font-semibold text-green-700 mt-1">Unlocked</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 3. Monthly goals (PE for workers) */}
       {isWorker && (
         <Card>
           <CardHeader className="pb-3">
@@ -153,6 +191,7 @@ export default function Profile() {
                   value={workerRow.revenue.current}
                   max={workerRow.revenue.target}
                   color="bg-blue-500"
+                  format="currency"
                   sub={
                     workerRow.revenue.target > 0 && workerRow.revenue.current >= workerRow.revenue.target
                       ? "Target reached"
@@ -179,7 +218,7 @@ export default function Profile() {
         </Card>
       )}
 
-      {/* 3. Assigned affiliate networks */}
+      {/* 4. Assigned affiliate networks */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
@@ -206,7 +245,7 @@ export default function Profile() {
         </CardContent>
       </Card>
 
-      {/* 4. Activity counters (workers) */}
+      {/* 5. Activity counters (workers) */}
       {isWorker && myMetrics && (
         <OpsActivityCounters
           loading={workerGoalsLoading}

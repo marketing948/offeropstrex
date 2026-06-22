@@ -28,6 +28,18 @@ export function invalidateWorkerRankAndGoals(
   void qc.invalidateQueries({ queryKey: ["monthly-goals", workspaceId, monthKey] });
 }
 
+/** Await refetch so rank cards see xp_ledger changes immediately after task completion. */
+export async function refetchWorkerRankAndGoals(
+  qc: QueryClient,
+  workspaceId: number | null | undefined,
+  employeeId: number | null | undefined,
+) {
+  const monthKey = currentMonthKey();
+  const rankKey = workerMonthlyGoalsQueryKey(workspaceId, monthKey, employeeId);
+  invalidateWorkerRankAndGoals(qc, workspaceId, employeeId);
+  await qc.refetchQueries({ queryKey: rankKey, type: "active" });
+}
+
 export function useWorkerMonthlyGoals(enabled = true) {
   const { currentEmployee } = useAuth();
   const { activeWorkspaceId } = useWorkspace();

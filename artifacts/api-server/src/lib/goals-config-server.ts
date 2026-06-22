@@ -38,12 +38,34 @@ export type ServerGoalsConfig = {
   kpiTargets: { key: string; monthlyTarget: number }[];
 };
 
+/** Legacy pointActions defaults — must match frontend DEFAULT_CONFIG / awardTaskCompletionXp legacy ids. */
+export const DEFAULT_POINT_ACTIONS: ServerGoalsConfig["pointActions"] = [
+  { id: "batchCreated", name: "Batch Created", points: 2, enabled: true, category: "activity" },
+  { id: "campaignLive", name: "Campaign Marked Live", points: 3, enabled: true, category: "activity" },
+  { id: "optimizationCompleted", name: "Optimization Completed", points: 5, enabled: true, category: "activity" },
+  { id: "scaleTaskCompleted", name: "Scale Task Completed", points: 6, enabled: true, category: "activity" },
+  { id: "taskCompleted", name: "Task Completed On Time", points: 1, enabled: true, category: "activity" },
+  { id: "retestedOffer", name: "Retest Completed", points: 4, enabled: true, category: "activity" },
+  { id: "winnerFound", name: "Winner Found", points: 10, enabled: true, category: "winner" },
+  { id: "winnerMoved", name: "Winner Moved to Scale", points: 20, enabled: true, category: "winner" },
+  { id: "successfulOptimization", name: "Successful Optimization", points: 10, enabled: true, category: "optimization" },
+  { id: "noOverdueTasks", name: "No Overdue Tasks Bonus", points: 10, enabled: true, category: "discipline" },
+  { id: "allTasksOnTime", name: "All Tasks On Time Bonus", points: 15, enabled: true, category: "discipline" },
+];
+
 const EMPTY_CONFIG: ServerGoalsConfig = {
   workerGoalTargets: [],
-  pointActions: [],
+  pointActions: [...DEFAULT_POINT_ACTIONS],
   eventPointRules: [],
   kpiTargets: [],
 };
+
+function resolvePointActions(parsed: Partial<ServerGoalsConfig>): ServerGoalsConfig["pointActions"] {
+  if (!("pointActions" in parsed)) {
+    return [...DEFAULT_POINT_ACTIONS];
+  }
+  return Array.isArray(parsed.pointActions) ? parsed.pointActions : [...DEFAULT_POINT_ACTIONS];
+}
 
 export async function loadGoalsConfig(workspaceId: number): Promise<ServerGoalsConfig> {
   const raw = await getSettingValue(workspaceId, "goals_config");
@@ -52,7 +74,7 @@ export async function loadGoalsConfig(workspaceId: number): Promise<ServerGoalsC
     const parsed = JSON.parse(raw) as Partial<ServerGoalsConfig>;
     return {
       workerGoalTargets: Array.isArray(parsed.workerGoalTargets) ? parsed.workerGoalTargets : [],
-      pointActions: Array.isArray(parsed.pointActions) ? parsed.pointActions : [],
+      pointActions: resolvePointActions(parsed),
       eventPointRules: Array.isArray(parsed.eventPointRules) ? parsed.eventPointRules : [],
       kpiTargets: Array.isArray(parsed.kpiTargets) ? parsed.kpiTargets : [],
     };

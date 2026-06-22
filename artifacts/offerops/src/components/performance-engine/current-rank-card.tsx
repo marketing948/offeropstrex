@@ -69,7 +69,7 @@ export function CurrentRankCard({
       ? { borderColor: `var(--tw-${rank.color}-200, hsl(var(--border)))` }
       : undefined;
   const labelClass = isSidebar
-    ? "text-[hsl(var(--sidebar-foreground)/0.55)]"
+    ? "text-white/90"
     : "text-muted-foreground";
   const trackClass = isSidebar ? "bg-[hsl(var(--sidebar-foreground)/0.12)]" : "bg-slate-100";
   const titleSize = isProfile ? "text-4xl font-black" : "font-bold";
@@ -115,9 +115,9 @@ export function CurrentRankCard({
         </div>
       </div>
 
-      {!isProfile && <p className={`font-bold ${colors.text}`}>{rank?.name ?? "Unranked"}</p>}
-      <p className={`${isProfile ? titleSize : ""} ${labelClass} mt-1`}>
-        <span className={isProfile ? "text-foreground" : ""}>{myXp.toLocaleString()}</span>
+      {!isProfile && <p className={`font-bold ${isSidebar ? "text-white" : colors.text}`}>{rank?.name ?? "Unranked"}</p>}
+      <p className={`${isProfile ? titleSize : ""} ${isSidebar ? "text-white/80" : labelClass} mt-1`}>
+        <span className={isProfile ? "text-foreground" : isSidebar ? "text-white font-semibold" : ""}>{myXp.toLocaleString()}</span>
         {nextRank ? (
           <span className={isProfile ? " text-muted-foreground text-base font-normal" : ""}>
             {isProfile ? " / " : " / "}

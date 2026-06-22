@@ -45,7 +45,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { useAuth } from "@/lib/auth";
-import { invalidateWorkerRankAndGoals } from "@/lib/performance-engine/use-worker-monthly-goals";
+import { refetchWorkerRankAndGoals } from "@/lib/performance-engine/use-worker-monthly-goals";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useToast } from "@/hooks/use-toast";
 import { authedJson } from "@/lib/api-fetch";
@@ -562,7 +562,7 @@ function useCompleteTask(task: TodoTask) {
         method: "POST",
         body: JSON.stringify(body),
       });
-      invalidateWorkerRankAndGoals(queryClient, activeWorkspaceId, currentEmployee?.id);
+      await refetchWorkerRankAndGoals(queryClient, activeWorkspaceId, currentEmployee?.id);
       celebrateTaskCompletion(task, expOpts);
       return true;
     } catch (e: unknown) {

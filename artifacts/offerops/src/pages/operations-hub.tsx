@@ -27,6 +27,9 @@ import {
 import { TodaysFocusCard } from "@/components/operations-hub/todays-focus-card";
 import { RevenueByNetworkSection } from "@/components/operations-hub/revenue-by-network-section";
 import { OpenTasksPanel } from "@/components/operations-hub/open-tasks-panel";
+import { OpsActivityCounters } from "@/components/operations-hub/ops-activity-counters";
+import { useAuth } from "@/lib/auth";
+import { computeMetrics } from "@/lib/goals-config";
 import {
   OpsActionDrilldown,
   useOpsDrilldownRoute,
@@ -49,6 +52,8 @@ const campaignCast = (campaigns: unknown[]): OpsCampaignRow[] =>
   campaigns as OpsCampaignRow[];
 
 export default function OperationsHub() {
+  const { currentEmployee } = useAuth();
+  const isWorker = currentEmployee?.role !== "admin";
   const { activeWorkspaceId } = useWorkspace();
   const [, nav] = useLocation();
   const wsId = activeWorkspaceId ?? 0;
@@ -83,6 +88,23 @@ export default function OperationsHub() {
     winnersParams,
     wsQueryOpts(activeWorkspaceId, getListPerformanceQueryKey(winnersParams)),
   );
+
+  const activityMetrics = useMemo(() => {
+    if (!currentEmployee || !isWorker) return null;
+    return computeMetrics(
+      {
+        id: currentEmployee.id,
+        name: currentEmployee.name,
+        role: currentEmployee.role,
+        status: "active",
+        email: currentEmployee.email,
+        createdAt: new Date().toISOString(),
+      },
+      batches,
+      offers,
+      tasks,
+    );
+  }, [currentEmployee, isWorker, batches, offers, tasks]);
 
   const stats = useMemo(() => {
     const liveCampaigns = campaigns.filter((c) => c.status === "live").length;
@@ -155,7 +177,6 @@ export default function OperationsHub() {
             batches={batches}
             campaigns={campaignsTyped}
             tasks={tasks}
-            offers={offers}
             loading={loading}
             selectedMetric={selectedMetric}
             onSelectMetric={setSelectedMetric}
@@ -180,6 +201,19 @@ export default function OperationsHub() {
             unattributedRevenueMtd={drilldown.unattributedRevenueMtd}
             loading={loading}
           />
+
+          {isWorker && (
+            <OpsActivityCounters
+              loading={loading}
+              rows={[
+                { label: "Batches Created", value: activityMetrics?.batches ?? batches.length },
+                { label: "Live Campaigns", value: activityMetrics?.liveCampaigns ?? 0 },
+                { label: "Optimizations Completed", value: activityMetrics?.optimizations ?? 0 },
+                { label: "Winners Found", value: activityMetrics?.winners ?? 0 },
+                { label: "Scale Tasks Created", value: activityMetrics?.scaleTasks ?? 0 },
+              ]}
+            />
+          )}
 
           <TodaysFocusCard
             focus={drilldown.focus}
