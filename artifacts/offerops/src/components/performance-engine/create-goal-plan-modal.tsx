@@ -5,10 +5,17 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   Select,
   SelectContent,
@@ -17,8 +24,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { ChevronDown, AlertTriangle } from "lucide-react";
 import {
-  currentMonthKey,
   upsertWorkerGoal,
   DuplicateGoalError,
   type UpsertWorkerGoalPayload,
@@ -27,6 +34,52 @@ import {
 type Employee = { id: number; name: string };
 type Network = { id: number; name: string };
 type Geo = { id: number; code: string };
+
+type GoalMetric = "revenue" | "testingBatches" | "workingCampaigns";
+
+type GoalRowState = {
+  enabled: boolean;
+  target: string;
+  xp: string;
+};
+
+const METRIC_ROWS: {
+  key: GoalMetric;
+  title: string;
+  targetLabel: string;
+  targetPlaceholder: string;
+  defaultXp: string;
+}[] = [
+  {
+    key: "revenue",
+    title: "Revenue Goal",
+    targetLabel: "Target revenue ($)",
+    targetPlaceholder: "0",
+    defaultXp: "500",
+  },
+  {
+    key: "testingBatches",
+    title: "Testing Goal",
+    targetLabel: "Target tests / batches",
+    targetPlaceholder: "0",
+    defaultXp: "200",
+  },
+  {
+    key: "workingCampaigns",
+    title: "Working Campaigns Goal",
+    targetLabel: "Target working campaigns",
+    targetPlaceholder: "0",
+    defaultXp: "300",
+  },
+];
+
+function emptyRows(): Record<GoalMetric, GoalRowState> {
+  return {
+    revenue: { enabled: false, target: "", xp: "500" },
+    testingBatches: { enabled: false, target: "", xp: "200" },
+    workingCampaigns: { enabled: false, target: "", xp: "300" },
+  };
+}
 
 export function CreateGoalPlanModal({
   open,
@@ -48,27 +101,32 @@ export function CreateGoalPlanModal({
   onSaved: () => void;
 }) {
   const { toast } = useToast();
-  const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
-  const [duplicateId, setDuplicateId] = useState<string | null>(null);
+  const [duplicateConflict, setDuplicateConflict] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const [employeeId, setEmployeeId] = useState<number>(employees[0]?.id ?? 0);
   const [month, setMonth] = useState(monthKey);
-  const [revenueTarget, setRevenueTarget] = useState("");
-  const [testingTarget, setTestingTarget] = useState("");
-  const [workingTarget, setWorkingTarget] = useState("");
-  const [revenueXp, setRevenueXp] = useState("500");
-  const [testingXp, setTestingXp] = useState("200");
-  const [workingXp, setWorkingXp] = useState("300");
-  const [networkName, setNetworkName] = useState<string>("");
-  const [geoCode, setGeoCode] = useState<string>("");
+  const [rows, setRows] = useState(emptyRows);
+  const [networkName, setNetworkName] = useState("");
+  const [geoCode, setGeoCode] = useState("");
 
-  async function saveGoals(replaceExisting = false) {
-    setSaving(true);
-    setDuplicateId(null);
+  function resetForm() {
+    setRows(emptyRows());
+    setNetworkName("");
+    setGeoCode("");
+    setDuplicateConflict(false);
+    setAdvancedOpen(false);
+    setMonth(monthKey);
+    setEmployeeId(employees[0]?.id ?? 0);
+  }
+
+  function updateRow(metric: GoalMetric, patch: Partial<GoalRowState>) {
+    setRows((prev) => ({ ...prev, [metric]: { ...prev[metric], ...patch } }));
+  }
+
+  function buildSpecs(): UpsertWorkerGoalPayload["goal"][] {
     const emp = employees.find((e) => e.id === employeeId);
-    const specs: UpsertWorkerGoalPayload["goal"][] = [];
-
     const base = {
       employeeId,
       employeeName: emp?.name,
@@ -80,36 +138,30 @@ export function CreateGoalPlanModal({
       geoCode: geoCode || null,
     };
 
-    if (Number(revenueTarget) > 0) {
-      specs.push({
-        ...base,
-        id: `wg_rev_${employeeId}_${month}_${Date.now()}`,
-        metricKey: "revenue",
-        monthlyTarget: Number(revenueTarget),
-        xpReward: Number(revenueXp) || 0,
-      });
-    }
-    if (Number(testingTarget) > 0) {
-      specs.push({
-        ...base,
-        id: `wg_test_${employeeId}_${month}_${Date.now() + 1}`,
-        metricKey: "testingBatches",
-        monthlyTarget: Number(testingTarget),
-        xpReward: Number(testingXp) || 0,
-      });
-    }
-    if (Number(workingTarget) > 0) {
-      specs.push({
-        ...base,
-        id: `wg_work_${employeeId}_${month}_${Date.now() + 2}`,
-        metricKey: "workingCampaigns",
-        monthlyTarget: Number(workingTarget),
-        xpReward: Number(workingXp) || 0,
-      });
-    }
+    const specs: UpsertWorkerGoalPayload["goal"][] = [];
+    const ts = Date.now();
 
+    for (const def of METRIC_ROWS) {
+      const row = rows[def.key];
+      if (!row.enabled || Number(row.target) <= 0) continue;
+      specs.push({
+        ...base,
+        id: `wg_${def.key}_${employeeId}_${month}_${ts}_${specs.length}`,
+        metricKey: def.key,
+        monthlyTarget: Number(row.target),
+        xpReward: Number(row.xp) || 0,
+      });
+    }
+    return specs;
+  }
+
+  async function saveGoals(replaceExisting = false) {
+    setSaving(true);
+    setDuplicateConflict(false);
+
+    const specs = buildSpecs();
     if (specs.length === 0) {
-      toast({ title: "Add at least one target", variant: "destructive" });
+      toast({ title: "Enable at least one goal with a target", variant: "destructive" });
       setSaving(false);
       return;
     }
@@ -121,13 +173,13 @@ export function CreateGoalPlanModal({
       toast({ title: "Monthly goal plan saved" });
       onSaved();
       onOpenChange(false);
-      setStep(1);
+      resetForm();
     } catch (err) {
       if (err instanceof DuplicateGoalError) {
-        setDuplicateId(err.existingGoal?.id ?? "conflict");
+        setDuplicateConflict(true);
         toast({
-          title: "Goal already exists",
-          description: "Use Replace existing goal to update targets for this worker/month/metric.",
+          title: "Duplicate goal",
+          description: "A goal already exists for this worker/month/metric/scope.",
           variant: "destructive",
         });
       } else {
@@ -140,116 +192,160 @@ export function CreateGoalPlanModal({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) resetForm();
+        onOpenChange(v);
+      }}
+    >
+      <DialogContent className="max-w-[760px] w-[95vw] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Create Monthly Goal Plan — Step {step} of 4</DialogTitle>
+          <DialogTitle>Create Monthly Goal Plan</DialogTitle>
+          <DialogDescription>
+            Set monthly targets and XP rewards for a worker.
+          </DialogDescription>
         </DialogHeader>
 
-        {step === 1 && (
-          <div className="space-y-3">
-            <div>
-              <Label>Month</Label>
-              <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-            </div>
-            <div>
-              <Label>Worker</Label>
-              <Select value={String(employeeId)} onValueChange={(v) => setEmployeeId(Number(v))}>
-                <SelectTrigger><SelectValue placeholder="Select worker" /></SelectTrigger>
-                <SelectContent>
-                  {employees.map((e) => (
-                    <SelectItem key={e.id} value={String(e.id)}>{e.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <Label>Month</Label>
+            <Input type="month" className="mt-1" value={month} onChange={(e) => setMonth(e.target.value)} />
           </div>
-        )}
-
-        {step === 2 && (
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <Label>Revenue goal ($)</Label>
-              <Input type="number" min={0} value={revenueTarget} onChange={(e) => setRevenueTarget(e.target.value)} />
-              <Label className="mt-2 text-xs text-muted-foreground">XP reward</Label>
-              <Input type="number" min={0} value={revenueXp} onChange={(e) => setRevenueXp(e.target.value)} />
-            </div>
-            <div>
-              <Label>Testing goal (count)</Label>
-              <Input type="number" min={0} value={testingTarget} onChange={(e) => setTestingTarget(e.target.value)} />
-              <Label className="mt-2 text-xs text-muted-foreground">XP reward</Label>
-              <Input type="number" min={0} value={testingXp} onChange={(e) => setTestingXp(e.target.value)} />
-            </div>
-            <div className="sm:col-span-2">
-              <Label>Working campaigns goal</Label>
-              <Input type="number" min={0} value={workingTarget} onChange={(e) => setWorkingTarget(e.target.value)} />
-              <Label className="mt-2 text-xs text-muted-foreground">XP reward</Label>
-              <Input type="number" min={0} value={workingXp} onChange={(e) => setWorkingXp(e.target.value)} />
-            </div>
+          <div>
+            <Label>Worker</Label>
+            <Select value={String(employeeId)} onValueChange={(v) => setEmployeeId(Number(v))}>
+              <SelectTrigger className="mt-1"><SelectValue placeholder="Select worker" /></SelectTrigger>
+              <SelectContent>
+                {employees.map((e) => (
+                  <SelectItem key={e.id} value={String(e.id)}>{e.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-        )}
+        </div>
 
-        {step === 3 && (
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">Optional breakdown dimensions (leave blank for worker-wide goals).</p>
-            <div>
-              <Label>Affiliate Network</Label>
-              <Select value={networkName || "none"} onValueChange={(v) => setNetworkName(v === "none" ? "" : v)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Any network</SelectItem>
-                  {networks.map((n) => (
-                    <SelectItem key={n.id} value={n.name}>{n.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>GEO</Label>
-              <Select value={geoCode || "none"} onValueChange={(v) => setGeoCode(v === "none" ? "" : v)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Any GEO</SelectItem>
-                  {geos.map((g) => (
-                    <SelectItem key={g.id} value={g.code}>{g.code}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        )}
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold">Goal Targets</h3>
+          {METRIC_ROWS.map((def) => {
+            const row = rows[def.key];
+            return (
+              <div
+                key={def.key}
+                className={`rounded-lg border p-4 transition-colors ${
+                  row.enabled ? "border-border bg-card" : "border-dashed bg-muted/20"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <p className="font-medium text-sm">{def.title}</p>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor={`enable-${def.key}`} className="text-xs text-muted-foreground">
+                      Enabled
+                    </Label>
+                    <Switch
+                      id={`enable-${def.key}`}
+                      checked={row.enabled}
+                      onCheckedChange={(v) => updateRow(def.key, { enabled: v })}
+                    />
+                  </div>
+                </div>
+                {row.enabled && (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <Label className="text-xs">{def.targetLabel}</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        className="mt-1"
+                        placeholder={def.targetPlaceholder}
+                        value={row.target}
+                        onChange={(e) => updateRow(def.key, { target: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs">XP reward</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        className="mt-1"
+                        value={row.xp}
+                        onChange={(e) => updateRow(def.key, { xp: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
 
-        {step === 4 && (
-          <div className="space-y-2 text-sm">
-            <p><strong>Worker:</strong> {employees.find((e) => e.id === employeeId)?.name}</p>
-            <p><strong>Month:</strong> {month}</p>
-            {Number(revenueTarget) > 0 && <p>Revenue: ${Number(revenueTarget).toLocaleString()} · {revenueXp} XP</p>}
-            {Number(testingTarget) > 0 && <p>Testing: {testingTarget} · {testingXp} XP</p>}
-            {Number(workingTarget) > 0 && <p>Working: {workingTarget} · {workingXp} XP</p>}
-            {duplicateId && (
-              <p className="text-destructive text-xs">
-                A matching goal exists. Save will fail unless you replace the existing goal.
+        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="flex w-full items-center justify-between rounded-lg border px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/40"
+            >
+              Advanced Breakdown
+              <ChevronDown size={16} className={`transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-3 space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Optional network / GEO scope for all enabled goals in this plan. Leave blank for worker-wide targets.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label>Affiliate Network</Label>
+                <Select value={networkName || "none"} onValueChange={(v) => setNetworkName(v === "none" ? "" : v)}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Any network</SelectItem>
+                    {networks.map((n) => (
+                      <SelectItem key={n.id} value={n.name}>{n.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>GEO</Label>
+                <Select value={geoCode || "none"} onValueChange={(v) => setGeoCode(v === "none" ? "" : v)}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Any GEO</SelectItem>
+                    {geos.map((g) => (
+                      <SelectItem key={g.id} value={g.code}>{g.code}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+
+        {duplicateConflict && (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 flex gap-2 text-sm">
+            <AlertTriangle className="text-destructive shrink-0 mt-0.5" size={16} />
+            <div>
+              <p className="font-medium text-destructive">A goal already exists for this worker/month/metric/scope.</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Replace the existing goal to update targets, or cancel and adjust your selection.
               </p>
-            )}
+            </div>
           </div>
         )}
 
-        <DialogFooter className="gap-2 flex-wrap">
-          {step > 1 && (
-            <Button variant="outline" onClick={() => setStep((s) => s - 1)}>Back</Button>
+        <DialogFooter className="gap-2 flex-wrap sm:justify-end">
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            Cancel
+          </Button>
+          {duplicateConflict && (
+            <Button variant="secondary" disabled={saving} onClick={() => saveGoals(true)}>
+              Replace existing goal
+            </Button>
           )}
-          {step < 4 ? (
-            <Button onClick={() => setStep((s) => s + 1)}>Continue</Button>
-          ) : (
-            <>
-              <Button variant="outline" disabled={saving} onClick={() => saveGoals(true)}>
-                Replace existing goal
-              </Button>
-              <Button disabled={saving} onClick={() => saveGoals(false)}>
-                {saving ? "Saving…" : "Save plan"}
-              </Button>
-            </>
-          )}
+          <Button disabled={saving} onClick={() => saveGoals(false)}>
+            {saving ? "Saving…" : "Save Goal Plan"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

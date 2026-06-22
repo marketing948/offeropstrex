@@ -19,6 +19,10 @@ import { currentMonthKey, monthKeyToRange } from "../lib/xp-award-service.ts";
 import { loadGoalsConfig, findDuplicateGoal, goalsForMonth } from "../lib/goals-config-server.ts";
 import { getSettingValue, upsertSetting } from "../lib/settings-store.ts";
 import { awardXp, rewardRuleIdempotencyKey } from "../lib/xp-award-service.ts";
+import {
+  findEnabledPointAction,
+  resolveTaskXpActionType,
+} from "../lib/performance-action-catalog.ts";
 
 const router: IRouter = Router();
 
@@ -313,31 +317,22 @@ export async function awardTaskCompletionXp(
   client: Parameters<typeof awardXp>[0] = db,
 ): Promise<void> {
   const cfg = await loadGoalsConfig(workspaceId);
-  const actionMap: Record<string, string> = {
-    GO_LIVE: "campaignLive",
-    take_campaign_live: "campaignLive",
-    OPTIMIZATION_FOLLOWUP: "optimizationCompleted",
-    MOVE_WINNERS_TO_SCALED_CAMPAIGN: "scaleTaskCompleted",
-    FIND_WINNERS: "taskCompleted",
-    find_winners: "taskCompleted",
-    review_winners_target: "winnerFound",
-    MANUAL: "taskCompleted",
-  };
-  const actionId = actionMap[taskType] ?? "taskCompleted";
-  const action = cfg.pointActions.find((a) => a.id === actionId && a.enabled);
-  if (!action || action.points <= 0) return;
+  const catalogActionType = resolveTaskXpActionType(taskType);
+  const action = findEnabledPointAction(cfg.pointActions, catalogActionType);
+  if (!action || (action.points ?? 0) <= 0) return;
 
+  const ruleId = action.id;
   const monthKey = currentMonthKey();
   await awardXp(client, {
     workspaceId,
     employeeId,
     monthKey,
-    amount: action.points,
+    amount: action.points ?? 0,
     sourceType: "reward_rule",
-    idempotencyKey: rewardRuleIdempotencyKey(workspaceId, employeeId, actionId, taskType, String(taskId)),
-    rewardRuleId: actionId,
-    actionType: taskType,
+    idempotencyKey: rewardRuleIdempotencyKey(workspaceId, employeeId, ruleId, catalogActionType, String(taskId)),
+    rewardRuleId: ruleId,
+    actionType: catalogActionType,
     entityId: String(taskId),
-    metadata: { actionName: action.name },
+    metadata: { actionName: action.name, taskType },
   });
 }

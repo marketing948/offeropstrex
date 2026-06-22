@@ -4,8 +4,8 @@ import { useAuth } from "@/lib/auth";
 import {
   useGoalsConfig, useUpdateGoalsConfig, useGoalsAuditLog,
   computeScores, getRankForScore, RANK_COLORS, DEFAULT_CONFIG, ensureGoalsConfig,
-  type GoalsConfig, type PointAction, type ComboBonus, type RankTier,
-  type Penalty, type BonusEvent, type KpiTarget,
+  type GoalsConfig, type ComboBonus, type RankTier,
+  type KpiTarget,
 } from "@/lib/goals-config";
 import {
   useListEmployees, useListTestingBatches, useListOffers, useListTodoTasks,
@@ -28,6 +28,9 @@ import {
 } from "lucide-react";
 import { WorkerGoalsTab } from "@/components/admin-goals/worker-goals-tab";
 import { EventPointRulesTab } from "@/components/admin-goals/event-point-rules-tab";
+import { XpRulesTab } from "@/components/performance-engine/xp-rules-tab";
+import { PenaltyRulesTab } from "@/components/performance-engine/penalty-rules-tab";
+import { BonusEventsConfigTab } from "@/components/performance-engine/bonus-events-config-tab";
 
 // ─────────────────────────────────────────────────────────────────
 // Constants
@@ -44,13 +47,6 @@ const TRIGGER_TYPES = [
   { value: "batches_monthly", label: "Batches created (monthly)" },
   { value: "tasks_completed_monthly", label: "Tasks completed (monthly)" },
   { value: "no_overdue_tasks", label: "No overdue tasks" },
-];
-const PENALTY_TRIGGERS = [
-  { value: "overdue_task", label: "Per overdue task" },
-  { value: "inactive_batch", label: "Batch stuck too long" },
-  { value: "delayed_optimization", label: "Delayed optimization" },
-  { value: "delayed_scaling", label: "Delayed scaling" },
-  { value: "incorrect_workflow", label: "Incorrect workflow usage" },
 ];
 
 type Tab = "points" | "ranks" | "combos" | "penalties" | "events" | "workerGoals" | "eventRules" | "kpis" | "audit";
@@ -75,109 +71,6 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
         : <ToggleLeft size={22} className="text-muted-foreground" />
       }
     </button>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────
-// Tab: Point System
-// ─────────────────────────────────────────────────────────────────
-function PointSystemTab({ cfg, onChange }: { cfg: GoalsConfig; onChange: (c: GoalsConfig) => void }) {
-  const categories: PointAction["category"][] = ["activity", "winner", "optimization", "discipline"];
-  const catLabels: Record<string, string> = {
-    activity: "Activity", winner: "Winner Discovery", optimization: "Optimization", discipline: "Discipline",
-  };
-  const catColors: Record<string, string> = {
-    activity: "text-blue-700 bg-blue-50 border-blue-200",
-    winner: "text-green-700 bg-green-50 border-green-200",
-    optimization: "text-orange-700 bg-orange-50 border-orange-200",
-    discipline: "text-purple-700 bg-purple-50 border-purple-200",
-  };
-
-  function updateAction(id: string, patch: Partial<PointAction>) {
-    onChange({ ...cfg, pointActions: cfg.pointActions.map(a => a.id === id ? { ...a, ...patch } : a) });
-  }
-  function addAction(category: PointAction["category"]) {
-    const newAction: PointAction = {
-      id: `pa_${Date.now()}`, name: "New Action", description: "Custom scoring action",
-      points: 5, enabled: true, category,
-    };
-    onChange({ ...cfg, pointActions: [...cfg.pointActions, newAction] });
-  }
-  function removeAction(id: string) {
-    onChange({ ...cfg, pointActions: cfg.pointActions.filter(a => a.id !== id) });
-  }
-
-  // Weight editor
-  function updateWeight(key: keyof GoalsConfig["weights"], val: number) {
-    onChange({ ...cfg, weights: { ...cfg.weights, [key]: val / 100 } });
-  }
-  const w = cfg.weights;
-  const weightTotal = Math.round((w.activity + w.winner + w.optimization + w.discipline) * 100);
-
-  return (
-    <div className="space-y-6">
-      {/* Score weights */}
-      <div>
-        <h3 className="text-sm font-semibold text-foreground mb-3">Score Category Weights</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {([["activity","Activity","text-blue-700 bg-blue-50"],["winner","Winners","text-green-700 bg-green-50"],["optimization","Optimization","text-orange-700 bg-orange-50"],["discipline","Discipline","text-purple-700 bg-purple-50"]] as const).map(([key, label, cls]) => (
-            <div key={key} className={`rounded-lg p-3 ${cls.split(" ")[1]}`}>
-              <p className={`text-xs font-semibold mb-1 ${cls.split(" ")[0]}`}>{label}</p>
-              <div className="flex items-center gap-1">
-                <Input type="number" min={0} max={100} step={5} className="h-7 text-sm w-16"
-                  value={Math.round(cfg.weights[key as keyof GoalsConfig["weights"]] * 100)}
-                  onChange={e => updateWeight(key as keyof GoalsConfig["weights"], Number(e.target.value))}
-                />
-                <span className={`text-sm font-bold ${cls.split(" ")[0]}`}>%</span>
-              </div>
-            </div>
-          ))}
-        </div>
-        <p className={`text-xs mt-2 font-medium ${weightTotal !== 100 ? "text-red-600" : "text-muted-foreground"}`}>
-          Total: {weightTotal}% {weightTotal !== 100 ? "(must equal 100%)" : "✓"}
-        </p>
-      </div>
-
-      {/* Point actions by category */}
-      {categories.map(cat => {
-        const actions = cfg.pointActions.filter(a => a.category === cat);
-        const clsBadge = catColors[cat];
-        return (
-          <div key={cat}>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className={`text-xs font-bold uppercase tracking-widest px-2 py-1 rounded-full border ${clsBadge}`}>{catLabels[cat]}</h3>
-              <button onClick={() => addAction(cat)} className="text-xs text-primary hover:underline flex items-center gap-1">
-                <Plus size={11} /> Add action
-              </button>
-            </div>
-            <div className="space-y-2">
-              {actions.map(a => (
-                <div key={a.id} className={`rounded-lg border p-3 ${a.enabled ? "border-border bg-card" : "border-border/40 bg-muted/20"}`}>
-                  <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_80px_32px_32px] gap-2 items-end">
-                    <FieldRow label="Action Name">
-                      <Input className="h-8 text-sm" value={a.name} onChange={e => updateAction(a.id, { name: e.target.value })} />
-                    </FieldRow>
-                    <FieldRow label="Description">
-                      <Input className="h-8 text-sm" value={a.description} onChange={e => updateAction(a.id, { description: e.target.value })} />
-                    </FieldRow>
-                    <FieldRow label="Points">
-                      <Input type="number" className="h-8 text-sm" value={a.points} onChange={e => updateAction(a.id, { points: Number(e.target.value) })} />
-                    </FieldRow>
-                    <div className="flex items-end pb-0.5"><Toggle checked={a.enabled} onChange={v => updateAction(a.id, { enabled: v })} /></div>
-                    <div className="flex items-end pb-1">
-                      <button onClick={() => removeAction(a.id)} className="text-muted-foreground hover:text-destructive">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {actions.length === 0 && <p className="text-xs text-muted-foreground italic">No actions in this category.</p>}
-            </div>
-          </div>
-        );
-      })}
-    </div>
   );
 }
 
@@ -332,140 +225,6 @@ function CombosTab({ cfg, onChange }: { cfg: GoalsConfig; onChange: (c: GoalsCon
               <span className="text-xs text-muted-foreground">(0 = unlimited)</span>
             </div>
           </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────
-// Tab: Penalties
-// ─────────────────────────────────────────────────────────────────
-function PenaltiesTab({ cfg, onChange }: { cfg: GoalsConfig; onChange: (c: GoalsConfig) => void }) {
-  function updatePenalty(id: string, patch: Partial<Penalty>) {
-    onChange({ ...cfg, penalties: cfg.penalties.map(p => p.id === id ? { ...p, ...patch } : p) });
-  }
-  function addPenalty() {
-    onChange({ ...cfg, penalties: [...cfg.penalties, {
-      id: `p_${Date.now()}`, name: "New Penalty", description: "Describe the penalty",
-      triggerCondition: "overdue_task", pointsDeducted: 5, enabled: false,
-    }] });
-  }
-  function deletePenalty(id: string) {
-    onChange({ ...cfg, penalties: cfg.penalties.filter(p => p.id !== id) });
-  }
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">Penalties deduct points for operational lapses. Disabled penalties have no effect.</p>
-        <Button variant="outline" size="sm" onClick={addPenalty} className="h-8 text-xs">
-          <Plus size={12} className="mr-1" /> Add Penalty
-        </Button>
-      </div>
-      {cfg.penalties.map(p => (
-        <div key={p.id} className={`rounded-lg border p-4 ${p.enabled ? "border-red-200 bg-red-50/30" : "border-border/40 bg-muted/20"}`}>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <Toggle checked={p.enabled} onChange={v => updatePenalty(p.id, { enabled: v })} />
-              <span className={`text-sm font-semibold ${p.enabled ? "text-red-700" : "text-muted-foreground"}`}>{p.name}</span>
-              {p.enabled && <span className="text-xs font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded-full">−{p.pointsDeducted} pts</span>}
-            </div>
-            <button onClick={() => deletePenalty(p.id)} className="text-muted-foreground hover:text-destructive">
-              <Trash2 size={14} />
-            </button>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <FieldRow label="Penalty Name">
-              <Input className="h-8 text-sm" value={p.name} onChange={e => updatePenalty(p.id, { name: e.target.value })} />
-            </FieldRow>
-            <FieldRow label="Description">
-              <Input className="h-8 text-sm" value={p.description} onChange={e => updatePenalty(p.id, { description: e.target.value })} />
-            </FieldRow>
-            <FieldRow label="Trigger Condition">
-              <select className="w-full h-8 text-sm px-2 rounded-md border border-input bg-background"
-                value={p.triggerCondition} onChange={e => updatePenalty(p.id, { triggerCondition: e.target.value })}>
-                {PENALTY_TRIGGERS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-              </select>
-            </FieldRow>
-            <FieldRow label="Points Deducted">
-              <Input type="number" className="h-8 text-sm" value={p.pointsDeducted} onChange={e => updatePenalty(p.id, { pointsDeducted: Number(e.target.value) })} />
-            </FieldRow>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────
-// Tab: Bonus Events (multipliers)
-// ─────────────────────────────────────────────────────────────────
-function BonusEventsTab({ cfg, onChange }: { cfg: GoalsConfig; onChange: (c: GoalsConfig) => void }) {
-  const actionOptions = cfg.pointActions.map(a => ({ value: a.id, label: a.name }));
-
-  function updateEvent(id: string, patch: Partial<BonusEvent>) {
-    onChange({ ...cfg, bonusEvents: cfg.bonusEvents.map(e => e.id === id ? { ...e, ...patch } : e) });
-  }
-  function addEvent() {
-    onChange({ ...cfg, bonusEvents: [...cfg.bonusEvents, {
-      id: `be_${Date.now()}`, name: "New Bonus Event", description: "Describe the event",
-      multiplierTarget: cfg.pointActions[0]?.id ?? "winnerFound",
-      multiplier: 2, active: false, expiresAt: null,
-    }] });
-  }
-  function deleteEvent(id: string) {
-    onChange({ ...cfg, bonusEvents: cfg.bonusEvents.filter(e => e.id !== id) });
-  }
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">Bonus events temporarily multiply points for specific actions. Great for seasonal campaigns.</p>
-        <Button variant="outline" size="sm" onClick={addEvent} className="h-8 text-xs">
-          <Plus size={12} className="mr-1" /> Add Event
-        </Button>
-      </div>
-      {cfg.bonusEvents.map(ev => (
-        <div key={ev.id} className={`rounded-lg border p-4 ${ev.active ? "border-amber-300 bg-amber-50/40" : "border-border bg-card"}`}>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <Toggle checked={ev.active} onChange={v => updateEvent(ev.id, { active: v })} />
-              <span className={`text-sm font-semibold ${ev.active ? "text-amber-800" : "text-muted-foreground"}`}>{ev.name}</span>
-              {ev.active && <span className="text-xs font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">×{ev.multiplier} ACTIVE</span>}
-            </div>
-            <button onClick={() => deleteEvent(ev.id)} className="text-muted-foreground hover:text-destructive">
-              <Trash2 size={14} />
-            </button>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <FieldRow label="Event Name">
-              <Input className="h-8 text-sm" value={ev.name} onChange={e => updateEvent(ev.id, { name: e.target.value })} />
-            </FieldRow>
-            <FieldRow label="Description">
-              <Input className="h-8 text-sm" value={ev.description} onChange={e => updateEvent(ev.id, { description: e.target.value })} />
-            </FieldRow>
-            <FieldRow label="Target Action">
-              <select className="w-full h-8 text-sm px-2 rounded-md border border-input bg-background"
-                value={ev.multiplierTarget} onChange={e => updateEvent(ev.id, { multiplierTarget: e.target.value })}>
-                {actionOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </FieldRow>
-            <FieldRow label="Multiplier">
-              <Input type="number" step="0.5" className="h-8 text-sm" value={ev.multiplier} onChange={e => updateEvent(ev.id, { multiplier: Number(e.target.value) })} />
-            </FieldRow>
-            <div className="col-span-2">
-              <FieldRow label="Expires At (leave blank = no expiry)">
-                <Input type="date" className="h-8 text-sm" value={ev.expiresAt?.split("T")[0] ?? ""}
-                  onChange={e => updateEvent(ev.id, { expiresAt: e.target.value ? `${e.target.value}T23:59:59Z` : null })} />
-              </FieldRow>
-            </div>
-          </div>
-          {ev.active && ev.expiresAt && (
-            <p className="text-xs text-amber-700 mt-2 flex items-center gap-1">
-              <Clock size={10} /> Expires {new Date(ev.expiresAt).toLocaleDateString()}
-            </p>
-          )}
         </div>
       ))}
     </div>
@@ -806,11 +565,11 @@ export default function AdminGoalsConfig({
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-4">
-              {activeTab === "points"    && <PointSystemTab cfg={editCfg} onChange={setDraft} />}
+              {activeTab === "points"    && <XpRulesTab cfg={editCfg} onChange={setDraft} />}
               {activeTab === "ranks"     && <RanksTab cfg={editCfg} onChange={setDraft} />}
               {activeTab === "combos"    && <CombosTab cfg={editCfg} onChange={setDraft} />}
-              {activeTab === "penalties" && <PenaltiesTab cfg={editCfg} onChange={setDraft} />}
-              {activeTab === "events"    && <BonusEventsTab cfg={editCfg} onChange={setDraft} />}
+              {activeTab === "penalties" && <PenaltyRulesTab cfg={editCfg} onChange={setDraft} />}
+              {activeTab === "events"    && <BonusEventsConfigTab cfg={editCfg} onChange={setDraft} />}
               {activeTab === "workerGoals" && <WorkerGoalsTab cfg={editCfg} onChange={setDraft} />}
               {activeTab === "eventRules"  && <EventPointRulesTab cfg={editCfg} onChange={setDraft} />}
               {activeTab === "kpis"      && <KpiTargetsTab cfg={editCfg} onChange={setDraft} />}

@@ -58,8 +58,8 @@ export function PerformanceEngineLayout({ children }: { children: React.ReactNod
       : 100;
 
   return (
-    <div className="flex min-h-full gap-0 -m-8">
-      <aside className="w-56 shrink-0 border-r bg-slate-50/80 flex flex-col min-h-[calc(100vh-0px)]">
+    <div className="flex min-h-0 flex-1 w-full min-w-0">
+      <aside className="w-56 shrink-0 border-r bg-slate-50/80 flex flex-col min-h-0 self-stretch overflow-y-auto">
         <div className="px-4 py-4 border-b flex items-center gap-2">
           <Trophy size={20} className="text-blue-600" />
           <span className="font-bold text-sm">Performance Engine</span>

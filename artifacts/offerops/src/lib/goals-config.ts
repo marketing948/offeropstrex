@@ -9,6 +9,8 @@ import { readAuthToken, authedJson } from "@/lib/api-fetch";
 
 export interface PointAction {
   id: string;
+  /** Canonical catalog action type — trigger identity */
+  actionType?: string;
   name: string;
   description: string;
   points: number;
@@ -39,6 +41,7 @@ export interface RankTier {
 
 export interface Penalty {
   id: string;
+  actionType?: string;
   name: string;
   description: string;
   triggerCondition: string;
@@ -48,12 +51,14 @@ export interface Penalty {
 
 export interface BonusEvent {
   id: string;
+  bonusEventType?: string;
   name: string;
   description: string;
-  multiplierTarget: string; // pointAction id
+  multiplierTarget: string;
   multiplier: number;
+  xpAmount?: number;
   active: boolean;
-  expiresAt: string | null; // ISO date or null
+  expiresAt: string | null;
 }
 
 export interface KpiTarget {
@@ -66,6 +71,23 @@ export interface KpiTarget {
 export type { WorkerGoalTarget, EventPointRule, WorkerGoalMetricKey } from "@/lib/worker-goals";
 
 import type { WorkerGoalTarget, EventPointRule } from "@/lib/worker-goals";
+import { resolveXpCatalogFromRule } from "@/lib/performance-engine/action-catalog";
+
+function migratePointActions(actions: PointAction[]): PointAction[] {
+  return actions.map((a) => {
+    const entry = resolveXpCatalogFromRule(a);
+    if (entry) {
+      return {
+        ...a,
+        actionType: entry.actionType,
+        id: entry.legacyRuleIds?.[0] ?? entry.actionType,
+        name: a.name || entry.label,
+        description: a.description || entry.description,
+      };
+    }
+    return { ...a, actionType: a.actionType ?? a.id };
+  });
+}
 
 export interface GoalsConfig {
   pointActions: PointAction[];
@@ -405,7 +427,9 @@ export function ensureGoalsConfig(raw: Partial<GoalsConfig> | null | undefined):
   };
   return {
     ...merged,
-    pointActions: Array.isArray(merged.pointActions) ? merged.pointActions : DEFAULT_CONFIG.pointActions,
+    pointActions: migratePointActions(
+      Array.isArray(merged.pointActions) ? merged.pointActions : DEFAULT_CONFIG.pointActions,
+    ),
     comboBonuses: Array.isArray(merged.comboBonuses) ? merged.comboBonuses : DEFAULT_CONFIG.comboBonuses,
     ranks: Array.isArray(merged.ranks) ? merged.ranks : DEFAULT_CONFIG.ranks,
     penalties: Array.isArray(merged.penalties) ? merged.penalties : DEFAULT_CONFIG.penalties,
