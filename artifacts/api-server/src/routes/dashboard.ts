@@ -24,6 +24,10 @@ import {
 } from "@workspace/api-zod";
 import { requireWorkspaceFromQuery } from "../lib/workspace-access";
 import {
+  breakdownScopeFromWorker,
+  requireWorkspaceWithNetworkScope,
+} from "../lib/worker-network-access";
+import {
   queryDashboardBreakdowns,
   queryWorkspaceMetricTotals,
   resolveMetricsDateRange,
@@ -563,6 +567,9 @@ router.get("/dashboard/breakdowns", async (req, res): Promise<void> => {
   const workspaceId = await requireWorkspaceFromQuery(req, res);
   if (workspaceId === null) return;
 
+  const scoped = await requireWorkspaceWithNetworkScope(req, res, workspaceId);
+  if (scoped === null) return;
+
   const dateFromRaw = req.query.date_from as string | undefined;
   const dateToRaw = req.query.date_to as string | undefined;
   const range = resolveMetricsDateRange(dateFromRaw, dateToRaw);
@@ -571,7 +578,11 @@ router.get("/dashboard/breakdowns", async (req, res): Promise<void> => {
     return;
   }
 
-  const breakdowns = await queryDashboardBreakdowns(workspaceId, range);
+  const breakdowns = await queryDashboardBreakdowns(
+    workspaceId,
+    range,
+    breakdownScopeFromWorker(scoped.scope),
+  );
   res.json(breakdowns);
 });
 

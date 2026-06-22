@@ -15,6 +15,10 @@ import {
 import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access.ts";
 import { getEmployeeFromToken } from "../routes/auth.ts";
 import {
+  enforceEmployeeIdAccess,
+  requireWorkspaceWithNetworkScope,
+} from "../lib/worker-network-access.ts";
+import {
   buildMonthlyGoalsDashboard,
 } from "../lib/monthly-goals-service.ts";
 import { buildMetricBreakdown } from "../lib/metric-breakdown-service.ts";
@@ -56,6 +60,9 @@ router.get("/performance/monthly-goals", async (req, res): Promise<void> => {
   const workspaceId = await requireWorkspaceFromQuery(req, res);
   if (workspaceId === null) return;
 
+  const scoped = await requireWorkspaceWithNetworkScope(req, res, workspaceId);
+  if (scoped === null) return;
+
   const monthRaw = req.query.month;
   const monthKey =
     typeof monthRaw === "string" && monthKeySchema.safeParse(monthRaw).success
@@ -70,7 +77,10 @@ router.get("/performance/monthly-goals", async (req, res): Promise<void> => {
       res.status(400).json({ error: "employee_id must be a positive integer" });
       return;
     }
+    if (!enforceEmployeeIdAccess(res, scoped.scope, n)) return;
     scopeEmployeeId = n;
+  } else if (!scoped.scope.isAdmin) {
+    scopeEmployeeId = scoped.scope.employeeId;
   }
 
   const dashboard = await buildMonthlyGoalsDashboard(workspaceId, monthKey, scopeEmployeeId);
@@ -80,6 +90,9 @@ router.get("/performance/monthly-goals", async (req, res): Promise<void> => {
 router.get("/performance/metric-breakdown", async (req, res): Promise<void> => {
   const workspaceId = await requireWorkspaceFromQuery(req, res);
   if (workspaceId === null) return;
+
+  const scoped = await requireWorkspaceWithNetworkScope(req, res, workspaceId);
+  if (scoped === null) return;
 
   const metricRaw = req.query.metric;
   const metricParsed = z.enum(["revenue", "testing", "working"]).safeParse(metricRaw);
@@ -101,7 +114,10 @@ router.get("/performance/metric-breakdown", async (req, res): Promise<void> => {
       res.status(400).json({ error: "employee_id must be a positive integer" });
       return;
     }
+    if (!enforceEmployeeIdAccess(res, scoped.scope, n)) return;
     employeeId = n;
+  } else if (!scoped.scope.isAdmin) {
+    employeeId = scoped.scope.employeeId;
   }
 
   const breakdown = await buildMetricBreakdown(
@@ -109,6 +125,7 @@ router.get("/performance/metric-breakdown", async (req, res): Promise<void> => {
     monthKey,
     metricParsed.data,
     employeeId,
+    scoped.scope.isAdmin ? undefined : scoped.scope.allowedNetworkNames ?? [],
   );
   res.json(breakdown);
 });

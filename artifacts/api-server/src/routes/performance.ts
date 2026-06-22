@@ -10,6 +10,10 @@ import {
 } from "@workspace/api-zod";
 import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access";
 import {
+  requireWorkspaceWithNetworkScope,
+  networkNameAllowed,
+} from "../lib/worker-network-access";
+import {
   queryPerformanceListRows,
   resolveMetricsDateRange,
 } from "../lib/campaign-daily-metrics-aggregate.ts";
@@ -35,6 +39,9 @@ router.get("/performance", async (req, res): Promise<void> => {
   const workspaceId = await requireWorkspaceFromQuery(req, res);
   if (workspaceId === null) return;
 
+  const scoped = await requireWorkspaceWithNetworkScope(req, res, workspaceId);
+  if (scoped === null) return;
+
   const params = ListPerformanceQueryParams.safeParse(req.query);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
@@ -47,12 +54,19 @@ router.get("/performance", async (req, res): Promise<void> => {
     return;
   }
 
-  const rows = await queryPerformanceListRows({
+  const filters: Parameters<typeof queryPerformanceListRows>[0] = {
     workspaceId,
     dateFrom: range.dateFrom,
     dateTo: range.dateTo,
     batchId: params.data.batch_id,
-  });
+  };
+
+  if (!scoped.scope.isAdmin) {
+    filters.employeeId = scoped.scope.employeeId;
+    filters.allowedAffiliateNetworkNames = scoped.scope.allowedNetworkNames ?? [];
+  }
+
+  const rows = await queryPerformanceListRows(filters);
 
   res.json(rows);
 });

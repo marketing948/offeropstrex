@@ -155,6 +155,7 @@ export default function OperationsHub() {
             batches={batches}
             campaigns={campaignsTyped}
             tasks={tasks}
+            offers={offers}
             loading={loading}
             selectedMetric={selectedMetric}
             onSelectMetric={setSelectedMetric}

@@ -10,12 +10,14 @@ export function CurrentRankCard({
   myXp,
   progressToNext,
   xpReady,
+  variant = "default",
 }: {
   rank: RankTier | null;
   nextRank: RankTier | null;
   myXp: number;
   progressToNext: number;
   xpReady: boolean;
+  variant?: "default" | "sidebar";
 }) {
   const prevXpRef = useRef<number | null>(null);
   const [xpBurst, setXpBurst] = useState<{ delta: number; id: number } | null>(null);
@@ -47,8 +49,26 @@ export function CurrentRankCard({
     return undefined;
   }, [myXp, progressToNext, xpReady]);
 
+  const isSidebar = variant === "sidebar";
+  const shellClass = isSidebar
+    ? "relative rounded-lg border p-3 text-xs overflow-visible"
+    : "relative rounded-lg border bg-white p-3 text-xs shadow-sm overflow-visible";
+  const shellStyle = isSidebar
+    ? {
+        borderColor: "hsl(var(--sidebar-border))",
+        background: "hsl(var(--sidebar-accent) / 0.35)",
+      }
+    : undefined;
+  const labelClass = isSidebar
+    ? "text-[hsl(var(--sidebar-foreground)/0.55)]"
+    : "text-muted-foreground";
+  const trackClass = isSidebar ? "bg-[hsl(var(--sidebar-foreground)/0.12)]" : "bg-slate-100";
+  const linkClass = isSidebar
+    ? "text-[hsl(var(--sidebar-primary))] hover:underline mt-2 inline-block"
+    : "text-blue-600 hover:underline mt-2 inline-block";
+
   return (
-    <div className="relative rounded-lg border bg-white p-3 text-xs shadow-sm overflow-visible">
+    <div className={shellClass} style={shellStyle}>
       {xpBurst && (
         <span
           key={xpBurst.id}
@@ -62,22 +82,22 @@ export function CurrentRankCard({
         <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${colors.bg} ${colors.text}`}>
           <RankIcon size={14} strokeWidth={2.25} />
         </div>
-        <p className="text-muted-foreground">Your Current Rank</p>
+        <p className={labelClass}>Your Current Rank</p>
       </div>
 
       <p className={`font-bold ${colors.text}`}>{rank?.name ?? "Unranked"}</p>
-      <p className="text-muted-foreground mt-1">
+      <p className={`${labelClass} mt-1`}>
         {myXp.toLocaleString()}
         {nextRank ? ` / ${nextRank.minScore.toLocaleString()} XP` : " XP"}
       </p>
-      <div className="h-1.5 rounded-full bg-slate-100 mt-2 overflow-hidden">
+      <div className={`h-1.5 rounded-full ${trackClass} mt-2 overflow-hidden`}>
         <div
           className="h-full bg-purple-500 rounded-full transition-[width] duration-700 ease-out"
           style={{ width: `${barWidth}%` }}
         />
       </div>
-      <Link href="/performance/ranks" className="text-blue-600 hover:underline mt-2 inline-block">
-        View all ranks
+      <Link href="/performance/ranks" className={linkClass}>
+        {isSidebar ? "View ranks" : "View all ranks"}
       </Link>
 
       <style>{`

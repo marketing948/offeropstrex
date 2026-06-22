@@ -28,6 +28,11 @@ import {
   requireAdmin,
   requireWorkspaceAccess,
 } from "../lib/workspace-access";
+import {
+  networkIdAllowed,
+  networkNameAllowed,
+  requireWorkspaceWithNetworkScope,
+} from "../lib/worker-network-access";
 import { applyAction } from "../engine/executor.ts";
 import { emit } from "../engine/event-bus";
 import { recordOperationalEvent } from "../lib/operational-events.ts";
@@ -781,6 +786,8 @@ router.get("/campaigns", async (req, res): Promise<void> => {
     return;
   }
   if ((await requireWorkspaceAccess(req, res, wsId)) === null) return;
+  const scoped = await requireWorkspaceWithNetworkScope(req, res, wsId);
+  if (scoped === null) return;
 
   const conditions = [eq(campaignsTable.workspaceId, wsId)];
 
@@ -874,23 +881,44 @@ router.get("/campaigns", async (req, res): Promise<void> => {
   const tsMap = new Map(tsources.map((t) => [t.id, t.name]));
   const empMap = new Map(emps.map((e) => [e.id, e.name]));
 
+  let result = rows.map((r) => {
+    const b = r.batchId != null ? batchMap.get(r.batchId) : undefined;
+    const affiliateNetworkName =
+      (r.affiliateNetworkId != null ? anMap.get(r.affiliateNetworkId) : null) ??
+      b?.affiliateNetwork ??
+      null;
+    return {
+      ...serialize(r),
+      batchName: b?.batchName ?? null,
+      batchGeo: b?.geo ?? null,
+      affiliateNetworkName,
+      batchAffiliateNetwork: affiliateNetworkName,
+      employeeName: b?.employeeId != null ? empMap.get(b.employeeId) ?? null : null,
+      trafficSourceName: r.trafficSourceId != null ? tsMap.get(r.trafficSourceId) ?? null : null,
+      _batchEmployeeId: b?.employeeId ?? null,
+    };
+  });
+
+  if (!scoped.scope.isAdmin) {
+    const allowed = scoped.scope.allowedNetworkIds ?? [];
+    if (allowed.length === 0) {
+      res.json([]);
+      return;
+    }
+    result = result.filter((r) => {
+      const netOk =
+        networkIdAllowed(scoped.scope, r.affiliateNetworkId) ||
+        networkNameAllowed(scoped.scope, r.affiliateNetworkName);
+      if (!netOk) return false;
+      if (r._batchEmployeeId != null && r._batchEmployeeId !== scoped.scope.employeeId) {
+        return false;
+      }
+      return true;
+    });
+  }
+
   res.json(
-    rows.map((r) => {
-      const b = r.batchId != null ? batchMap.get(r.batchId) : undefined;
-      const affiliateNetworkName =
-        (r.affiliateNetworkId != null ? anMap.get(r.affiliateNetworkId) : null) ??
-        b?.affiliateNetwork ??
-        null;
-      return {
-        ...serialize(r),
-        batchName: b?.batchName ?? null,
-        batchGeo: b?.geo ?? null,
-        affiliateNetworkName,
-        batchAffiliateNetwork: affiliateNetworkName,
-        employeeName: b?.employeeId != null ? empMap.get(b.employeeId) ?? null : null,
-        trafficSourceName: r.trafficSourceId != null ? tsMap.get(r.trafficSourceId) ?? null : null,
-      };
-    }),
+    result.map(({ _batchEmployeeId: _, ...row }) => row),
   );
 });
 

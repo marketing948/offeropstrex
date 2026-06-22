@@ -20,7 +20,7 @@ export function GoalProgressHub({
   return (
     <section className="space-y-4" aria-labelledby="ops-monthly-goals">
       <h2 id="ops-monthly-goals" className="sr-only">
-        Monthly goal cards
+        My Monthly Goals
       </h2>
       <div className="grid items-start gap-4 md:grid-cols-3">
         {loading

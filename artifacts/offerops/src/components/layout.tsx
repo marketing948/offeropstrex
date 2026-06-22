@@ -20,6 +20,8 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useState, useRef, useEffect } from "react";
 import { useWorkspace } from "@/lib/workspace-context";
+import { CurrentRankCard } from "@/components/performance-engine/current-rank-card";
+import { useCurrentRank } from "@/lib/performance-engine/use-current-rank";
 
 function WorkspaceSwitcher() {
   const { currentEmployee } = useAuth();
@@ -248,6 +250,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
     },
   });
 
+  const rankData = useCurrentRank();
+
   if (isLoading) {
     return <div className="min-h-screen bg-background flex items-center justify-center text-muted-foreground">Loading...</div>;
   }
@@ -257,6 +261,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   }
 
   const isAdmin = currentEmployee.role === "admin";
+  const showWorkerRank = !isAdmin;
 
   const navSections = getNavigationSections(isAdmin);
   const opsPath = location.split("?")[0] ?? location;
@@ -348,6 +353,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Footer */}
         <div className="p-3 border-t" style={{ borderColor: "hsl(var(--sidebar-border))" }}>
+          {showWorkerRank && (
+            <div className="mb-3">
+              <CurrentRankCard
+                variant="sidebar"
+                rank={rankData.rank}
+                nextRank={rankData.nextRank}
+                myXp={rankData.myXp}
+                progressToNext={rankData.progressToNext}
+                xpReady={rankData.xpReady}
+              />
+            </div>
+          )}
           {/* Notification bell */}
           <div ref={notifRef} className="relative mb-1">
             <button

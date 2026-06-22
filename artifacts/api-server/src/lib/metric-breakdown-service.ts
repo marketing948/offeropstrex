@@ -113,10 +113,15 @@ async function queryRevenueNetworkGeo(
   workspaceId: number,
   range: MetricsDateRange,
   employeeId: number | null,
+  allowedNetworkNames?: string[],
 ): Promise<NetworkGeoMap> {
   const conditions = [eq(testingBatchesTable.workspaceId, workspaceId)];
   if (employeeId != null) {
     conditions.push(eq(testingBatchesTable.employeeId, employeeId));
+  }
+  if (allowedNetworkNames) {
+    if (allowedNetworkNames.length === 0) return new Map();
+    conditions.push(inArray(testingBatchesTable.affiliateNetwork, allowedNetworkNames));
   }
 
   const batches = await db
@@ -145,6 +150,7 @@ async function queryRevenueNetworkGeo(
 async function queryTestingNetworkGeo(
   workspaceId: number,
   employeeId: number | null,
+  allowedNetworkNames?: string[],
 ): Promise<NetworkGeoMap> {
   const conditions = [
     eq(testingBatchesTable.workspaceId, workspaceId),
@@ -152,6 +158,10 @@ async function queryTestingNetworkGeo(
   ];
   if (employeeId != null) {
     conditions.push(eq(testingBatchesTable.employeeId, employeeId));
+  }
+  if (allowedNetworkNames) {
+    if (allowedNetworkNames.length === 0) return new Map();
+    conditions.push(inArray(testingBatchesTable.affiliateNetwork, allowedNetworkNames));
   }
 
   const rows = await db
@@ -176,6 +186,7 @@ async function queryTestingNetworkGeo(
 async function queryWorkingNetworkGeo(
   workspaceId: number,
   employeeId: number | null,
+  allowedNetworkNames?: string[],
 ): Promise<NetworkGeoMap> {
   const conditions = [
     eq(campaignsTable.workspaceId, workspaceId),
@@ -184,6 +195,10 @@ async function queryWorkingNetworkGeo(
   ];
   if (employeeId != null) {
     conditions.push(eq(testingBatchesTable.employeeId, employeeId));
+  }
+  if (allowedNetworkNames) {
+    if (allowedNetworkNames.length === 0) return new Map();
+    conditions.push(inArray(testingBatchesTable.affiliateNetwork, allowedNetworkNames));
   }
 
   const rows = await db
@@ -296,6 +311,7 @@ export async function buildMetricBreakdown(
   monthKey: string,
   metric: MetricBreakdownKind,
   employeeId: number | null = null,
+  allowedNetworkNames?: string[],
 ): Promise<MetricBreakdownResult> {
   const monthRange = monthKeyToRange(monthKey);
   const range: MetricsDateRange = {
@@ -309,11 +325,11 @@ export async function buildMetricBreakdown(
 
   let networkGeo: NetworkGeoMap;
   if (metric === "revenue") {
-    networkGeo = await queryRevenueNetworkGeo(workspaceId, range, employeeId);
+    networkGeo = await queryRevenueNetworkGeo(workspaceId, range, employeeId, allowedNetworkNames);
   } else if (metric === "testing") {
-    networkGeo = await queryTestingNetworkGeo(workspaceId, employeeId);
+    networkGeo = await queryTestingNetworkGeo(workspaceId, employeeId, allowedNetworkNames);
   } else {
-    networkGeo = await queryWorkingNetworkGeo(workspaceId, employeeId);
+    networkGeo = await queryWorkingNetworkGeo(workspaceId, employeeId, allowedNetworkNames);
   }
 
   const totalCurrent = [...networkGeo.values()].reduce(
@@ -353,19 +369,29 @@ export async function buildMetricBreakdown(
     if (employeeId != null) {
       winnerConditions.push(eq(testingBatchesTable.employeeId, employeeId));
     }
-    const winners = await db
-      .select({
-        campaignId: campaignWinnersTable.campaignId,
-        geo: testingBatchesTable.geo,
-        network: testingBatchesTable.affiliateNetwork,
-        batchName: testingBatchesTable.batchName,
-      })
-      .from(campaignWinnersTable)
-      .innerJoin(campaignsTable, eq(campaignWinnersTable.campaignId, campaignsTable.id))
-      .innerJoin(testingBatchesTable, eq(campaignsTable.batchId, testingBatchesTable.id))
-      .where(and(...winnerConditions))
-      .orderBy(desc(campaignWinnersTable.createdAt))
-      .limit(10);
+    if (allowedNetworkNames) {
+      if (allowedNetworkNames.length === 0) {
+        // skip winner query
+      } else {
+        winnerConditions.push(inArray(testingBatchesTable.affiliateNetwork, allowedNetworkNames));
+      }
+    }
+    const winners =
+      allowedNetworkNames?.length === 0
+        ? []
+        : await db
+            .select({
+              campaignId: campaignWinnersTable.campaignId,
+              geo: testingBatchesTable.geo,
+              network: testingBatchesTable.affiliateNetwork,
+              batchName: testingBatchesTable.batchName,
+            })
+            .from(campaignWinnersTable)
+            .innerJoin(campaignsTable, eq(campaignWinnersTable.campaignId, campaignsTable.id))
+            .innerJoin(testingBatchesTable, eq(campaignsTable.batchId, testingBatchesTable.id))
+            .where(and(...winnerConditions))
+            .orderBy(desc(campaignWinnersTable.createdAt))
+            .limit(10);
     for (const w of winners) {
       items.push({
         name: w.batchName ?? `Campaign #${w.campaignId}`,

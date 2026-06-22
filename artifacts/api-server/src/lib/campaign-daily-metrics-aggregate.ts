@@ -28,6 +28,8 @@ export type MetricsAggregateFilters = MetricsDateRange & {
   geo?: string;
   affiliateNetwork?: string;
   trafficSource?: string;
+  /** Worker scope: restrict to these affiliate network names (batch column). */
+  allowedAffiliateNetworkNames?: string[];
 };
 
 export type PerformanceListRow = {
@@ -76,6 +78,13 @@ function batchFilterConditions(filters: MetricsAggregateFilters): SQL[] {
   }
   if (filters.trafficSource) {
     conditions.push(eq(testingBatchesTable.trafficSource, filters.trafficSource));
+  }
+  if (filters.allowedAffiliateNetworkNames) {
+    if (filters.allowedAffiliateNetworkNames.length === 0) {
+      conditions.push(sql`1 = 0`);
+    } else {
+      conditions.push(inArray(testingBatchesTable.affiliateNetwork, filters.allowedAffiliateNetworkNames));
+    }
   }
 
   return conditions;
@@ -312,10 +321,35 @@ async function queryBatchWinnersInRange(
   return map;
 }
 
+export type DashboardBreakdownScope = {
+  employeeId?: number;
+  allowedNetworkNames?: string[];
+};
+
+const EMPTY_BREAKDOWNS: DashboardBreakdownsResult = {
+  byWorker: [],
+  byTrafficSource: [],
+  byGeo: [],
+  byNetwork: [],
+};
+
 export async function queryDashboardBreakdowns(
   workspaceId: number,
   range: MetricsDateRange,
+  scope?: DashboardBreakdownScope,
 ): Promise<DashboardBreakdownsResult> {
+  if (scope?.allowedNetworkNames && scope.allowedNetworkNames.length === 0) {
+    return EMPTY_BREAKDOWNS;
+  }
+
+  const batchConditions = [eq(testingBatchesTable.workspaceId, workspaceId)];
+  if (scope?.employeeId != null) {
+    batchConditions.push(eq(testingBatchesTable.employeeId, scope.employeeId));
+  }
+  if (scope?.allowedNetworkNames?.length) {
+    batchConditions.push(inArray(testingBatchesTable.affiliateNetwork, scope.allowedNetworkNames));
+  }
+
   const batches = await db
     .select({
       batchId: testingBatchesTable.id,
@@ -327,7 +361,7 @@ export async function queryDashboardBreakdowns(
     })
     .from(testingBatchesTable)
     .leftJoin(employeesTable, eq(testingBatchesTable.employeeId, employeesTable.id))
-    .where(eq(testingBatchesTable.workspaceId, workspaceId));
+    .where(and(...batchConditions));
 
   const metricsByBatch = await queryBatchMetricTotalsMap(workspaceId, range);
   const winnersByBatch = await queryBatchWinnersInRange(workspaceId, range);

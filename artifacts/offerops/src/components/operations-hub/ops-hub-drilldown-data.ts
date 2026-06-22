@@ -16,7 +16,9 @@ import {
 } from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useWorkspace } from "@/lib/workspace-context";
+import { useAuth } from "@/lib/auth";
 import { authedJson } from "@/lib/api-fetch";
+import { useWorkerMonthlyGoals } from "@/lib/performance-engine/use-worker-monthly-goals";
 import { fetchBatchHealth, getBatchHealthQueryKey, type BatchHealthResponse } from "@/lib/batch-health-api";
 import {
   buildMissionControlRows,
@@ -254,12 +256,27 @@ export function buildNetworkGroups(
   cells: Map<string, GeoMetrics>,
   kpiTargets: KpiTarget[],
   breakdownNetworks: DashboardBreakdownRow[],
+  allowedNetworkNames?: string[] | null,
 ): NetworkGroup[] {
+  const allowedSet = allowedNetworkNames
+    ? new Set(allowedNetworkNames.map((n) => n.trim().toLowerCase()).filter(Boolean))
+    : null;
+  const isAllowed = (network: string) =>
+    !allowedSet || allowedSet.has(network.trim().toLowerCase());
+
   const networkNames = new Set<string>();
-  for (const key of cells.keys()) networkNames.add(parseCellKey(key).network);
-  for (const row of breakdownNetworks) networkNames.add(row.label || row.key);
-  for (const network of listConfiguredNetworkTargets(kpiTargets, "revenue")) {
-    networkNames.add(network);
+  for (const key of cells.keys()) {
+    const { network } = parseCellKey(key);
+    if (isAllowed(network)) networkNames.add(network);
+  }
+  for (const row of breakdownNetworks) {
+    const label = row.label || row.key;
+    if (isAllowed(label)) networkNames.add(label);
+  }
+  if (!allowedSet) {
+    for (const network of listConfiguredNetworkTargets(kpiTargets, "revenue")) {
+      networkNames.add(network);
+    }
   }
 
   const groups: NetworkGroup[] = [];
@@ -303,6 +320,7 @@ export function buildNetworkGroups(
 
   return groups
     .filter((g) => {
+      if (!isAllowed(g.network)) return false;
       const { configured } = resolveNetworkTarget(kpiTargets, "revenue", g.network);
       return g.hasActivity || g.geos.length > 0 || configured;
     })
@@ -364,33 +382,39 @@ export function buildGoalCards(
   campaigns: OpsCampaignRow[],
   batches: TestingBatch[],
   networkGroups: NetworkGroup[],
+  workerPe?: {
+    revenue: { current: number; target: number };
+    testing: { current: number; target: number };
+    working: { current: number; target: number };
+  } | null,
 ): GoalCardModel[] {
-  const revenueT = resolveKpiTarget(kpiTargets, "revenue", OPS_V2_DEMO_FALLBACKS.revenue);
-  const testingT = resolveKpiTarget(
-    kpiTargets,
-    "testingBatches",
-    OPS_V2_DEMO_FALLBACKS.testingBatches,
-  );
-  const workingT = resolveKpiTarget(
-    kpiTargets,
-    "workingCampaigns",
-    OPS_V2_DEMO_FALLBACKS.workingCampaigns,
-  );
+  const revenueT = workerPe
+    ? { target: workerPe.revenue.target, usingFallback: workerPe.revenue.target <= 0 }
+    : resolveKpiTarget(kpiTargets, "revenue", OPS_V2_DEMO_FALLBACKS.revenue);
+  const testingT = workerPe
+    ? { target: workerPe.testing.target, usingFallback: workerPe.testing.target <= 0 }
+    : resolveKpiTarget(kpiTargets, "testingBatches", OPS_V2_DEMO_FALLBACKS.testingBatches);
+  const workingT = workerPe
+    ? { target: workerPe.working.target, usingFallback: workerPe.working.target <= 0 }
+    : resolveKpiTarget(kpiTargets, "workingCampaigns", OPS_V2_DEMO_FALLBACKS.workingCampaigns);
 
-  const workingCount = campaigns.filter(isWorkingLiveCampaign).length;
-  const testingCount = batches.filter((b) =>
-    (ACTIVE_TESTING_STATUSES as readonly string[]).includes(b.status),
-  ).length;
+  const workingCount = workerPe
+    ? workerPe.working.current
+    : campaigns.filter(isWorkingLiveCampaign).length;
+  const testingCount = workerPe
+    ? workerPe.testing.current
+    : batches.filter((b) => (ACTIVE_TESTING_STATUSES as readonly string[]).includes(b.status)).length;
+  const revenueActual = workerPe ? workerPe.revenue.current : mtdRevenue;
 
   return [
     {
       kind: "revenue",
       label: "Revenue",
       icon: "revenue",
-      actual: mtdRevenue,
+      actual: revenueActual,
       target: revenueT.target,
-      gap: gapRemaining(mtdRevenue, revenueT.target),
-      pace: evaluatePace(mtdRevenue, revenueT.target),
+      gap: gapRemaining(revenueActual, revenueT.target),
+      pace: evaluatePace(revenueActual, revenueT.target),
       format: "currency",
       supportsGeoDrilldown: true,
       networkRows: networkRowsForGoal(
@@ -878,10 +902,29 @@ export function useOpsDrilldownData(
   tasks: TodoTask[] = [],
 ) {
   const { activeWorkspaceId } = useWorkspace();
+  const { currentEmployee } = useAuth();
   const wsId = activeWorkspaceId ?? 0;
   const { dateFrom, dateTo } = monthToDateRange();
   const { data: cfgRaw } = useGoalsConfig();
   const cfg = cfgRaw ?? DEFAULT_CONFIG;
+  const { isWorker, workerRow, isLoading: workerGoalsLoading } = useWorkerMonthlyGoals();
+
+  const { data: assignedNetworks = [] } = useQuery({
+    queryKey: ["my-affiliate-networks", wsId, currentEmployee?.id],
+    enabled: isWorker && !!wsId && !!currentEmployee,
+    staleTime: 120_000,
+    queryFn: () =>
+      authedJson<
+        { affiliateNetworkName: string | null }[]
+      >(`/api/worker-affiliate-networks?workspace_id=${wsId}&employee_id=${currentEmployee!.id}`),
+  });
+
+  const allowedNetworkNames = useMemo(() => {
+    if (!isWorker) return null;
+    return assignedNetworks
+      .map((r) => r.affiliateNetworkName?.trim())
+      .filter((n): n is string => Boolean(n));
+  }, [isWorker, assignedNetworks]);
 
   const healthQueries = useQueries({
     queries: batches.map((batch) => ({
@@ -959,12 +1002,28 @@ export function useOpsDrilldownData(
 
   const networkGroups = useMemo(() => {
     const cells = aggregateNetworkGeo(batches, enrichedCampaigns, normalizedPerf);
-    return buildNetworkGroups(cells, cfg.kpiTargets, breakdowns?.byNetwork ?? []);
-  }, [batches, enrichedCampaigns, normalizedPerf, cfg.kpiTargets, breakdowns?.byNetwork]);
+    return buildNetworkGroups(cells, cfg.kpiTargets, breakdowns?.byNetwork ?? [], allowedNetworkNames);
+  }, [batches, enrichedCampaigns, normalizedPerf, cfg.kpiTargets, breakdowns?.byNetwork, allowedNetworkNames]);
+
+  const workerPe = workerRow
+    ? {
+        revenue: { current: workerRow.revenue.current, target: workerRow.revenue.target },
+        testing: { current: workerRow.testing.current, target: workerRow.testing.target },
+        working: { current: workerRow.working.current, target: workerRow.working.target },
+      }
+    : null;
 
   const goalCards = useMemo(
-    () => buildGoalCards(cfg.kpiTargets, mtdRevenue, enrichedCampaigns, batches, networkGroups),
-    [cfg.kpiTargets, mtdRevenue, enrichedCampaigns, batches, networkGroups],
+    () =>
+      buildGoalCards(
+        cfg.kpiTargets,
+        mtdRevenue,
+        enrichedCampaigns,
+        batches,
+        networkGroups,
+        isWorker ? workerPe : null,
+      ),
+    [cfg.kpiTargets, mtdRevenue, enrichedCampaigns, batches, networkGroups, isWorker, workerPe],
   );
 
   const hasAnyActivity = networkGroups.some((g) => g.hasActivity) || mtdRevenue > 0;
@@ -993,11 +1052,13 @@ export function useOpsDrilldownData(
     mtdRevenue,
     attributedRevenueMtd,
     unattributedRevenueMtd: Math.max(0, mtdRevenue - attributedRevenueMtd),
-    isLoading: perfLoading || breakdownsLoading || healthLoading,
+    isLoading: perfLoading || breakdownsLoading || healthLoading || (isWorker && workerGoalsLoading),
     isError,
     error,
     refetch,
     isFetching,
     hasAnyActivity,
+    isWorker,
+    workerRow,
   };
 }

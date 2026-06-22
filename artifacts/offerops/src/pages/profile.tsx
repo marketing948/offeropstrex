@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { wsQueryOpts } from "@/lib/ws-query";
 import {
   useListEmployees, useListTestingBatches, useListOffers, useListTodoTasks,
@@ -7,7 +8,7 @@ import {
 import { useAuth } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace-context";
 import {
-  useGoalsConfig, computeScores, getRankForScore, getNextRank,
+  useGoalsConfig, computeScores, computeMetrics, getRankForScore, getNextRank,
   RANK_COLORS, DEFAULT_CONFIG,
 } from "@/lib/goals-config";
 import type { EmployeeScores } from "@/lib/goals-config";
@@ -19,8 +20,11 @@ import {
 } from "@/lib/exp-labels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Trophy, Star, Target, TrendingUp, Zap, Crown, Award, BarChart3, User,
+  Trophy, Star, Target, TrendingUp, Zap, Crown, Award, BarChart3, User, Network,
 } from "lucide-react";
+import { authedJson } from "@/lib/api-fetch";
+import { useWorkerMonthlyGoals } from "@/lib/performance-engine/use-worker-monthly-goals";
+import { OpsActivityCounters } from "@/components/operations-hub/ops-activity-counters";
 
 const ICON_MAP: Record<string, React.ElementType> = {
   Target, Star, TrendingUp, Zap, Crown, Trophy, Award,
@@ -92,6 +96,25 @@ export default function Profile() {
   const sortedRanks = [...cfg.ranks].sort((a, b) => a.minScore - b.minScore);
   const kpiTargets = cfg.kpiTargets;
   const myLeaderboardPos = scores.findIndex(s => s.employeeId === currentEmployee?.id) + 1;
+  const { isWorker, workerRow, isLoading: workerGoalsLoading } = useWorkerMonthlyGoals();
+
+  const { data: assignedNetworks = [], isLoading: networksLoading } = useQuery({
+    queryKey: ["profile-affiliate-networks", activeWorkspaceId, currentEmployee?.id],
+    enabled: !!activeWorkspaceId && !!currentEmployee,
+    queryFn: () =>
+      authedJson<
+        { affiliateNetworkName: string | null }[]
+      >(
+        `/api/worker-affiliate-networks?workspace_id=${activeWorkspaceId}&employee_id=${currentEmployee!.id}`,
+      ),
+  });
+
+  const myMetrics = useMemo(() => {
+    if (!currentEmployee) return null;
+    const emp = employees.find((e) => e.id === currentEmployee.id);
+    if (!emp) return null;
+    return computeMetrics(emp, batches, offers, tasks);
+  }, [currentEmployee, employees, batches, offers, tasks]);
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -183,30 +206,88 @@ export default function Profile() {
         </Card>
       )}
 
+      {/* Assigned affiliate networks */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Network size={15} className="text-muted-foreground" /> Assigned Affiliate Networks
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {networksLoading ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : assignedNetworks.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No affiliate networks assigned yet.</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {assignedNetworks.map((row, i) => (
+                <span
+                  key={`${row.affiliateNetworkName}-${i}`}
+                  className="inline-flex items-center rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-xs font-semibold text-primary"
+                >
+                  {row.affiliateNetworkName}
+                </span>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* KPI Progress */}
         {myScore && (
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
-                <Target size={15} className="text-muted-foreground" /> KPI Progress
+                <Target size={15} className="text-muted-foreground" />
+                {isWorker ? "My Monthly Goals" : "KPI Progress"}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {kpiTargets.map((kt, i) => {
-                const val = myScore[kt.key as keyof EmployeeScores] as number ?? 0;
-                const colors = ["bg-blue-500","bg-green-500","bg-orange-500","bg-yellow-500","bg-purple-500","bg-pink-500"];
-                return (
+              {isWorker && workerRow ? (
+                <>
                   <ProgressBar
-                    key={kt.id}
-                    label={kt.name}
-                    value={val}
-                    max={kt.monthlyTarget}
-                    color={colors[i % colors.length]}
-                    sub={val >= kt.monthlyTarget ? "🏆 Target reached!" : undefined}
+                    label="Revenue"
+                    value={workerRow.revenue.current}
+                    max={workerRow.revenue.target}
+                    color="bg-blue-500"
+                    sub={
+                      workerRow.revenue.target > 0 && workerRow.revenue.current >= workerRow.revenue.target
+                        ? "🏆 Target reached!"
+                        : undefined
+                    }
                   />
-                );
-              })}
+                  <ProgressBar
+                    label="Testing Pipeline"
+                    value={workerRow.testing.current}
+                    max={workerRow.testing.target}
+                    color="bg-green-500"
+                  />
+                  <ProgressBar
+                    label="Working Campaigns"
+                    value={workerRow.working.current}
+                    max={workerRow.working.target}
+                    color="bg-orange-500"
+                  />
+                </>
+              ) : isWorker && workerGoalsLoading ? (
+                <p className="text-sm text-muted-foreground">Loading goals…</p>
+              ) : (
+                kpiTargets.map((kt, i) => {
+                  const val = myScore[kt.key as keyof EmployeeScores] as number ?? 0;
+                  const colors = ["bg-blue-500","bg-green-500","bg-orange-500","bg-yellow-500","bg-purple-500","bg-pink-500"];
+                  return (
+                    <ProgressBar
+                      key={kt.id}
+                      label={kt.name}
+                      value={val}
+                      max={kt.monthlyTarget}
+                      color={colors[i % colors.length]}
+                      sub={val >= kt.monthlyTarget ? "🏆 Target reached!" : undefined}
+                    />
+                  );
+                })
+              )}
             </CardContent>
           </Card>
         )}
@@ -252,6 +333,19 @@ export default function Profile() {
           </CardContent>
         </Card>
       </div>
+
+      {isWorker && myMetrics && (
+        <OpsActivityCounters
+          loading={workerGoalsLoading}
+          rows={[
+            { label: "Batches Created", value: myMetrics.batches },
+            { label: "Live Campaigns", value: myMetrics.liveCampaigns },
+            { label: "Optimizations Completed", value: myMetrics.optimizations },
+            { label: "Winners Found", value: myMetrics.winners },
+            { label: "Scale Tasks Created", value: myMetrics.scaleTasks },
+          ]}
+        />
+      )}
 
       {/* Combo Bonuses */}
       <Card>
