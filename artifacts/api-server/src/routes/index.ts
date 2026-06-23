@@ -29,6 +29,7 @@ import operationalEventsRouter from "./operational-events";
 import operationalActivityRouter from "./operational-activity";
 import campaignWinnersReportRouter from "./campaign-winners-report";
 import campaignDailyMetricsRouter from "./campaign-daily-metrics";
+import campaignReviewRouter from "./campaign-review";
 import performanceEngineRouter from "./performance-engine";
 
 const router: IRouter = Router();
@@ -98,6 +99,7 @@ router.use(operationalEventsRouter);
 router.use(operationalActivityRouter);
 router.use(campaignWinnersReportRouter);
 router.use(campaignDailyMetricsRouter);
+router.use(campaignReviewRouter);
 router.use(performanceEngineRouter);
 
 export default router;

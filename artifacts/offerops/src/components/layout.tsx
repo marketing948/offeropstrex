@@ -505,18 +505,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      {/* Main Content — ops hub scrolls on <main> to avoid nested flex-1 blank space */}
-      <main
-        className={
-          isOpsHub || isPerformanceEngine
-            ? "min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-background"
-            : "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
-        }
-      >
+      {/* Main content — single vertical scroll container for all routes */}
+      <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-background">
         {isOpsHub || isPerformanceEngine ? (
           children
         ) : (
-          <div className="h-0 min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-8">
+          <div className="p-8">
             <div className="mx-auto max-w-6xl">{children}</div>
           </div>
         )}

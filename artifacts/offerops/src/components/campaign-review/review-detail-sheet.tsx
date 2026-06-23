@@ -1,9 +1,11 @@
 import { useLocation } from "wouter";
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { AlertRulesConfig } from "@workspace/alert-rules";
 import { DEFAULT_ALERT_RULES } from "@workspace/alert-rules";
 import type { ReviewQueueCampaign, SuggestedReviewAction } from "@/lib/campaign-review/types";
 import { recordReviewEvent, dismissCampaignUntil, getLatestMediaBuyerNote } from "@/lib/campaign-review/memory";
+import { authedJson } from "@/lib/api-fetch";
 import { AddToWorkQueueDialog } from "@/components/campaign-review/add-to-work-queue-dialog";
 import {
   Sheet,
@@ -40,34 +42,67 @@ export function ReviewDetailSheet({
 }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [workQueueOpen, setWorkQueueOpen] = useState(false);
+  const [resolving, setResolving] = useState(false);
 
   if (!item) return null;
   const review = item;
   const mediaBuyerNote = getLatestMediaBuyerNote(workspaceId, actorEmployeeId, review.campaignId);
+  const isManualReview = review.signals.some((s) => s.label === "Manual review requested");
+
+  async function resolveManualReview(resolution: string) {
+    if (!isManualReview) return;
+    setResolving(true);
+    try {
+      await authedJson(`/api/campaigns/${review.campaignId}/resolve-review`, {
+        method: "POST",
+        body: JSON.stringify({ workspaceId, resolution }),
+      });
+      await queryClient.invalidateQueries({ queryKey: ["campaign-review-open", workspaceId] });
+    } catch (e: unknown) {
+      toast({
+        title: "Could not resolve review",
+        description: e instanceof Error ? e.message : "Request failed",
+        variant: "destructive",
+      });
+    } finally {
+      setResolving(false);
+    }
+  }
 
   function applyAction(action: SuggestedReviewAction) {
-    recordReviewEvent(workspaceId, actorEmployeeId, {
-      campaignId: review.campaignId,
-      type: action.memoryType,
-      actionId: action.id,
-      note: action.label,
-    });
-    if (action.memoryType === "dismissed_signal") {
-      dismissCampaignUntil(workspaceId, actorEmployeeId, review.campaignId, undefined, rules);
-    }
-    onMemoryRecorded();
-    toast({
-      title: "Review recorded",
-      description:
-        action.memoryType === "scaling_task_suggested"
-          ? "Follow-up tasks are created from batch workflow when you are ready — not auto-spawned here."
-          : action.label,
-    });
-    if (action.href) {
-      onOpenChange(false);
-      navigate(action.href);
-    }
+    void (async () => {
+      recordReviewEvent(workspaceId, actorEmployeeId, {
+        campaignId: review.campaignId,
+        type: action.memoryType,
+        actionId: action.id,
+        note: action.label,
+      });
+      if (action.memoryType === "dismissed_signal") {
+        dismissCampaignUntil(workspaceId, actorEmployeeId, review.campaignId, undefined, rules);
+      }
+      if (
+        isManualReview &&
+        (action.memoryType === "reviewed" || action.memoryType === "dismissed_signal")
+      ) {
+        await resolveManualReview(action.memoryType);
+      }
+      onMemoryRecorded();
+      toast({
+        title: "Review recorded",
+        description:
+          action.memoryType === "scaling_task_suggested"
+            ? "Follow-up tasks are created from batch workflow when you are ready — not auto-spawned here."
+            : action.label,
+      });
+      if (action.href) {
+        onOpenChange(false);
+        navigate(action.href);
+      } else if (isManualReview && action.memoryType === "reviewed") {
+        onOpenChange(false);
+      }
+    })();
   }
 
   return (
@@ -98,7 +133,7 @@ export function ReviewDetailSheet({
               </p>
               <p className="mt-2 whitespace-pre-wrap text-sm">{mediaBuyerNote.note}</p>
               <p className="mt-2 text-[10px] text-muted-foreground">
-                Captured locally from Live Campaigns — not persisted to backend.
+                From Live Campaigns — persisted in review queue when sent via Send to review.
               </p>
             </div>
           )}
@@ -166,6 +201,7 @@ export function ReviewDetailSheet({
                   variant={action.id === "continue" ? "default" : "outline"}
                   className="h-auto min-h-9 justify-start whitespace-normal py-2 text-left text-sm"
                   onClick={() => applyAction(action)}
+                  disabled={resolving}
                 >
                   <span>
                     <span className="font-medium">{action.label}</span>

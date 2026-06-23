@@ -1,10 +1,12 @@
 /**
- * Live Campaigns — send campaign to review (local note capture).
+ * Live Campaigns — send campaign to review (persists to review queue via API).
  */
 
 import { useState } from "react";
 import { useLocation } from "wouter";
+import { useQueryClient } from "@tanstack/react-query";
 import { recordReviewEvent } from "@/lib/campaign-review/memory";
+import { authedJson } from "@/lib/api-fetch";
 import { useAuth } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace-context";
 import { useToast } from "@/hooks/use-toast";
@@ -36,16 +38,18 @@ export function SendCampaignToReviewDialog({
 }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { currentEmployee } = useAuth();
   const { activeWorkspaceId } = useWorkspace();
   const [note, setNote] = useState("");
+  const [pending, setPending] = useState(false);
 
   function handleClose() {
     setNote("");
     onOpenChange(false);
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!campaignId || !currentEmployee || !activeWorkspaceId) return;
     const trimmed = note.trim();
     if (!trimmed) {
@@ -57,72 +61,86 @@ export function SendCampaignToReviewDialog({
       return;
     }
 
-    // Client-side review memory only — no backend review-note API in this slice.
-    recordReviewEvent(activeWorkspaceId, currentEmployee.id, {
-      campaignId,
-      type: "action_taken",
-      note: trimmed,
-    });
+    setPending(true);
+    try {
+      const result = await authedJson<{
+        ok: boolean;
+        created: boolean;
+        eventId: number;
+        campaignId: number;
+      }>(`/api/campaigns/${campaignId}/request-review`, {
+        method: "POST",
+        body: JSON.stringify({ workspaceId: activeWorkspaceId, note: trimmed }),
+      });
 
-    toast({
-      title: "Campaign sent to review",
-      description: "Review note captured locally. Backend review-note storage is not wired yet.",
-      action: (
-        <ToastAction
-          altText="View in Campaign Review"
-          onClick={() => navigate(`/campaign-review?campaignId=${campaignId}`)}
-        >
-          View in Campaign Review
-        </ToastAction>
-      ),
-    });
+      recordReviewEvent(activeWorkspaceId, currentEmployee.id, {
+        campaignId,
+        type: "action_taken",
+        note: trimmed,
+      });
 
-    handleClose();
-    onSubmitted?.();
+      await queryClient.invalidateQueries({
+        queryKey: ["campaign-review-open", activeWorkspaceId],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["campaign-review-live", activeWorkspaceId],
+      });
+
+      toast({
+        title: result.created ? "Campaign sent to review" : "Already in review queue",
+        description: result.created
+          ? "The campaign now appears under Campaign Review → Requires Review."
+          : "This campaign already has an open review request.",
+        action: (
+          <ToastAction
+            altText="View in Campaign Review"
+            onClick={() => navigate(`/campaign-review?campaignId=${campaignId}`)}
+          >
+            View in Campaign Review
+          </ToastAction>
+        ),
+      });
+
+      handleClose();
+      onSubmitted?.();
+    } catch (e: unknown) {
+      toast({
+        title: "Could not send to review",
+        description: e instanceof Error ? e.message : "Request failed",
+        variant: "destructive",
+      });
+    } finally {
+      setPending(false);
+    }
   }
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && handleClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Send Campaign to review</DialogTitle>
-          <DialogDescription asChild>
-            <div className="space-y-2 text-left text-sm text-muted-foreground">
-              <p className="font-medium text-foreground">{campaignName}</p>
-              <p>
-                Describe what needs to be changed or checked before this campaign moves forward.
-              </p>
-            </div>
+          <DialogTitle>Send campaign to review</DialogTitle>
+          <DialogDescription>
+            {campaignName
+              ? `Add context for "${campaignName}". This creates a review queue item visible on Campaign Review.`
+              : "Add context for this campaign. This creates a review queue item visible on Campaign Review."}
           </DialogDescription>
         </DialogHeader>
-
-        <div className="space-y-4 py-2">
-          <div>
-            <Label htmlFor="review-note" className="text-xs">
-              Review note
-            </Label>
-            <Textarea
-              id="review-note"
-              className="mt-1.5 min-h-[100px]"
-              placeholder="Example: Check offer link, adjust GEO targeting, verify source settings..."
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-            />
-          </div>
-
-          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50/80 px-3 py-3">
-            <p className="text-xs font-semibold text-slate-700">Quick replies</p>
-            {/* TODO: wire predefined review templates when backend/template source exists. */}
-            <p className="mt-1 text-xs text-slate-500">Templates will be added later</p>
-          </div>
+        <div className="space-y-2 py-2">
+          <Label htmlFor="review-note">Review note</Label>
+          <Textarea
+            id="review-note"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="What should be reviewed? (traffic, ROI, scaling, etc.)"
+            rows={4}
+          />
         </div>
-
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={handleClose}>
+          <Button variant="outline" onClick={handleClose} disabled={pending}>
             Cancel
           </Button>
-          <Button type="button" onClick={handleSubmit}>
-            Send to review
+          <Button onClick={() => void handleSubmit()} disabled={pending}>
+            {pending ? "Sending…" : "Send to review"}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -152,7 +152,9 @@ export function LiveCampaignDrawer({
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
       <SheetContent side="right" className="flex w-full flex-col overflow-y-auto sm:max-w-lg">
         <SheetHeader>
-          <SheetTitle className="pr-8 text-left text-lg">{campaign.campaignName}</SheetTitle>
+          <SheetTitle className="line-clamp-2 pr-8 text-left text-lg leading-snug" title={campaign.campaignName}>
+            {campaign.campaignName}
+          </SheetTitle>
           <SheetDescription asChild>
             <div className="flex flex-wrap items-center gap-2 pt-1 text-left">
               <Badge

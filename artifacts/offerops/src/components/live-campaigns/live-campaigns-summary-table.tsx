@@ -212,8 +212,11 @@ export function LiveCampaignsSummaryTable({
                     className="cursor-pointer align-middle hover:bg-slate-50/80"
                     onClick={() => onSelectCampaign(c)}
                   >
-                    <TableCell className="sticky left-0 z-10 max-w-[240px] bg-white py-3 group-hover:bg-slate-50/80">
-                      <p className="truncate text-sm font-semibold text-slate-900" title={c.campaignName}>
+                    <TableCell className="sticky left-0 z-10 max-w-[280px] bg-white py-3 group-hover:bg-slate-50/80">
+                      <p
+                        className="line-clamp-2 text-sm font-semibold leading-snug text-slate-900"
+                        title={c.campaignName}
+                      >
                         {c.campaignName}
                       </p>
                       <p className="mt-0.5 truncate text-[11px] text-slate-500">

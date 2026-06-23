@@ -362,6 +362,47 @@ export function buildReviewQueueItem(
   };
 }
 
+/** Queue item when a worker manually sends a live campaign to review. */
+export function buildManualReviewQueueItem(
+  c: ReviewCampaignInput,
+  note: string,
+  requestedAt: string,
+): ReviewQueueCampaign {
+  const signals: CampaignSignal[] = [
+    signal(
+      "traffic_decrease",
+      "Manual review requested",
+      note.trim() || "Sent from Live Campaigns for review.",
+      "high",
+    ),
+  ];
+  const profit = (c.revenue ?? 0) - (c.cost ?? 0);
+  return {
+    campaignId: c.id,
+    campaignName: c.campaignName,
+    batchId: c.batchId,
+    batchName: c.batchName,
+    employeeId: c.employeeId,
+    employeeName: c.employeeName,
+    platform: c.platform,
+    purpose: c.campaignPurpose,
+    status: c.status,
+    health: "attention_required",
+    healthLabel: healthLabel("attention_required"),
+    signals,
+    suggestedActions: buildSuggestedActions(c, signals),
+    visits: c.clicks ?? 0,
+    conversions: c.conversions ?? 0,
+    revenue: c.revenue ?? 0,
+    cost: c.cost ?? 0,
+    roi: c.roi ?? 0,
+    profit,
+    firstSeenAt: requestedAt,
+    escalated: true,
+    urgencyScore: computeUrgencyScore(signals, true) + 5,
+  };
+}
+
 /** Lightweight health for live campaign monitoring rows. */
 export function evaluateCampaignMonitoringHealth(
   c: ReviewCampaignInput,

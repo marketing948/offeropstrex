@@ -15,6 +15,8 @@ export const OPERATIONAL_EVENT_TYPES = [
   "CAMPAIGN_MANUALLY_CLOSED",
   "WINNER_DETECTED",
   "AI_INSIGHT_CREATED",
+  "CAMPAIGN_REVIEW_REQUESTED",
+  "CAMPAIGN_REVIEW_RESOLVED",
 ] as const;
 
 export type OperationalEventType = (typeof OPERATIONAL_EVENT_TYPES)[number] | (string & {});

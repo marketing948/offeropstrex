@@ -7,6 +7,7 @@ import { signAuthToken, verifyAuthToken } from "../lib/auth-tokens.ts";
 import {
   clearLoginAttempts,
   getClientIp,
+  getLoginRateLimitInfo,
   isLoginRateLimited,
   recordFailedLogin,
 } from "../lib/login-rate-limit.ts";
@@ -32,7 +33,12 @@ router.post("/auth/login", async (req, res): Promise<void> => {
   const clientIp = getClientIp(req);
 
   if (isLoginRateLimited(clientIp, email)) {
-    res.status(429).json({ error: "Too many login attempts. Try again later." });
+    const { retryAfterSeconds } = getLoginRateLimitInfo(clientIp, email);
+    const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
+    res.status(429).json({
+      error: `Too many login attempts. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
+      retryAfterSeconds,
+    });
     return;
   }
 

@@ -67,6 +67,37 @@ export function clearLoginAttempts(ip: string, email: string): void {
   attempts.delete(attemptKey(ip, email));
 }
 
+/** Clear all rate-limit buckets for an email (any IP). Used after admin remediation. */
+export function clearLoginAttemptsForEmail(email: string): number {
+  const normalized = email.trim().toLowerCase();
+  let cleared = 0;
+  for (const key of [...attempts.keys()]) {
+    if (key.endsWith(`:${normalized}`)) {
+      attempts.delete(key);
+      cleared += 1;
+    }
+  }
+  return cleared;
+}
+
+export function getLoginRateLimitInfo(
+  ip: string,
+  email: string,
+): { limited: boolean; retryAfterSeconds: number } {
+  if (!isLoginRateLimitEnabled()) return { limited: false, retryAfterSeconds: 0 };
+  const key = attemptKey(ip, email);
+  const entry = attempts.get(key);
+  if (!entry || entry.failures < maxFailures()) {
+    return { limited: false, retryAfterSeconds: 0 };
+  }
+  const elapsed = Date.now() - entry.windowStartedAt;
+  const remainingMs = Math.max(0, windowMs() - elapsed);
+  return {
+    limited: true,
+    retryAfterSeconds: Math.ceil(remainingMs / 1000),
+  };
+}
+
 /** Test-only: reset in-memory counters. */
 export function _resetLoginRateLimitForTests(): void {
   attempts.clear();

@@ -19,6 +19,7 @@ import { useAlertRules } from "@/hooks/use-alert-rules";
 import { authedJson } from "@/lib/api-fetch";
 import {
   buildReviewQueueItem,
+  buildManualReviewQueueItem,
   type ReviewCampaignInput,
 } from "@/lib/campaign-review/heuristics";
 import {
@@ -65,6 +66,15 @@ type LiveCampaignsApiResponse = {
     cost: string | null;
     roi: string | null;
   }>;
+};
+
+type OpenReviewRequest = {
+  eventId: number;
+  campaignId: number;
+  campaignName: string;
+  note: string;
+  requestedByEmployeeId: number | null;
+  createdAt: string;
 };
 
 export default function CampaignReviewPage() {
@@ -114,6 +124,13 @@ export default function CampaignReviewPage() {
       authedJson(`/api/live-campaigns?workspace_id=${wsId}&status=live&limit=400&offset=0`),
   });
 
+  const { data: openRequestsData } = useQuery<{ items: OpenReviewRequest[] }>({
+    queryKey: ["campaign-review-open", wsId],
+    enabled: !!activeWorkspaceId,
+    queryFn: () =>
+      authedJson(`/api/campaign-review/open-requests?workspace_id=${wsId}`),
+  });
+
   const offersPerBatch = useMemo(() => {
     const m = new Map<number, number>();
     for (const o of offers) {
@@ -131,16 +148,18 @@ export default function CampaignReviewPage() {
 
   const queue = useMemo(() => {
     void memoryTick;
-    const items: ReviewQueueCampaign[] = [];
+    const byCampaignId = new Map<number, ReviewQueueCampaign>();
     const memoryActor = viewerId;
 
-    for (const raw of campaignResponse?.items ?? []) {
+    function campaignOwnerId(raw: LiveCampaignsApiResponse["items"][0]): number | null {
       const batch = raw.batchId != null ? batchById.get(raw.batchId) : undefined;
-      const ownerId = batch?.employeeId ?? raw.employeeId ?? null;
-      if (ownerFilter === "mine" && ownerId !== viewerId) continue;
-      if (isCampaignDismissed(wsId, memoryActor, raw.id)) continue;
+      return batch?.employeeId ?? raw.employeeId ?? null;
+    }
 
-      const input: ReviewCampaignInput = {
+    function toInput(raw: LiveCampaignsApiResponse["items"][0]): ReviewCampaignInput {
+      const batch = raw.batchId != null ? batchById.get(raw.batchId) : undefined;
+      const ownerId = campaignOwnerId(raw);
+      return {
         id: raw.id,
         campaignName: raw.campaignName,
         batchId: raw.batchId,
@@ -157,17 +176,75 @@ export default function CampaignReviewPage() {
         cost: Number(raw.cost ?? 0),
         roi: Number(raw.roi ?? 0),
       };
+    }
 
+    for (const raw of campaignResponse?.items ?? []) {
+      const ownerId = campaignOwnerId(raw);
+      if (ownerFilter === "mine" && ownerId !== viewerId) continue;
+      if (isCampaignDismissed(wsId, memoryActor, raw.id)) continue;
+
+      const input = toInput(raw);
       const offerCount = raw.batchId != null ? offersPerBatch.get(raw.batchId) ?? 0 : 0;
       const firstSeen = touchCampaignFirstSeen(wsId, memoryActor, raw.id);
       const escalated = markEscalatedIfNeeded(wsId, memoryActor, raw.id, rules);
       const item = buildReviewQueueItem(input, offerCount, firstSeen, escalated, rules);
-      if (item) items.push(item);
+      if (item) byCampaignId.set(raw.id, item);
     }
 
-    return items.sort((a, b) => b.urgencyScore - a.urgencyScore);
+    for (const req of openRequestsData?.items ?? []) {
+      if (isCampaignDismissed(wsId, memoryActor, req.campaignId)) continue;
+
+      const raw = campaignResponse?.items?.find((c) => c.id === req.campaignId);
+      if (raw) {
+        const ownerId = campaignOwnerId(raw);
+        if (ownerFilter === "mine" && ownerId !== viewerId && req.requestedByEmployeeId !== viewerId) {
+          continue;
+        }
+        const manual = buildManualReviewQueueItem(toInput(raw), req.note, req.createdAt);
+        byCampaignId.set(req.campaignId, manual);
+        continue;
+      }
+
+      if (ownerFilter === "mine" && req.requestedByEmployeeId !== viewerId) continue;
+
+      byCampaignId.set(req.campaignId, {
+        campaignId: req.campaignId,
+        campaignName: req.campaignName,
+        batchId: null,
+        batchName: null,
+        employeeId: req.requestedByEmployeeId,
+        employeeName: null,
+        platform: "—",
+        purpose: "—",
+        status: "live",
+        health: "attention_required",
+        healthLabel: "Attention required",
+        signals: [
+          {
+            id: `manual-${req.eventId}`,
+            kind: "traffic_decrease",
+            label: "Manual review requested",
+            detail: req.note.trim() || "Sent from Live Campaigns for review.",
+            severity: "high",
+          },
+        ],
+        suggestedActions: [],
+        visits: 0,
+        conversions: 0,
+        revenue: 0,
+        cost: 0,
+        roi: 0,
+        profit: 0,
+        firstSeenAt: req.createdAt,
+        escalated: true,
+        urgencyScore: 100,
+      });
+    }
+
+    return [...byCampaignId.values()].sort((a, b) => b.urgencyScore - a.urgencyScore);
   }, [
     campaignResponse?.items,
+    openRequestsData?.items,
     batchById,
     offersPerBatch,
     ownerFilter,
@@ -301,7 +378,7 @@ export default function CampaignReviewPage() {
           </p>
           <p className="mt-2 whitespace-pre-wrap text-sm text-foreground">{focusNote.note}</p>
           <p className="mt-2 text-[10px] text-muted-foreground">
-            Captured locally from Live Campaigns for demo review memory — not saved to backend.
+            From Live Campaigns — also stored in the review queue when sent via Send to review.
           </p>
         </section>
       )}

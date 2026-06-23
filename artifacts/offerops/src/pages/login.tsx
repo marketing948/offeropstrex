@@ -23,11 +23,15 @@ export default function Login() {
         title: "Welcome back",
         description: "You're now signed in to OfferOps.",
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Invalid credentials. Please try again.";
       toast({
         variant: "destructive",
         title: "Sign in failed",
-        description: err.message || "Invalid credentials. Please try again.",
+        description: message,
       });
     } finally {
       setIsLoading(false);
