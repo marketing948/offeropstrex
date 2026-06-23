@@ -8,6 +8,8 @@ export type ServerWorkerGoalTarget = {
   affiliateNetworkName?: string | null;
   geoId?: number | null;
   geoCode?: string | null;
+  /** GEOs included in network target distribution (saved on network-level goal rows). */
+  selectedGeoCodes?: string[] | null;
   metricKey: string;
   monthlyTarget: number;
   isActive: boolean;

@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Collapsible,
   CollapsibleContent,
@@ -24,25 +25,33 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { ChevronDown, AlertTriangle } from "lucide-react";
+import { ChevronDown, AlertTriangle, Pencil, Trash2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { authedJson } from "@/lib/api-fetch";
+import { replaceWorkerGoalPlan } from "@/lib/performance-engine/api";
+import type { GoalMetric } from "@/lib/performance-engine/goal-plan-utils";
 import {
-  upsertWorkerGoal,
-  DuplicateGoalError,
-  type UpsertWorkerGoalPayload,
-} from "@/lib/performance-engine/api";
+  formatSharePreview,
+  loadPlanFromGoals,
+  networkNamesInPlan,
+  previewInheritedShares,
+} from "@/lib/performance-engine/goal-plan-utils";
+import type { WorkerGoalTarget } from "@/lib/worker-goals";
 
 type Employee = { id: number; name: string };
 type Network = { id: number; name: string };
 type Geo = { id: number; code: string };
 
-type GoalMetric = "revenue" | "testingBatches" | "workingCampaigns";
-
 type GoalRowState = {
   enabled: boolean;
   target: string;
   xp: string;
+};
+
+type GeoOverrideRow = {
+  metricKey: GoalMetric;
+  geoCode: string;
+  target: string;
 };
 
 const METRIC_ROWS: {
@@ -51,6 +60,7 @@ const METRIC_ROWS: {
   targetLabel: string;
   targetPlaceholder: string;
   defaultXp: string;
+  kind: "revenue" | "count";
 }[] = [
   {
     key: "revenue",
@@ -58,20 +68,23 @@ const METRIC_ROWS: {
     targetLabel: "Target revenue ($)",
     targetPlaceholder: "0",
     defaultXp: "500",
+    kind: "revenue",
   },
   {
     key: "testingBatches",
     title: "Testing Goal",
-    targetLabel: "Target tests / batches",
+    targetLabel: "Target campaigns",
     targetPlaceholder: "0",
     defaultXp: "200",
+    kind: "count",
   },
   {
     key: "workingCampaigns",
     title: "Working Campaigns Goal",
-    targetLabel: "Target working campaigns",
+    targetLabel: "Target campaigns",
     targetPlaceholder: "0",
     defaultXp: "300",
+    kind: "count",
   },
 ];
 
@@ -83,6 +96,12 @@ function emptyRows(): Record<GoalMetric, GoalRowState> {
   };
 }
 
+export type GoalPlanEditContext = {
+  employeeId: number;
+  monthKey: string;
+  networkName?: string | null;
+};
+
 export function CreateGoalPlanModal({
   open,
   onOpenChange,
@@ -90,6 +109,8 @@ export function CreateGoalPlanModal({
   monthKey,
   employees,
   geos,
+  allGoals = [],
+  editContext = null,
   onSaved,
 }: {
   open: boolean;
@@ -98,18 +119,23 @@ export function CreateGoalPlanModal({
   monthKey: string;
   employees: Employee[];
   geos: Geo[];
+  allGoals?: WorkerGoalTarget[];
+  editContext?: GoalPlanEditContext | null;
   onSaved: () => void;
 }) {
   const { toast } = useToast();
+  const isEdit = editContext != null;
   const [saving, setSaving] = useState(false);
-  const [duplicateConflict, setDuplicateConflict] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [scopedToNetwork, setScopedToNetwork] = useState(false);
 
   const [employeeId, setEmployeeId] = useState<number>(employees[0]?.id ?? 0);
   const [month, setMonth] = useState(monthKey);
   const [rows, setRows] = useState(emptyRows);
   const [networkName, setNetworkName] = useState("");
-  const [geoCode, setGeoCode] = useState("");
+  const [selectedGeoCodes, setSelectedGeoCodes] = useState<Set<string>>(new Set());
+  const [geoSearch, setGeoSearch] = useState("");
+  const [overrides, setOverrides] = useState<GeoOverrideRow[]>([]);
 
   const workerNetworksQ = useQuery({
     queryKey: ["worker-affiliate-networks", workspaceId, employeeId],
@@ -128,6 +154,55 @@ export function CreateGoalPlanModal({
     [workerNetworksQ.data],
   );
 
+  const existingNetworks = useMemo(
+    () =>
+      networkNamesInPlan(
+        allGoals.filter((g) => g.employeeId === employeeId && g.monthKey === month),
+      ),
+    [allGoals, employeeId, month],
+  );
+
+  const sortedGeos = useMemo(
+    () => [...geos].sort((a, b) => a.code.toUpperCase().localeCompare(b.code.toUpperCase())),
+    [geos],
+  );
+
+  const filteredGeos = useMemo(() => {
+    const q = geoSearch.trim().toUpperCase();
+    if (!q) return sortedGeos;
+    return sortedGeos.filter((g) => g.code.toUpperCase().includes(q));
+  }, [sortedGeos, geoSearch]);
+
+  const selectedGeoList = useMemo(
+    () => [...selectedGeoCodes].sort((a, b) => a.toUpperCase().localeCompare(b.toUpperCase())),
+    [selectedGeoCodes],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    if (editContext) {
+      setEmployeeId(editContext.employeeId);
+      setMonth(editContext.monthKey);
+      const net = editContext.networkName ?? existingNetworks[0] ?? "";
+      const loaded = loadPlanFromGoals(allGoals, editContext.employeeId, editContext.monthKey, net || null);
+      setRows(loaded.metrics);
+      setOverrides(loaded.overrides);
+      setSelectedGeoCodes(new Set(loaded.selectedGeoCodes));
+      setNetworkName(net);
+      setScopedToNetwork(!!net);
+      setAdvancedOpen(true);
+      return;
+    }
+    setRows(emptyRows());
+    setNetworkName("");
+    setSelectedGeoCodes(new Set());
+    setOverrides([]);
+    setScopedToNetwork(false);
+    setAdvancedOpen(false);
+    setMonth(monthKey);
+    setEmployeeId(employees[0]?.id ?? 0);
+  }, [open, editContext, allGoals, existingNetworks, monthKey, employees]);
+
   useEffect(() => {
     if (networkName && !workerNetworks.some((n) => n.name === networkName)) {
       setNetworkName("");
@@ -137,9 +212,11 @@ export function CreateGoalPlanModal({
   function resetForm() {
     setRows(emptyRows());
     setNetworkName("");
-    setGeoCode("");
-    setDuplicateConflict(false);
+    setSelectedGeoCodes(new Set());
+    setOverrides([]);
+    setScopedToNetwork(false);
     setAdvancedOpen(false);
+    setGeoSearch("");
     setMonth(monthKey);
     setEmployeeId(employees[0]?.id ?? 0);
   }
@@ -148,67 +225,94 @@ export function CreateGoalPlanModal({
     setRows((prev) => ({ ...prev, [metric]: { ...prev[metric], ...patch } }));
   }
 
-  function buildSpecs(): UpsertWorkerGoalPayload["goal"][] {
-    const emp = employees.find((e) => e.id === employeeId);
-    const base = {
-      employeeId,
-      employeeName: emp?.name,
-      monthKey: month,
-      isActive: true,
-      affiliateNetworkId: networkName ? workerNetworks.find((n) => n.name === networkName)?.id ?? null : null,
-      affiliateNetworkName: networkName || null,
-      geoId: geoCode ? geos.find((g) => g.code === geoCode)?.id ?? null : null,
-      geoCode: geoCode || null,
-    };
-
-    const specs: UpsertWorkerGoalPayload["goal"][] = [];
-    const ts = Date.now();
-
-    for (const def of METRIC_ROWS) {
-      const row = rows[def.key];
-      if (!row.enabled || Number(row.target) <= 0) continue;
-      specs.push({
-        ...base,
-        id: `wg_${def.key}_${employeeId}_${month}_${ts}_${specs.length}`,
-        metricKey: def.key,
-        monthlyTarget: Number(row.target),
-        xpReward: Number(row.xp) || 0,
-      });
-    }
-    return specs;
+  function toggleGeo(code: string, checked: boolean) {
+    setSelectedGeoCodes((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(code);
+      else next.delete(code);
+      return next;
+    });
   }
 
-  async function saveGoals(replaceExisting = false) {
-    setSaving(true);
-    setDuplicateConflict(false);
+  function selectAllGeos() {
+    setSelectedGeoCodes(new Set(sortedGeos.map((g) => g.code)));
+  }
 
-    const specs = buildSpecs();
-    if (specs.length === 0) {
+  function clearAllGeos() {
+    setSelectedGeoCodes(new Set());
+  }
+
+  function addOverride() {
+    const geo = selectedGeoList[0];
+    if (!geo) return;
+    setOverrides((prev) => [
+      ...prev,
+      { metricKey: "revenue", geoCode: geo, target: "" },
+    ]);
+  }
+
+  async function savePlan() {
+    setSaving(true);
+    const emp = employees.find((e) => e.id === employeeId);
+    const enabledMetrics = METRIC_ROWS.filter((def) => {
+      const row = rows[def.key];
+      return row.enabled && Number(row.target) > 0;
+    });
+
+    if (enabledMetrics.length === 0) {
       toast({ title: "Enable at least one goal with a target", variant: "destructive" });
       setSaving(false);
       return;
     }
 
-    try {
-      for (const goal of specs) {
-        await upsertWorkerGoal({ workspaceId, goal, replaceExisting });
+    if (scopedToNetwork) {
+      if (!networkName) {
+        toast({ title: "Select an affiliate network", variant: "destructive" });
+        setSaving(false);
+        return;
       }
-      toast({ title: "Monthly goal plan saved" });
+      if (selectedGeoList.length === 0) {
+        toast({ title: "Select at least one GEO for distribution", variant: "destructive" });
+        setSaving(false);
+        return;
+      }
+    }
+
+    try {
+      await replaceWorkerGoalPlan({
+        workspaceId,
+        employeeId,
+        employeeName: emp?.name,
+        monthKey: month,
+        affiliateNetworkName: scopedToNetwork ? networkName : null,
+        affiliateNetworkId: scopedToNetwork
+          ? (workerNetworks.find((n) => n.name === networkName)?.id ?? null)
+          : null,
+        selectedGeoCodes: scopedToNetwork ? selectedGeoList : undefined,
+        metrics: METRIC_ROWS.map((def) => ({
+          metricKey: def.key,
+          monthlyTarget: Number(rows[def.key].target) || 0,
+          xpReward: Number(rows[def.key].xp) || 0,
+          enabled: rows[def.key].enabled && Number(rows[def.key].target) > 0,
+        })),
+        geoOverrides: scopedToNetwork
+          ? overrides
+              .filter((o) => o.geoCode && o.target !== "")
+              .map((o) => ({
+                metricKey: o.metricKey,
+                geoCode: o.geoCode,
+                geoId: geos.find((g) => g.code === o.geoCode)?.id ?? null,
+                monthlyTarget: Number(o.target),
+              }))
+          : undefined,
+      });
+      toast({ title: isEdit ? "Goal plan updated" : "Monthly goal plan saved" });
       onSaved();
       onOpenChange(false);
       resetForm();
     } catch (err) {
-      if (err instanceof DuplicateGoalError) {
-        setDuplicateConflict(true);
-        toast({
-          title: "Duplicate goal",
-          description: "A goal already exists for this worker/month/metric/scope.",
-          variant: "destructive",
-        });
-      } else {
-        const msg = err instanceof Error ? err.message : "Save failed";
-        toast({ title: "Save failed", description: msg, variant: "destructive" });
-      }
+      const msg = err instanceof Error ? err.message : "Save failed";
+      toast({ title: "Save failed", description: msg, variant: "destructive" });
     } finally {
       setSaving(false);
     }
@@ -222,25 +326,35 @@ export function CreateGoalPlanModal({
         onOpenChange(v);
       }}
     >
-      <DialogContent className="max-w-[760px] w-[95vw] max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-[820px] w-[95vw] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Create Monthly Goal Plan</DialogTitle>
+          <DialogTitle>{isEdit ? "Edit Monthly Goal Plan" : "Create Monthly Goal Plan"}</DialogTitle>
           <DialogDescription>
-            Set monthly targets and XP rewards for a worker.
+            Set monthly targets and choose which GEOs receive inherited shares from network goals.
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <Label>Month</Label>
-            <Input type="month" className="mt-1" value={month} onChange={(e) => setMonth(e.target.value)} />
+            <Input
+              type="month"
+              className="mt-1"
+              value={month}
+              onChange={(e) => setMonth(e.target.value)}
+              disabled={isEdit}
+            />
           </div>
           <div>
             <Label>Worker</Label>
-            <Select value={String(employeeId)} onValueChange={(v) => {
-              setEmployeeId(Number(v));
-              setNetworkName("");
-            }}>
+            <Select
+              value={String(employeeId)}
+              onValueChange={(v) => {
+                setEmployeeId(Number(v));
+                setNetworkName("");
+              }}
+              disabled={isEdit}
+            >
               <SelectTrigger className="mt-1"><SelectValue placeholder="Select worker" /></SelectTrigger>
               <SelectContent>
                 {employees.map((e) => (
@@ -255,6 +369,10 @@ export function CreateGoalPlanModal({
           <h3 className="text-sm font-semibold">Goal Targets</h3>
           {METRIC_ROWS.map((def) => {
             const row = rows[def.key];
+            const preview =
+              scopedToNetwork && networkName && selectedGeoList.length > 0 && row.enabled && Number(row.target) > 0
+                ? formatSharePreview(def.key, Number(row.target), selectedGeoList.length)
+                : null;
             return (
               <div
                 key={def.key}
@@ -276,29 +394,34 @@ export function CreateGoalPlanModal({
                   </div>
                 </div>
                 {row.enabled && (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <Label className="text-xs">{def.targetLabel}</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        className="mt-1"
-                        placeholder={def.targetPlaceholder}
-                        value={row.target}
-                        onChange={(e) => updateRow(def.key, { target: e.target.value })}
-                      />
+                  <>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <Label className="text-xs">{def.targetLabel}</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          className="mt-1"
+                          placeholder={def.targetPlaceholder}
+                          value={row.target}
+                          onChange={(e) => updateRow(def.key, { target: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">XP reward</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          className="mt-1"
+                          value={row.xp}
+                          onChange={(e) => updateRow(def.key, { xp: e.target.value })}
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <Label className="text-xs">XP reward</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        className="mt-1"
-                        value={row.xp}
-                        onChange={(e) => updateRow(def.key, { xp: e.target.value })}
-                      />
-                    </div>
-                  </div>
+                    {preview && (
+                      <p className="mt-2 text-xs text-muted-foreground">Inherited split: {preview}</p>
+                    )}
+                  </>
                 )}
               </div>
             );
@@ -311,85 +434,243 @@ export function CreateGoalPlanModal({
               type="button"
               className="flex w-full items-center justify-between rounded-lg border px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/40"
             >
-              Advanced Breakdown
+              Network & GEO Scope
               <ChevronDown size={16} className={`transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
             </button>
           </CollapsibleTrigger>
-          <CollapsibleContent className="pt-3 space-y-3">
-            <p className="text-xs text-muted-foreground">
-              Optional network / GEO scope for all enabled goals in this plan. Leave blank for worker-wide targets.
-            </p>
-            <div className="grid gap-3 sm:grid-cols-2">
+          <CollapsibleContent className="pt-3 space-y-4">
+            <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/20 px-3 py-2">
               <div>
-                <Label>Affiliate Network</Label>
-                {employeeId <= 0 ? (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Select a worker first to choose from their available networks.
-                  </p>
-                ) : workerNetworksQ.isLoading ? (
-                  <p className="mt-1 text-xs text-muted-foreground">Loading networks…</p>
-                ) : workerNetworks.length === 0 ? (
-                  <p className="mt-1 text-xs text-amber-700">
-                    No affiliate networks assigned to this worker.
-                  </p>
-                ) : (
-                  <Select
-                    value={networkName || "none"}
-                    onValueChange={(v) => setNetworkName(v === "none" ? "" : v)}
-                    disabled={employeeId <= 0}
-                  >
-                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Any network</SelectItem>
-                      {workerNetworks.map((n) => (
-                        <SelectItem key={n.id} value={n.name}>{n.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
+                <p className="text-sm font-medium">Scope goals to affiliate network</p>
+                <p className="text-xs text-muted-foreground">
+                  Required to choose GEOs for inherited breakdown before activity exists.
+                </p>
               </div>
-              <div>
-                <Label>GEO</Label>
-                <Select value={geoCode || "none"} onValueChange={(v) => setGeoCode(v === "none" ? "" : v)}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Any GEO</SelectItem>
-                    {geos.map((g) => (
-                      <SelectItem key={g.id} value={g.code}>{g.code}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              <Switch checked={scopedToNetwork} onCheckedChange={setScopedToNetwork} />
             </div>
+
+            {scopedToNetwork && (
+              <>
+                <div>
+                  <Label>Affiliate Network</Label>
+                  {employeeId <= 0 ? (
+                    <p className="mt-1 text-xs text-muted-foreground">Select a worker first.</p>
+                  ) : workerNetworksQ.isLoading ? (
+                    <p className="mt-1 text-xs text-muted-foreground">Loading networks…</p>
+                  ) : workerNetworks.length === 0 ? (
+                    <div className="mt-1 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                      No affiliate networks assigned to this worker. Assign networks before saving network goals.
+                    </div>
+                  ) : (
+                    <Select value={networkName || "none"} onValueChange={(v) => setNetworkName(v === "none" ? "" : v)}>
+                      <SelectTrigger className="mt-1"><SelectValue placeholder="Select network" /></SelectTrigger>
+                      <SelectContent>
+                        {workerNetworks.map((n) => (
+                          <SelectItem key={n.id} value={n.name}>{n.name}</SelectItem>
+                        ))}
+                        {existingNetworks
+                          .filter((name) => !workerNetworks.some((n) => n.name === name))
+                          .map((name) => (
+                            <SelectItem key={name} value={name}>{name}</SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+
+                <div className="rounded-lg border p-3 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-medium">Selected GEOs for distribution</p>
+                      <p className="text-xs text-muted-foreground">
+                        {selectedGeoList.length} GEO{selectedGeoList.length === 1 ? "" : "s"} selected
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button type="button" variant="outline" size="sm" onClick={selectAllGeos}>
+                        Select all
+                      </Button>
+                      <Button type="button" variant="outline" size="sm" onClick={clearAllGeos}>
+                        Clear all
+                      </Button>
+                    </div>
+                  </div>
+                  <Input
+                    placeholder="Search GEO…"
+                    value={geoSearch}
+                    onChange={(e) => setGeoSearch(e.target.value)}
+                  />
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto">
+                    {filteredGeos.map((g) => (
+                      <label
+                        key={g.id}
+                        className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm cursor-pointer hover:bg-muted/40"
+                      >
+                        <Checkbox
+                          checked={selectedGeoCodes.has(g.code)}
+                          onCheckedChange={(v) => toggleGeo(g.code, v === true)}
+                        />
+                        <span>{g.code}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {selectedGeoList.length > 0 && (
+                  <div className="rounded-lg border p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium">Custom GEO overrides</p>
+                      <Button type="button" variant="outline" size="sm" onClick={addOverride}>
+                        Add override
+                      </Button>
+                    </div>
+                    {overrides.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        Optional per-GEO custom targets replace inherited shares for that GEO.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {overrides.map((row, idx) => (
+                          <div key={`${row.geoCode}-${idx}`} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 items-end">
+                            <div>
+                              <Label className="text-xs">GEO</Label>
+                              <Select
+                                value={row.geoCode}
+                                onValueChange={(v) =>
+                                  setOverrides((prev) =>
+                                    prev.map((r, i) => (i === idx ? { ...r, geoCode: v } : r)),
+                                  )
+                                }
+                              >
+                                <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  {selectedGeoList.map((code) => (
+                                    <SelectItem key={code} value={code}>{code}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div>
+                              <Label className="text-xs">Metric</Label>
+                              <Select
+                                value={row.metricKey}
+                                onValueChange={(v) =>
+                                  setOverrides((prev) =>
+                                    prev.map((r, i) =>
+                                      i === idx ? { ...r, metricKey: v as GoalMetric } : r,
+                                    ),
+                                  )
+                                }
+                              >
+                                <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  {METRIC_ROWS.map((m) => (
+                                    <SelectItem key={m.key} value={m.key}>{m.title}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div>
+                              <Label className="text-xs">Custom target</Label>
+                              <Input
+                                type="number"
+                                min={0}
+                                className="mt-1 h-9"
+                                value={row.target}
+                                onChange={(e) =>
+                                  setOverrides((prev) =>
+                                    prev.map((r, i) => (i === idx ? { ...r, target: e.target.value } : r)),
+                                  )
+                                }
+                              />
+                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-9 w-9 text-destructive"
+                              onClick={() => setOverrides((prev) => prev.filter((_, i) => i !== idx))}
+                            >
+                              <Trash2 size={14} />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {METRIC_ROWS.map((def) => {
+                      if (!rows[def.key].enabled || Number(rows[def.key].target) <= 0) return null;
+                      const shares = previewInheritedShares(
+                        def.key,
+                        Number(rows[def.key].target),
+                        selectedGeoList,
+                      );
+                      if (shares.size === 0) return null;
+                      return (
+                        <div key={def.key} className="rounded-md bg-muted/30 px-3 py-2">
+                          <p className="text-xs font-semibold text-muted-foreground mb-1">{def.title} preview</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {selectedGeoList.map((code) => {
+                              const custom = overrides.find(
+                                (o) => o.metricKey === def.key && o.geoCode === code && o.target !== "",
+                              );
+                              const inherited = shares.get(code);
+                              const isCustom = custom != null;
+                              return (
+                                <span
+                                  key={code}
+                                  className={`rounded border px-1.5 py-0.5 text-[11px] ${
+                                    isCustom
+                                      ? "border-blue-200 bg-blue-50 text-blue-700"
+                                      : "border-slate-200 bg-white text-slate-600"
+                                  }`}
+                                >
+                                  {code}{" "}
+                                  {isCustom
+                                    ? custom.target
+                                    : def.key === "revenue"
+                                      ? `$${(inherited ?? 0).toLocaleString()}`
+                                      : inherited}
+                                  {isCustom ? " custom" : " inherited"}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
           </CollapsibleContent>
         </Collapsible>
-
-        {duplicateConflict && (
-          <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 flex gap-2 text-sm">
-            <AlertTriangle className="text-destructive shrink-0 mt-0.5" size={16} />
-            <div>
-              <p className="font-medium text-destructive">A goal already exists for this worker/month/metric/scope.</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Replace the existing goal to update targets, or cancel and adjust your selection.
-              </p>
-            </div>
-          </div>
-        )}
 
         <DialogFooter className="gap-2 flex-wrap sm:justify-end">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>
-          {duplicateConflict && (
-            <Button variant="secondary" disabled={saving} onClick={() => saveGoals(true)}>
-              Replace existing goal
-            </Button>
-          )}
-          <Button disabled={saving} onClick={() => saveGoals(false)}>
-            {saving ? "Saving…" : "Save Goal Plan"}
+          <Button
+            disabled={saving || (scopedToNetwork && workerNetworks.length === 0)}
+            onClick={() => void savePlan()}
+          >
+            {saving ? "Saving…" : isEdit ? "Save Changes" : "Save Goal Plan"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+export function EditGoalPlanButton({
+  onClick,
+}: {
+  onClick: () => void;
+}) {
+  return (
+    <Button variant="ghost" size="sm" className="h-8 px-2" onClick={onClick}>
+      <Pencil size={14} className="mr-1" />
+      Edit Plan
+    </Button>
   );
 }

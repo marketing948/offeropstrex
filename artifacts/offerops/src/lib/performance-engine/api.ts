@@ -141,6 +141,7 @@ export type UpsertWorkerGoalPayload = {
     affiliateNetworkName?: string | null;
     geoId?: number | null;
     geoCode?: string | null;
+    selectedGeoCodes?: string[] | null;
     metricKey: "revenue" | "testingBatches" | "workingCampaigns";
     monthlyTarget: number;
     isActive: boolean;
@@ -150,6 +151,28 @@ export type UpsertWorkerGoalPayload = {
     notes?: string;
   };
   replaceExisting?: boolean;
+};
+
+export type ReplaceWorkerGoalPlanPayload = {
+  workspaceId: number;
+  employeeId: number;
+  employeeName?: string;
+  monthKey: string;
+  affiliateNetworkName?: string | null;
+  affiliateNetworkId?: number | null;
+  selectedGeoCodes?: string[];
+  metrics: {
+    metricKey: "revenue" | "testingBatches" | "workingCampaigns";
+    monthlyTarget: number;
+    xpReward?: number;
+    enabled: boolean;
+  }[];
+  geoOverrides?: {
+    metricKey: "revenue" | "testingBatches" | "workingCampaigns";
+    geoCode: string;
+    geoId?: number | null;
+    monthlyTarget: number;
+  }[];
 };
 
 export class DuplicateGoalError extends Error {
@@ -187,6 +210,24 @@ export async function upsertWorkerGoal(payload: UpsertWorkerGoalPayload) {
     throw new Error(detail || `${res.status} ${res.statusText}`);
   }
   return (await res.json()) as { ok: boolean; goal: UpsertWorkerGoalPayload["goal"] };
+}
+
+export async function replaceWorkerGoalPlan(payload: ReplaceWorkerGoalPlanPayload) {
+  const res = await authedFetch("/api/performance/worker-goals/plan", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let detail = text;
+    try {
+      detail = (JSON.parse(text) as { error?: string }).error ?? text;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail || `${res.status} ${res.statusText}`);
+  }
+  return (await res.json()) as { ok: boolean; goals: UpsertWorkerGoalPayload["goal"][] };
 }
 
 export function currentMonthKey(d = new Date()): string {
