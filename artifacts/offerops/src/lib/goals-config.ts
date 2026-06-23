@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Employee, TestingBatch, Offer, TodoTask } from "@workspace/api-client-react";
 import { useWorkspace } from "@/lib/workspace-context";
-import { readAuthToken } from "@/lib/api-fetch";
+import { readAuthToken, authedJson } from "@/lib/api-fetch";
 
 // ─────────────────────────────────────────────────────────────────
 // Types
@@ -9,6 +9,8 @@ import { readAuthToken } from "@/lib/api-fetch";
 
 export interface PointAction {
   id: string;
+  /** Canonical catalog action type — trigger identity */
+  actionType?: string;
   name: string;
   description: string;
   points: number;
@@ -39,6 +41,7 @@ export interface RankTier {
 
 export interface Penalty {
   id: string;
+  actionType?: string;
   name: string;
   description: string;
   triggerCondition: string;
@@ -48,12 +51,14 @@ export interface Penalty {
 
 export interface BonusEvent {
   id: string;
+  bonusEventType?: string;
   name: string;
   description: string;
-  multiplierTarget: string; // pointAction id
+  multiplierTarget: string;
   multiplier: number;
+  xpAmount?: number;
   active: boolean;
-  expiresAt: string | null; // ISO date or null
+  expiresAt: string | null;
 }
 
 export interface KpiTarget {
@@ -63,6 +68,27 @@ export interface KpiTarget {
   monthlyTarget: number;
 }
 
+export type { WorkerGoalTarget, EventPointRule, WorkerGoalMetricKey } from "@/lib/worker-goals";
+
+import type { WorkerGoalTarget, EventPointRule } from "@/lib/worker-goals";
+import { resolveXpCatalogFromRule } from "@/lib/performance-engine/action-catalog";
+
+function migratePointActions(actions: PointAction[]): PointAction[] {
+  return actions.map((a) => {
+    const entry = resolveXpCatalogFromRule(a);
+    if (entry) {
+      return {
+        ...a,
+        actionType: entry.actionType,
+        id: entry.legacyRuleIds?.[0] ?? entry.actionType,
+        name: a.name || entry.label,
+        description: a.description || entry.description,
+      };
+    }
+    return { ...a, actionType: a.actionType ?? a.id };
+  });
+}
+
 export interface GoalsConfig {
   pointActions: PointAction[];
   comboBonuses: ComboBonus[];
@@ -70,6 +96,8 @@ export interface GoalsConfig {
   penalties: Penalty[];
   bonusEvents: BonusEvent[];
   kpiTargets: KpiTarget[];
+  workerGoalTargets: WorkerGoalTarget[];
+  eventPointRules: EventPointRule[];
   weights: { activity: number; winner: number; optimization: number; discipline: number };
   roiThreshold: number;
 }
@@ -131,6 +159,21 @@ export const DEFAULT_CONFIG: GoalsConfig = {
     { id: "kt3", name: "Optimizations Completed", key: "optimizations", monthlyTarget: 30 },
     { id: "kt4", name: "Winners Found", key: "winners", monthlyTarget: 10 },
     { id: "kt5", name: "Scale Tasks Created", key: "scaleTasks", monthlyTarget: 5 },
+    { id: "kt6", name: "Monthly Revenue", key: "revenue", monthlyTarget: 50000 },
+    { id: "kt7", name: "Working Campaigns", key: "workingCampaigns", monthlyTarget: 10 },
+    { id: "kt8", name: "Testing Pipeline", key: "testingBatches", monthlyTarget: 8 },
+  ],
+  workerGoalTargets: [],
+  eventPointRules: [
+    {
+      id: "epr_report_download",
+      eventKey: "report_downloaded",
+      label: "Downloaded report",
+      points: 5,
+      isActive: true,
+      category: "report",
+      description: "Configured rule — event tracking will apply when wired.",
+    },
   ],
 };
 
@@ -319,7 +362,8 @@ export function useGoalsConfig() {
   const { activeWorkspaceId } = useWorkspace();
   return useQuery<GoalsConfig>({
     queryKey: GOALS_CONFIG_KEY(activeWorkspaceId),
-    queryFn: () => fetch(`/api/settings/goals?workspace_id=${activeWorkspaceId}`).then(r => r.json()).then(migrateConfig),
+    queryFn: () =>
+      authedJson<GoalsConfig>(`/api/settings/goals?workspace_id=${activeWorkspaceId}`).then(migrateConfig),
     staleTime: 60000,
     placeholderData: DEFAULT_CONFIG,
     enabled: activeWorkspaceId != null,
@@ -342,11 +386,10 @@ export function useUpdateGoalsConfig() {
       if (activeWorkspaceId == null) {
         return Promise.reject(new Error("No active workspace"));
       }
-      return fetch(`/api/settings/goals?workspace_id=${activeWorkspaceId}`, {
+      return authedJson<GoalsConfig>(`/api/settings/goals?workspace_id=${activeWorkspaceId}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...config, _adminInfo: { adminId, adminName, summary, tab } }),
-      }).then(r => r.json());
+      }).then(migrateConfig);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: GOALS_CONFIG_KEY(activeWorkspaceId) });
@@ -377,9 +420,34 @@ export function useGoalsAuditLog() {
 // Config migration helper (old format → new format)
 // ─────────────────────────────────────────────────────────────────
 
-export function migrateConfig(raw: Record<string, unknown>): GoalsConfig {
-  // If already new format (has pointActions), return as-is
-  if (Array.isArray((raw as unknown as GoalsConfig).pointActions)) return raw as unknown as GoalsConfig;
-  // Legacy format migration
+export function ensureGoalsConfig(raw: Partial<GoalsConfig> | null | undefined): GoalsConfig {
+  const merged = {
+    ...DEFAULT_CONFIG,
+    ...(raw && typeof raw === "object" ? raw : {}),
+  };
+  return {
+    ...merged,
+    pointActions: migratePointActions(
+      Array.isArray(merged.pointActions) ? merged.pointActions : DEFAULT_CONFIG.pointActions,
+    ),
+    comboBonuses: Array.isArray(merged.comboBonuses) ? merged.comboBonuses : DEFAULT_CONFIG.comboBonuses,
+    ranks: Array.isArray(merged.ranks) ? merged.ranks : DEFAULT_CONFIG.ranks,
+    penalties: Array.isArray(merged.penalties) ? merged.penalties : DEFAULT_CONFIG.penalties,
+    bonusEvents: Array.isArray(merged.bonusEvents) ? merged.bonusEvents : DEFAULT_CONFIG.bonusEvents,
+    kpiTargets: Array.isArray(merged.kpiTargets) ? merged.kpiTargets : DEFAULT_CONFIG.kpiTargets,
+    workerGoalTargets: Array.isArray(merged.workerGoalTargets) ? merged.workerGoalTargets : [],
+    eventPointRules: Array.isArray(merged.eventPointRules)
+      ? merged.eventPointRules
+      : DEFAULT_CONFIG.eventPointRules,
+    weights: merged.weights ?? DEFAULT_CONFIG.weights,
+    roiThreshold: merged.roiThreshold ?? DEFAULT_CONFIG.roiThreshold,
+  };
+}
+
+export function migrateConfig(raw: unknown): GoalsConfig {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_CONFIG };
+  if (Array.isArray((raw as GoalsConfig).pointActions)) {
+    return ensureGoalsConfig(raw as GoalsConfig);
+  }
   return { ...DEFAULT_CONFIG };
 }

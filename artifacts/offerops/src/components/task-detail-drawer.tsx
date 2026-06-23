@@ -44,6 +44,8 @@ import {
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
+import { useAuth } from "@/lib/auth";
+import { refetchWorkerRankAndGoals } from "@/lib/performance-engine/use-worker-monthly-goals";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useToast } from "@/hooks/use-toast";
 import { authedJson } from "@/lib/api-fetch";
@@ -547,6 +549,9 @@ function MoveWinnersForm({ onDone, onCancel }: { onDone: () => Promise<void>; on
 function useCompleteTask(task: TodoTask) {
   const { toast } = useToast();
   const { celebrateTaskCompletion } = useExpFeedback();
+  const queryClient = useQueryClient();
+  const { activeWorkspaceId } = useWorkspace();
+  const { currentEmployee } = useAuth();
   return async function complete(
     taskId: number,
     body: unknown,
@@ -557,6 +562,7 @@ function useCompleteTask(task: TodoTask) {
         method: "POST",
         body: JSON.stringify(body),
       });
+      await refetchWorkerRankAndGoals(queryClient, activeWorkspaceId, currentEmployee?.id);
       celebrateTaskCompletion(task, expOpts);
       return true;
     } catch (e: unknown) {

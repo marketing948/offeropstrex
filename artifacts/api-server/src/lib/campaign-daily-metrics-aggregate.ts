@@ -1,4 +1,4 @@
-import { and, eq, gte, lt, lte, sql, sum, type SQL } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, lte, sql, sum, type SQL } from "drizzle-orm";
 import {
   batchResultsTable,
   campaignDailyMetricsTable,
@@ -28,10 +28,13 @@ export type MetricsAggregateFilters = MetricsDateRange & {
   geo?: string;
   affiliateNetwork?: string;
   trafficSource?: string;
+  /** Worker scope: restrict to these affiliate network names (batch column). */
+  allowedAffiliateNetworkNames?: string[];
 };
 
 export type PerformanceListRow = {
   id: number;
+  campaignId: number;
   batchId: number | null;
   date: string;
   spend: number;
@@ -76,6 +79,13 @@ function batchFilterConditions(filters: MetricsAggregateFilters): SQL[] {
   if (filters.trafficSource) {
     conditions.push(eq(testingBatchesTable.trafficSource, filters.trafficSource));
   }
+  if (filters.allowedAffiliateNetworkNames) {
+    if (filters.allowedAffiliateNetworkNames.length === 0) {
+      conditions.push(sql`1 = 0`);
+    } else {
+      conditions.push(inArray(testingBatchesTable.affiliateNetwork, filters.allowedAffiliateNetworkNames));
+    }
+  }
 
   return conditions;
 }
@@ -92,6 +102,60 @@ function batchJoin() {
     eq(campaignsTable.batchId, testingBatchesTable.id),
     eq(testingBatchesTable.workspaceId, campaignsTable.workspaceId),
   );
+}
+
+export type CampaignMetricRangeTotals = {
+  campaignId: number;
+  visits: number;
+  conversions: number;
+  cost: number;
+  revenue: number;
+  profit: number;
+  roi: number | null;
+  epc: number | null;
+};
+
+/** Per-campaign summed metrics over an inclusive date range. */
+export async function queryCampaignMetricTotalsMap(
+  workspaceId: number,
+  range: MetricsDateRange,
+  campaignIds: number[],
+): Promise<Map<number, CampaignMetricRangeTotals>> {
+  const map = new Map<number, CampaignMetricRangeTotals>();
+  if (campaignIds.length === 0) return map;
+
+  const rows = await db
+    .select({
+      campaignId: campaignDailyMetricsTable.campaignId,
+      visits: sum(campaignDailyMetricsTable.visits),
+      conversions: sum(campaignDailyMetricsTable.conversions),
+      cost: sum(campaignDailyMetricsTable.cost),
+      revenue: sum(campaignDailyMetricsTable.revenue),
+    })
+    .from(campaignDailyMetricsTable)
+    .where(
+      and(
+        eq(campaignDailyMetricsTable.workspaceId, workspaceId),
+        gte(campaignDailyMetricsTable.date, range.dateFrom),
+        lte(campaignDailyMetricsTable.date, range.dateTo),
+        inArray(campaignDailyMetricsTable.campaignId, campaignIds),
+      ),
+    )
+    .groupBy(campaignDailyMetricsTable.campaignId);
+
+  for (const r of rows) {
+    const totals = totalsFromSums(
+      Number(r.visits ?? 0),
+      Number(r.conversions ?? 0),
+      Number(r.cost ?? 0),
+      Number(r.revenue ?? 0),
+    );
+    map.set(r.campaignId, {
+      campaignId: r.campaignId,
+      ...totals,
+    });
+  }
+  return map;
 }
 
 /** Workspace totals from imported daily metrics (metrics.date inclusive). */
@@ -118,12 +182,13 @@ export async function queryWorkspaceMetricTotals(
   );
 }
 
-/** One performance-shaped row per (batch_id, metrics.date); visits exposed as clicks. */
+/** One performance-shaped row per (campaign_id, metrics.date); visits exposed as clicks. */
 export async function queryPerformanceListRows(
   filters: MetricsAggregateFilters,
 ): Promise<PerformanceListRow[]> {
   const rows = await db
     .select({
+      campaignId: campaignsTable.id,
       batchId: campaignsTable.batchId,
       date: campaignDailyMetricsTable.date,
       visits: sum(campaignDailyMetricsTable.visits),
@@ -136,8 +201,8 @@ export async function queryPerformanceListRows(
     .innerJoin(campaignsTable, metricsJoin())
     .leftJoin(testingBatchesTable, batchJoin())
     .where(and(...batchFilterConditions(filters)))
-    .groupBy(campaignsTable.batchId, campaignDailyMetricsTable.date)
-    .orderBy(campaignDailyMetricsTable.date, campaignsTable.batchId);
+    .groupBy(campaignsTable.id, campaignsTable.batchId, campaignDailyMetricsTable.date)
+    .orderBy(campaignDailyMetricsTable.date, campaignsTable.id);
 
   return rows.map((r) => {
     const cost = Number(r.cost ?? 0);
@@ -149,6 +214,7 @@ export async function queryPerformanceListRows(
     const clicks = visits;
     return {
       id: Number(r.minId ?? 0),
+      campaignId: r.campaignId,
       batchId: r.batchId,
       date: String(r.date),
       spend: cost,
@@ -255,10 +321,35 @@ async function queryBatchWinnersInRange(
   return map;
 }
 
+export type DashboardBreakdownScope = {
+  employeeId?: number;
+  allowedNetworkNames?: string[];
+};
+
+const EMPTY_BREAKDOWNS: DashboardBreakdownsResult = {
+  byWorker: [],
+  byTrafficSource: [],
+  byGeo: [],
+  byNetwork: [],
+};
+
 export async function queryDashboardBreakdowns(
   workspaceId: number,
   range: MetricsDateRange,
+  scope?: DashboardBreakdownScope,
 ): Promise<DashboardBreakdownsResult> {
+  if (scope?.allowedNetworkNames && scope.allowedNetworkNames.length === 0) {
+    return EMPTY_BREAKDOWNS;
+  }
+
+  const batchConditions = [eq(testingBatchesTable.workspaceId, workspaceId)];
+  if (scope?.employeeId != null) {
+    batchConditions.push(eq(testingBatchesTable.employeeId, scope.employeeId));
+  }
+  if (scope?.allowedNetworkNames?.length) {
+    batchConditions.push(inArray(testingBatchesTable.affiliateNetwork, scope.allowedNetworkNames));
+  }
+
   const batches = await db
     .select({
       batchId: testingBatchesTable.id,
@@ -270,7 +361,7 @@ export async function queryDashboardBreakdowns(
     })
     .from(testingBatchesTable)
     .leftJoin(employeesTable, eq(testingBatchesTable.employeeId, employeesTable.id))
-    .where(eq(testingBatchesTable.workspaceId, workspaceId));
+    .where(and(...batchConditions));
 
   const metricsByBatch = await queryBatchMetricTotalsMap(workspaceId, range);
   const winnersByBatch = await queryBatchWinnersInRange(workspaceId, range);

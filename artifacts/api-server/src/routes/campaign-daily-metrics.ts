@@ -9,6 +9,10 @@ import {
 } from "../lib/campaign-daily-metrics-access.ts";
 import { deriveCampaignMetricFields } from "../lib/campaign-daily-metrics-math.ts";
 import {
+  queryCampaignMetricTotalsMap,
+  resolveMetricsDateRange,
+} from "../lib/campaign-daily-metrics-aggregate.ts";
+import {
   confirmVoluumMetricsImport,
   previewVoluumMetricsImport,
 } from "../lib/voluum-metrics-import.ts";
@@ -110,8 +114,28 @@ router.get("/campaign-daily-metrics", async (req, res): Promise<void> => {
     return;
   }
 
-  const metricDate = parseMetricDateQuery(req.query["date"], res);
-  if (metricDate === null) return;
+  const dateFromRaw = req.query["date_from"];
+  const dateToRaw = req.query["date_to"];
+  const hasRange =
+    dateFromRaw != null &&
+    String(dateFromRaw).trim() !== "" &&
+    dateToRaw != null &&
+    String(dateToRaw).trim() !== "";
+
+  let metricDate: string | null = null;
+  let range: { dateFrom: string; dateTo: string } | null = null;
+
+  if (hasRange) {
+    const resolved = resolveMetricsDateRange(String(dateFromRaw), String(dateToRaw));
+    if ("error" in resolved) {
+      res.status(400).json({ error: resolved.error });
+      return;
+    }
+    range = resolved;
+  } else {
+    metricDate = parseMetricDateQuery(req.query["date"], res);
+    if (metricDate === null) return;
+  }
 
   const statusRaw = req.query["status"];
   const status = statusRaw == null || statusRaw === "" ? "live" : statusRaw;
@@ -145,7 +169,30 @@ router.get("/campaign-daily-metrics", async (req, res): Promise<void> => {
 
   const ids = visibleCampaignIds.map((r) => r.id);
   if (ids.length === 0) {
-    res.json({ date: metricDate, items: [] });
+    res.json(
+      range
+        ? { dateFrom: range.dateFrom, dateTo: range.dateTo, items: [] }
+        : { date: metricDate, items: [] },
+    );
+    return;
+  }
+
+  if (range) {
+    const totalsMap = await queryCampaignMetricTotalsMap(wsId, range, ids);
+    const items = ids
+      .map((id) => totalsMap.get(id))
+      .filter((row): row is NonNullable<typeof row> => row != null)
+      .map((row) => ({
+        campaignId: row.campaignId,
+        cost: String(row.cost),
+        revenue: String(row.revenue),
+        conversions: row.conversions,
+        visits: row.visits,
+        profit: String(row.profit),
+        roi: row.roi != null ? String(row.roi) : null,
+        epc: row.epc != null ? String(row.epc) : null,
+      }));
+    res.json({ dateFrom: range.dateFrom, dateTo: range.dateTo, items });
     return;
   }
 

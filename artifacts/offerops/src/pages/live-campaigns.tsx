@@ -1,10 +1,4 @@
 // CampaignOps redesign — Live Campaigns page.
-//
-// Lists live Campaigns in the workspace with rich filtering. The page
-// is the operator's view of which iOS / Android creatives are running
-// against which traffic sources, when each went live, and the current
-// per-Campaign performance numbers (populated by the find_winners
-// task completion flow).
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -23,8 +17,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { DateFilterBar } from "@/components/date-filter-bar";
-import { DateFilterSingleDay } from "@/components/date-filter-bar";
 import { useDateFilterState } from "@/hooks/use-date-filter-state";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -33,40 +25,23 @@ import {
 } from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useAlertRules } from "@/hooks/use-alert-rules";
-import { LiveCampaignsMonitoringTable } from "@/components/live-campaigns/live-campaigns-monitoring-table";
+import type { MonitoringCampaign } from "@/components/live-campaigns/live-campaigns-monitoring-table";
+import { LiveCampaignsSummaryTable } from "@/components/live-campaigns/live-campaigns-summary-table";
+import { LiveCampaignDrawer } from "@/components/live-campaigns/live-campaign-drawer";
+import { PerformanceRangePicker } from "@/components/live-campaigns/performance-range-picker";
+import { formatPerformanceRangeLabel } from "@/components/live-campaigns/live-campaign-labels";
 import { RefreshingHint } from "@/components/operational-state/refreshing-hint";
 import { operationalErrorMessage } from "@/lib/operational-feedback";
 
-type CampaignPurpose = "testing" | "working" | "scaling";
-
-type Campaign = {
-  id: number;
+type Campaign = MonitoringCampaign & {
   workspaceId: number;
-  batchId: number | null;
-  campaignPurpose: CampaignPurpose;
-  platform: "ios" | "android";
-  campaignName: string;
-  status: "draft" | "ready" | "voluum_created" | "live" | "tested" | "closed";
   trafficSourceId: number | null;
-  voluumCampaignId: string | null;
   voluumCampaignName: string | null;
   trafficSourceCampaignId: string | null;
   trafficSourceCampaignUrl: string | null;
-  liveStartedAt: string | null;
-  winnersCount: number | null;
-  revenue: string | null;
-  cost: string | null;
-  clicks: number | null;
-  conversions: number | null;
-  roi: string | null;
   notes: string | null;
   createdAt: string;
   updatedAt: string;
-  batchName: string | null;
-  batchGeo: string | null;
-  batchAffiliateNetwork: string | null;
-  employeeName: string | null;
-  trafficSourceName: string | null;
 };
 
 type LiveCampaignsResponse = {
@@ -89,6 +64,12 @@ type DailyMetricRow = {
   epc: string | null;
 };
 
+type RangeMetricsResponse = {
+  dateFrom: string;
+  dateTo: string;
+  items: DailyMetricRow[];
+};
+
 export default function LiveCampaigns() {
   const { currentEmployee } = useAuth();
   const { activeWorkspaceId } = useWorkspace();
@@ -98,27 +79,27 @@ export default function LiveCampaigns() {
   const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [closeTarget, setCloseTarget] = useState<{ id: number; name: string } | null>(null);
+  const [selectedCampaign, setSelectedCampaign] = useState<MonitoringCampaign | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("live");
   const [platformFilter, setPlatformFilter] = useState<string>("all");
   const [trafficSourceFilter, setTrafficSourceFilter] = useState<string>("all");
   const [geoFilter, setGeoFilter] = useState<string>("all");
   const [networkFilter, setNetworkFilter] = useState<string>("all");
   const [batchFilter, setBatchFilter] = useState<string>("all");
-  const [wentLiveFilterActive, setWentLiveFilterActive] = useState(false);
-  const wentLiveRange = useDateFilterState({
-    storageKey: "offerops.dateFilter.liveWentLive",
+  const perfRange = useDateFilterState({
+    storageKey: "offerops.dateFilter.livePerformanceRange",
     defaultPreset: "last7",
     syncUrl: false,
   });
-  const metricsDay = useDateFilterState({
-    storageKey: "offerops.dateFilter.liveMetrics",
-    defaultPreset: "yesterday",
-    syncUrl: false,
-  });
-  const metricsDate = metricsDay.dateTo;
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
   const pageSize = 50;
+
+  const performanceRangeLabel = formatPerformanceRangeLabel(
+    (perfRange.preset === "all" ? "last7" : perfRange.preset) as import("@/lib/date-filter-presets").DateRangePreset,
+    perfRange.dateFrom,
+    perfRange.dateTo,
+  );
 
   useEffect(() => {
     setStatusFilter("live");
@@ -127,9 +108,7 @@ export default function LiveCampaigns() {
     setGeoFilter("all");
     setNetworkFilter("all");
     setBatchFilter("all");
-    setWentLiveFilterActive(false);
-    wentLiveRange.clearToDefault();
-    metricsDay.clearToDefault();
+    perfRange.clearToDefault();
     setSearch("");
     setOffset(0);
   }, [activeWorkspaceId]);
@@ -143,9 +122,8 @@ export default function LiveCampaigns() {
     geoFilter,
     networkFilter,
     batchFilter,
-    wentLiveFilterActive,
-    wentLiveRange.dateFrom,
-    wentLiveRange.dateTo,
+    perfRange.dateFrom,
+    perfRange.dateTo,
     search,
   ]);
 
@@ -171,10 +149,6 @@ export default function LiveCampaigns() {
   if (geoFilter !== "all") params.set("geo", geoFilter);
   if (networkFilter !== "all") params.set("affiliate_network", networkFilter);
   if (batchFilter !== "all") params.set("batch_id", batchFilter);
-  if (wentLiveFilterActive) {
-    params.set("date_from", wentLiveRange.dateFrom);
-    params.set("date_to", `${wentLiveRange.dateTo}T23:59:59.999Z`);
-  }
 
   const {
     data: response,
@@ -193,9 +167,6 @@ export default function LiveCampaigns() {
       geoFilter,
       networkFilter,
       batchFilter,
-      wentLiveFilterActive,
-      wentLiveRange.dateFrom,
-      wentLiveRange.dateTo,
       offset,
     ],
     enabled: !!activeWorkspaceId,
@@ -211,12 +182,19 @@ export default function LiveCampaigns() {
 
   const metricsParams = new URLSearchParams();
   if (activeWorkspaceId) metricsParams.set("workspace_id", String(activeWorkspaceId));
-  metricsParams.set("date", metricsDate);
+  metricsParams.set("date_from", perfRange.dateFrom);
+  metricsParams.set("date_to", perfRange.dateTo);
   metricsParams.set("status", statusFilter);
 
-  const { data: metricsResponse } = useQuery<{ date: string; items: DailyMetricRow[] }>({
-    queryKey: ["campaign-daily-metrics", activeWorkspaceId, metricsDate, statusFilter],
-    enabled: !!activeWorkspaceId && !!metricsDate,
+  const { data: metricsResponse } = useQuery<RangeMetricsResponse>({
+    queryKey: [
+      "campaign-daily-metrics-range",
+      activeWorkspaceId,
+      perfRange.dateFrom,
+      perfRange.dateTo,
+      statusFilter,
+    ],
+    enabled: !!activeWorkspaceId,
     queryFn: () => authedJson(`/api/campaign-daily-metrics?${metricsParams.toString()}`),
   });
 
@@ -303,15 +281,17 @@ export default function LiveCampaigns() {
     "Some filter options could not be loaded.",
   );
 
+  const selectedOfferCount =
+    selectedCampaign?.batchId != null ? offersPerBatch.get(selectedCampaign.batchId) ?? 0 : 0;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black tracking-tight">Live Campaigns</h1>
-          <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
             Campaign monitoring — scan health, traffic pacing, and performance at a glance.
             Daily metrics come from Voluum CSV import; lifetime totals from campaign records.
-            Review decisions stay on Campaign Review.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -322,13 +302,13 @@ export default function LiveCampaigns() {
           {isAdmin && (
             <Button size="sm" onClick={() => setAddOpen(true)}>
               <Plus className="mr-1.5 h-4 w-4" />
-              Add production campaign
+              Add manual campaign
             </Button>
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <div>
           <label className="text-xs font-medium text-muted-foreground">Status</label>
           <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -341,7 +321,7 @@ export default function LiveCampaigns() {
           </Select>
         </div>
         <div>
-          <label className="text-xs font-medium text-muted-foreground">Platform</label>
+          <label className="text-xs font-medium text-muted-foreground">OS</label>
           <Select value={platformFilter} onValueChange={setPlatformFilter}>
             <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -403,45 +383,22 @@ export default function LiveCampaigns() {
             </SelectContent>
           </Select>
         </div>
-        <div className="sm:col-span-2 lg:col-span-3 space-y-2">
-          <label className="text-xs font-medium text-muted-foreground">Date went live</label>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setWentLiveFilterActive(false)}
-              className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${
-                !wentLiveFilterActive
-                  ? "border-foreground/25 bg-foreground/5 text-foreground"
-                  : "border-border text-muted-foreground hover:bg-muted/40"
-              }`}
-            >
-              Any time
-            </button>
+      </div>
+
+      <div className="flex flex-wrap items-end justify-between gap-3 rounded-xl border border-slate-200/90 bg-gradient-to-b from-white to-slate-50/40 px-4 py-3 shadow-sm">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+            Performance Range
+          </p>
+          <div className="mt-2 max-w-xl">
+            <PerformanceRangePicker
+              preset={(perfRange.preset === "all" ? "last7" : perfRange.preset) as import("@/lib/date-filter-presets").DateRangePreset}
+              dateFrom={perfRange.dateFrom}
+              dateTo={perfRange.dateTo}
+              onPresetChange={perfRange.setPreset}
+              onCustomRangeChange={perfRange.setCustomRange}
+            />
           </div>
-          <DateFilterBar
-            preset={wentLiveRange.preset}
-            onPresetChange={(p) => {
-              if (p === "all") return;
-              setWentLiveFilterActive(true);
-              wentLiveRange.setPreset(p);
-            }}
-            dateFrom={wentLiveRange.dateFrom}
-            dateTo={wentLiveRange.dateTo}
-            onCustomRangeChange={(from, to) => {
-              setWentLiveFilterActive(true);
-              wentLiveRange.setCustomRange(from, to);
-            }}
-          />
-        </div>
-        <div className="sm:col-span-2 lg:col-span-3 space-y-1">
-          <label className="text-xs font-medium text-muted-foreground">Metrics date</label>
-          <DateFilterSingleDay
-            preset={metricsDay.preset === "custom" ? "custom" : metricsDay.preset}
-            onPresetChange={(p) => metricsDay.setPreset(p)}
-            date={metricsDate}
-            onDateChange={(d) => metricsDay.setCustomRange(d, d)}
-            hint="Use Import Voluum CSV to add or update metrics for this date."
-          />
         </div>
       </div>
 
@@ -451,11 +408,11 @@ export default function LiveCampaigns() {
         </p>
       )}
 
-      <LiveCampaignsMonitoringTable
+      <LiveCampaignsSummaryTable
         campaigns={filtered}
         metricsByCampaignId={metricsByCampaignId}
         offersPerBatch={offersPerBatch}
-        metricsDateLabel={metricsDate}
+        performanceRangeLabel={performanceRangeLabel}
         rules={rules}
         isLoading={isLoading}
         isError={isError}
@@ -463,6 +420,21 @@ export default function LiveCampaigns() {
         error={error}
         onRetry={() => void refetch()}
         retrying={isFetching}
+        onSelectCampaign={setSelectedCampaign}
+      />
+
+      <LiveCampaignDrawer
+        campaign={selectedCampaign}
+        rangeMetrics={selectedCampaign ? metricsByCampaignId.get(selectedCampaign.id) : undefined}
+        performanceRangeLabel={performanceRangeLabel}
+        offerCount={selectedOfferCount}
+        rules={rules}
+        open={selectedCampaign != null}
+        onClose={() => setSelectedCampaign(null)}
+        onImportCsv={() => {
+          setSelectedCampaign(null);
+          setImportOpen(true);
+        }}
         onCloseCampaign={setCloseTarget}
       />
 
@@ -512,16 +484,16 @@ export default function LiveCampaigns() {
         open={importOpen}
         onOpenChange={setImportOpen}
         workspaceId={activeWorkspaceId ?? 0}
-        metricsDate={metricsDate}
-        onMetricsDateChange={(d) => metricsDay.setCustomRange(d, d)}
+        metricsDate={perfRange.dateTo}
+        onMetricsDateChange={(d) => perfRange.setCustomRange(d, d)}
         statusFilter={statusFilter}
       />
 
       {isAdmin && (
         <Dialog open={addOpen} onOpenChange={setAddOpen}>
-          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Add production live campaign</DialogTitle>
+              <DialogTitle>Add manual live campaign</DialogTitle>
             </DialogHeader>
             <ProductionLiveCampaignForm
               workingParents={workingParentCampaigns}

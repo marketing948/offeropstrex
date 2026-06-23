@@ -4,7 +4,7 @@
  * Signals and health are UI heuristics; operational memory is client-side until API exists.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   useListOffers,
@@ -23,6 +23,8 @@ import {
 } from "@/lib/campaign-review/heuristics";
 import {
   computeOperationalScore,
+  getLatestMediaBuyerNote,
+  getMediaBuyerNotes,
   getReviewEvents,
   isCampaignDismissed,
   markEscalatedIfNeeded,
@@ -77,6 +79,14 @@ export default function CampaignReviewPage() {
   const [selected, setSelected] = useState<ReviewQueueCampaign | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [memoryTick, setMemoryTick] = useState(0);
+  const [autoOpenedFocus, setAutoOpenedFocus] = useState(false);
+
+  const focusCampaignId = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    const raw = new URLSearchParams(window.location.search).get("campaignId");
+    const id = Number(raw);
+    return Number.isInteger(id) && id > 0 ? id : null;
+  }, []);
 
   const wsParams = { workspace_id: wsId };
 
@@ -177,6 +187,33 @@ export default function CampaignReviewPage() {
     [wsId, viewerId, memoryTick],
   );
 
+  const mediaBuyerNotes = useMemo(
+    () => getMediaBuyerNotes(wsId, viewerId),
+    [wsId, viewerId, memoryTick],
+  );
+
+  const campaignNameById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const c of campaignResponse?.items ?? []) m.set(c.id, c.campaignName);
+    return m;
+  }, [campaignResponse?.items]);
+
+  const focusNote = useMemo(() => {
+    if (focusCampaignId == null) return null;
+    void memoryTick;
+    return getLatestMediaBuyerNote(wsId, viewerId, focusCampaignId);
+  }, [focusCampaignId, wsId, viewerId, memoryTick]);
+
+  useEffect(() => {
+    if (autoOpenedFocus || focusCampaignId == null || isLoading) return;
+    const item = queue.find((q) => q.campaignId === focusCampaignId);
+    if (item) {
+      setSelected(item);
+      setSheetOpen(true);
+      setAutoOpenedFocus(true);
+    }
+  }, [autoOpenedFocus, focusCampaignId, isLoading, queue]);
+
   function openReview(item: ReviewQueueCampaign) {
     setSelected(item);
     setSheetOpen(true);
@@ -254,6 +291,21 @@ export default function CampaignReviewPage() {
         </div>
       </header>
 
+      {focusNote && (
+        <section className="rounded-xl border border-primary/25 bg-primary/5 px-4 py-4">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-primary">
+            Media buyer note
+          </p>
+          <p className="mt-1 text-sm font-semibold">
+            {campaignNameById.get(focusNote.campaignId) ?? `Campaign #${focusNote.campaignId}`}
+          </p>
+          <p className="mt-2 whitespace-pre-wrap text-sm text-foreground">{focusNote.note}</p>
+          <p className="mt-2 text-[10px] text-muted-foreground">
+            Captured locally from Live Campaigns for demo review memory — not saved to backend.
+          </p>
+        </section>
+      )}
+
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-3">
           <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
@@ -290,6 +342,15 @@ export default function CampaignReviewPage() {
                         )}
                       </div>
                       <p className="mt-1 truncate text-sm font-semibold">{item.campaignName}</p>
+                      {(() => {
+                        const note = getLatestMediaBuyerNote(wsId, viewerId, item.campaignId);
+                        if (!note?.note?.trim()) return null;
+                        return (
+                          <p className="mt-1 line-clamp-2 text-xs text-primary">
+                            Media buyer note: {note.note}
+                          </p>
+                        );
+                      })()}
                       <p className="text-xs text-muted-foreground">
                         {item.signals[0]?.label ?? "Signals detected"}
                         {item.batchName && ` · ${item.batchName}`}
@@ -328,6 +389,37 @@ export default function CampaignReviewPage() {
 
           <section className="rounded-lg border border-border bg-card p-4">
             <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+              Media buyer notes
+            </h3>
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              From Live Campaigns → Send Campaign to review. Stored locally in this browser only.
+            </p>
+            {mediaBuyerNotes.length === 0 ? (
+              <p className="mt-3 text-xs text-muted-foreground">No notes captured yet.</p>
+            ) : (
+              <ul className="mt-3 max-h-56 space-y-3 overflow-y-auto text-xs">
+                {mediaBuyerNotes.slice(0, 12).map((e) => (
+                  <li key={e.id} className="rounded-md border border-border/70 bg-muted/20 px-3 py-2">
+                    <p className="font-semibold text-foreground">
+                      {campaignNameById.get(e.campaignId) ?? `Campaign #${e.campaignId}`}
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap text-foreground">{e.note}</p>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {new Date(e.createdAt).toLocaleString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="rounded-lg border border-border bg-card p-4">
+            <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
               Operational memory
             </h3>
             <p className="mt-1 text-[10px] text-muted-foreground">
@@ -350,6 +442,9 @@ export default function CampaignReviewPage() {
                         minute: "2-digit",
                       })}
                     </span>
+                    {e.note?.trim() && (
+                      <p className="mt-0.5 line-clamp-2 text-foreground">{e.note}</p>
+                    )}
                   </li>
                 ))}
               </ul>

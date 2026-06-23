@@ -108,12 +108,10 @@ import {
   workspaceSettingsTabGate,
   WorkspaceSettingsSkeleton,
 } from "@/lib/workspace-settings-ui";
-import AdminGoalsConfig from "@/pages/admin-goals-config";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { authedFetch, authedJson } from "@/lib/api-fetch";
 
 type SettingsTab =
-  | "goal-engine"
   | "alert-rules"
   | "admin-defaults"
   | "affiliate-networks"
@@ -127,12 +125,6 @@ type SettingsTab =
 // Pivot Phase 2 (Task #25) — added Affiliate Networks and GEOs tabs
 // for the manual workflow's lookup data.
 const TABS: { id: SettingsTab; label: string; icon: React.ReactNode; description: string }[] = [
-  {
-    id: "goal-engine",
-    label: "Goal Engine",
-    icon: <SlidersHorizontal size={15} />,
-    description: "Scoring rules, ranks, bonuses, and KPI targets",
-  },
   {
     id: "alert-rules",
     label: "Alert Rules",
@@ -172,7 +164,7 @@ const TABS: { id: SettingsTab; label: string; icon: React.ReactNode; description
 ];
 
 export default function Settings() {
-  const [activeTab, setActiveTab] = useState<SettingsTab>("goal-engine");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("alert-rules");
 
   return (
     <div className="max-w-6xl">
@@ -200,11 +192,6 @@ export default function Settings() {
         ))}
       </div>
 
-      {activeTab === "goal-engine" && (
-        <div className="-mx-0">
-          <AdminGoalsConfig embedded />
-        </div>
-      )}
       {activeTab === "alert-rules" && <AlertRulesSettingsTab />}
       {activeTab === "admin-defaults" && <AdminFoundationTab />}
       {activeTab === "affiliate-networks" && <AffiliateNetworksTab />}

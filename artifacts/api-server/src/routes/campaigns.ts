@@ -28,6 +28,16 @@ import {
   requireAdmin,
   requireWorkspaceAccess,
 } from "../lib/workspace-access";
+import {
+  loadAssignedNetworksForEmployee,
+  networkIdAllowed,
+  networkNameAllowed,
+  requireWorkspaceWithNetworkScope,
+  enforceEmployeeIdAccess,
+  workerCampaignNetworkSqlFilter,
+  workerHasNoAssignedNetworks,
+  type WorkerNetworkScope,
+} from "../lib/worker-network-access";
 import { applyAction } from "../engine/executor.ts";
 import { emit } from "../engine/event-bus";
 import { recordOperationalEvent } from "../lib/operational-events.ts";
@@ -546,6 +556,23 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
   const offset = parseOffset(req.query["offset"], res);
   if (offset === null) return;
 
+  let workerScope: WorkerNetworkScope | null = null;
+  if (access.employee.role !== "admin") {
+    const assigned = await loadAssignedNetworksForEmployee(wsId, access.employee.id);
+    workerScope = {
+      isAdmin: false,
+      employeeId: access.employee.id,
+      role: access.employee.role,
+      allowedNetworkIds: assigned.ids,
+      allowedNetworkNames: assigned.names,
+    };
+    if (!enforceEmployeeIdAccess(res, workerScope, requestedWorkerId ?? undefined)) return;
+    if (workerHasNoAssignedNetworks(workerScope)) {
+      res.json({ items: [], pagination: { limit, offset, total: 0 } });
+      return;
+    }
+  }
+
   const conditions = [
     eq(campaignsTable.workspaceId, wsId),
     eq(campaignsTable.status, status as LiveCampaignStatus),
@@ -567,6 +594,10 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
   }
   if (req.query["affiliate_network"] != null && req.query["affiliate_network"] !== "") {
     const network = String(req.query["affiliate_network"]);
+    if (workerScope && !networkNameAllowed(workerScope, network)) {
+      res.status(403).json({ error: "Affiliate network not assigned to you" });
+      return;
+    }
     conditions.push(
       or(
         eq(testingBatchesTable.affiliateNetwork, network),
@@ -586,21 +617,20 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
         )!,
       );
     }
-  } else {
+  } else if (workerScope) {
+    const netFilter = workerCampaignNetworkSqlFilter(
+      workerScope,
+      testingBatchesTable.affiliateNetwork,
+      affiliateNetworksTable.name,
+      campaignsTable.affiliateNetworkId,
+    );
+    if (netFilter) conditions.push(netFilter);
     conditions.push(
       or(
         inArray(campaignsTable.campaignPurpose, ["working", "scaling"]),
         eq(testingBatchesTable.employeeId, access.employee.id),
       )!,
     );
-    if (requestedWorkerId !== null) {
-      conditions.push(
-        or(
-          inArray(campaignsTable.campaignPurpose, ["working", "scaling"]),
-          eq(testingBatchesTable.employeeId, requestedWorkerId),
-        )!,
-      );
-    }
   }
 
   const batchJoin = and(
@@ -781,6 +811,8 @@ router.get("/campaigns", async (req, res): Promise<void> => {
     return;
   }
   if ((await requireWorkspaceAccess(req, res, wsId)) === null) return;
+  const scoped = await requireWorkspaceWithNetworkScope(req, res, wsId);
+  if (scoped === null) return;
 
   const conditions = [eq(campaignsTable.workspaceId, wsId)];
 
@@ -828,9 +860,12 @@ router.get("/campaigns", async (req, res): Promise<void> => {
   const batchIds = Array.from(
     new Set(rows.map((r) => r.batchId).filter((v): v is number => v != null)),
   );
+  const anIds = Array.from(
+    new Set(rows.map((r) => r.affiliateNetworkId).filter((v): v is number => v != null)),
+  );
   const tsIds = Array.from(new Set(rows.map((r) => r.trafficSourceId).filter((v): v is number => v != null)));
 
-  const [batches, tsources] = await Promise.all([
+  const [batches, affiliateNetworks, tsources] = await Promise.all([
     batchIds.length
       ? db
           .select({
@@ -843,6 +878,12 @@ router.get("/campaigns", async (req, res): Promise<void> => {
           .from(testingBatchesTable)
           .where(inArray(testingBatchesTable.id, batchIds))
       : Promise.resolve([] as { id: number; batchName: string; employeeId: number | null; geo: string | null; affiliateNetwork: string | null }[]),
+    anIds.length
+      ? db
+          .select({ id: affiliateNetworksTable.id, name: affiliateNetworksTable.name })
+          .from(affiliateNetworksTable)
+          .where(inArray(affiliateNetworksTable.id, anIds))
+      : Promise.resolve([] as { id: number; name: string }[]),
     tsIds.length
       ? db
           .select({ id: workspaceTrafficSourcesTable.id, name: workspaceTrafficSourcesTable.name })
@@ -861,21 +902,48 @@ router.get("/campaigns", async (req, res): Promise<void> => {
     : ([] as { id: number; name: string }[]);
 
   const batchMap = new Map(batches.map((b) => [b.id, b]));
+  const anMap = new Map(affiliateNetworks.map((n) => [n.id, n.name]));
   const tsMap = new Map(tsources.map((t) => [t.id, t.name]));
   const empMap = new Map(emps.map((e) => [e.id, e.name]));
 
+  let result = rows.map((r) => {
+    const b = r.batchId != null ? batchMap.get(r.batchId) : undefined;
+    const affiliateNetworkName =
+      (r.affiliateNetworkId != null ? anMap.get(r.affiliateNetworkId) : null) ??
+      b?.affiliateNetwork ??
+      null;
+    return {
+      ...serialize(r),
+      batchName: b?.batchName ?? null,
+      batchGeo: b?.geo ?? null,
+      affiliateNetworkName,
+      batchAffiliateNetwork: affiliateNetworkName,
+      employeeName: b?.employeeId != null ? empMap.get(b.employeeId) ?? null : null,
+      trafficSourceName: r.trafficSourceId != null ? tsMap.get(r.trafficSourceId) ?? null : null,
+      _batchEmployeeId: b?.employeeId ?? null,
+    };
+  });
+
+  if (!scoped.scope.isAdmin) {
+    const allowed = scoped.scope.allowedNetworkIds ?? [];
+    if (allowed.length === 0) {
+      res.json([]);
+      return;
+    }
+    result = result.filter((r) => {
+      const netOk =
+        networkIdAllowed(scoped.scope, r.affiliateNetworkId) ||
+        networkNameAllowed(scoped.scope, r.affiliateNetworkName);
+      if (!netOk) return false;
+      if (r._batchEmployeeId != null && r._batchEmployeeId !== scoped.scope.employeeId) {
+        return false;
+      }
+      return true;
+    });
+  }
+
   res.json(
-    rows.map((r) => {
-      const b = r.batchId != null ? batchMap.get(r.batchId) : undefined;
-      return {
-        ...serialize(r),
-        batchName: b?.batchName ?? null,
-        batchGeo: b?.geo ?? null,
-        batchAffiliateNetwork: b?.affiliateNetwork ?? null,
-        employeeName: b?.employeeId != null ? empMap.get(b.employeeId) ?? null : null,
-        trafficSourceName: r.trafficSourceId != null ? tsMap.get(r.trafficSourceId) ?? null : null,
-      };
-    }),
+    result.map(({ _batchEmployeeId: _, ...row }) => row),
   );
 });
 

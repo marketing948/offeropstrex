@@ -1185,6 +1185,16 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
           });
         }
       }
+
+      const { awardTaskCompletionXp } = await import("../routes/performance-engine.ts");
+      await awardTaskCompletionXp(
+        action.workspaceId,
+        action.completedByEmployeeId,
+        updated.taskType,
+        updated.id,
+        tx,
+      );
+
       return;
     }
 

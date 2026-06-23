@@ -38,7 +38,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Activity, Layers, Loader2, RefreshCw } from "lucide-react";
+import { Activity, AlertTriangle, Layers, Loader2, RefreshCw } from "lucide-react";
 import { OperationalEmpty } from "@/components/operational-state/operational-empty";
 import { OperationalError } from "@/components/operational-state/operational-error";
 
@@ -118,6 +118,15 @@ export function BatchAttentionPanel() {
     [sortedRows, filter],
   );
 
+  const attentionSummary = useMemo(() => {
+    const critical = rows.filter((row) => row.healthState === "critical").length;
+    const needsAttention = rows.filter((row) => row.healthState !== "healthy").length;
+    const openTasks = rows.filter(
+      (row) => (row.health?.flags.openTaskCount ?? 0) > 0,
+    ).length;
+    return { critical, needsAttention, openTasks };
+  }, [rows]);
+
   const isRefreshing =
     batchesFetching || healthQueries.some((q) => q.isFetching && !q.isLoading);
 
@@ -157,6 +166,52 @@ export function BatchAttentionPanel() {
 
   return (
     <div className="space-y-3">
+      {!batchesLoading && !batchesError && (
+        <div
+          className={`grid gap-2 sm:grid-cols-3 ${
+            attentionSummary.critical > 0 || attentionSummary.needsAttention > 0
+              ? "rounded-xl border-2 border-red-300/70 bg-red-50/50 p-3 dark:border-red-900/50 dark:bg-red-950/20"
+              : "rounded-xl border border-border bg-card p-3"
+          }`}
+        >
+          <div className="flex items-center gap-2 rounded-lg bg-background/80 px-3 py-2">
+            <AlertTriangle
+              className={`h-4 w-4 shrink-0 ${
+                attentionSummary.critical > 0 ? "text-red-600" : "text-muted-foreground"
+              }`}
+            />
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Critical
+              </p>
+              <p className="text-lg font-bold tabular-nums">{attentionSummary.critical}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 rounded-lg bg-background/80 px-3 py-2">
+            <Activity
+              className={`h-4 w-4 shrink-0 ${
+                attentionSummary.needsAttention > 0 ? "text-amber-600" : "text-muted-foreground"
+              }`}
+            />
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Needs attention
+              </p>
+              <p className="text-lg font-bold tabular-nums">{attentionSummary.needsAttention}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 rounded-lg bg-background/80 px-3 py-2">
+            <Layers className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Open tasks
+              </p>
+              <p className="text-lg font-bold tabular-nums">{attentionSummary.openTasks}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
         {FILTER_OPTIONS.map(({ key, label }) => (
           <Button

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useLocation } from "wouter";
 import {
@@ -7,19 +8,22 @@ import {
   useListOffers,
   useListTodoTasks,
   useListEmployees,
+  useListAffiliateNetworks,
+  useListGeos,
+  useListWorkspaceTrafficSources,
   getListEmployeesQueryKey,
   getListTestingBatchesQueryKey,
   getListPerformanceQueryKey,
   getListOffersQueryKey,
   getListTodoTasksQueryKey,
+  getListAffiliateNetworksQueryKey,
+  getListGeosQueryKey,
+  getListWorkspaceTrafficSourcesQueryKey,
 } from "@workspace/api-client-react";
 import { useWorkspace } from "@/lib/workspace-context";
 import type {
-  TestingBatch,
-  Performance,
   Offer,
   TodoTask,
-  Employee,
 } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { OperationalEmpty } from "@/components/operational-state/operational-empty";
@@ -27,18 +31,47 @@ import {
   DataTableSkeleton,
   ReportKpiCardsSkeleton,
 } from "@/components/operational-state/operational-skeletons";
-import { DateFilterBar } from "@/components/date-filter-bar";
+import { PerformanceRangePicker } from "@/components/live-campaigns/performance-range-picker";
+import { ReportsSummaryCards } from "@/components/reports/reports-summary-cards";
+import { ReportsGoalDashboardTab } from "@/components/reports/reports-goal-dashboard-tab";
+import { ReportsInsightPill } from "@/components/reports/reports-insight-pill";
+import {
+  deriveReportInsight,
+  fmtReportMoney,
+  fmtReportPct,
+  fmtReportPctCompact,
+  fmtReportVisits,
+  reportProfitColor,
+  reportRoiColor,
+} from "@/components/reports/reports-analytics";
 import { useDateFilterState } from "@/hooks/use-date-filter-state";
+import { DATE_RANGE_PRESET_LABELS } from "@/lib/date-filter-presets";
 import { useAuth } from "@/lib/auth";
 import { authedJson } from "@/lib/api-fetch";
+import { DEFAULT_CONFIG, useGoalsConfig } from "@/lib/goals-config";
+import {
+  buildAllReportEntities,
+  buildMasterStringOptions,
+  buildReportCampaignTypeOptions,
+  filterReportEntities,
+  perfMatchesFilteredEntities,
+  reportCampaignTypeLabel,
+  type LiveCampaignsListResponse,
+  type ReportEntityRow,
+} from "@/lib/reports/reports-data";
+import {
+  buildReportsGoalDashboard,
+  scopeEntitiesForDashboard,
+} from "@/lib/reports/reports-goal-dashboard";
+import { useWorkerMonthlyGoals } from "@/lib/performance-engine/use-worker-monthly-goals";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   AreaChart, Area, Cell,
 } from "recharts";
 import {
-  BarChart3, Download, TrendingUp, TrendingDown,
-  Users, Globe, Network, Target, Trophy, Rocket,
-  ChevronUp, ChevronDown, ArrowRight, Minus,
+  BarChart3, Download,
+  Users, Globe, Network, Target, Trophy,
+  ChevronUp, ChevronDown,
   Copy,
 } from "lucide-react";
 
@@ -48,31 +81,6 @@ import {
 function fmt$(n: number) { return `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`; }
 function fmtPct(n: number) { return `${n.toFixed(1)}%`; }
 function fmtK(n: number) { return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n); }
-
-function roiColor(roi: number) {
-  if (roi > 10) return "text-green-600";
-  if (roi > 0) return "text-emerald-500";
-  if (roi < 0) return "text-red-500";
-  return "text-muted-foreground";
-}
-function profitColor(p: number) { return p > 0 ? "text-green-600" : p < 0 ? "text-red-500" : "text-muted-foreground"; }
-
-function RoiBadge({ roi }: { roi: number }) {
-  const positive = roi > 0;
-  const zero = roi === 0;
-  return (
-    <span className={`inline-flex items-center gap-0.5 text-xs font-semibold ${positive ? "text-green-600" : zero ? "text-muted-foreground" : "text-red-500"}`}>
-      {positive ? <ChevronUp size={12} /> : zero ? <Minus size={12} /> : <ChevronDown size={12} />}
-      {fmtPct(Math.abs(roi))}
-    </span>
-  );
-}
-
-function TrendChip({ value, suffix = "" }: { value: number; suffix?: string }) {
-  if (value > 0) return <span className="text-xs text-green-600 font-medium flex items-center gap-0.5"><TrendingUp size={11} />+{value}{suffix}</span>;
-  if (value < 0) return <span className="text-xs text-red-500 font-medium flex items-center gap-0.5"><TrendingDown size={11} />{value}{suffix}</span>;
-  return <span className="text-xs text-muted-foreground">—</span>;
-}
 
 function exportCSV(filename: string, headers: string[], rows: (string | number)[][]) {
   const content = [headers, ...rows]
@@ -101,14 +109,28 @@ function useSortState(defaultCol: string, defaultDir: SortDir = "desc") {
   return { col, dir, toggle };
 }
 
-function ThSort({ label, col, sort, onToggle }: { label: string; col: string; sort: { col: string; dir: SortDir }; onToggle: (c: string) => void }) {
+function ThSort({
+  label,
+  col,
+  sort,
+  onToggle,
+  align = "left",
+}: {
+  label: string;
+  col: string;
+  sort: { col: string; dir: SortDir };
+  onToggle: (c: string) => void;
+  align?: "left" | "right";
+}) {
   const active = sort.col === col;
   return (
     <th
-      className="text-left text-xs font-semibold text-muted-foreground py-2 px-3 cursor-pointer whitespace-nowrap hover:text-foreground select-none"
+      className={`px-3 py-2 text-[10px] font-bold uppercase tracking-wide text-slate-500 cursor-pointer select-none hover:text-slate-800 ${
+        align === "right" ? "text-right" : "text-left"
+      }`}
       onClick={() => onToggle(col)}
     >
-      <span className="flex items-center gap-1">
+      <span className={`flex items-center gap-1 ${align === "right" ? "justify-end" : ""}`}>
         {label}
         {active ? (sort.dir === "asc" ? <ChevronUp size={11} /> : <ChevronDown size={11} />) : <span className="opacity-30"><ChevronDown size={11} /></span>}
       </span>
@@ -128,12 +150,7 @@ function sortRows<T extends Record<string, unknown>>(rows: T[], col: string, dir
 // ─────────────────────────────────────────────
 // Types for aggregated rows
 // ─────────────────────────────────────────────
-interface BatchRow {
-  id: number; batchName: string; network: string; geo: string; trafficSource: string;
-  employee: string; status: string; clicks: number; spend: number; revenue: number;
-  profit: number; roi: number; conversions: number; winners: number; losers: number;
-  totalOffers: number; daysRunning: number; liveAt: string | null;
-}
+type BatchRow = ReportEntityRow;
 interface SourceRow {
   source: string; batches: number; clicks: number; spend: number; revenue: number;
   profit: number; roi: number; conversions: number; winners: number; losers: number; winnerRate: number;
@@ -145,29 +162,9 @@ interface NetworkGeoRow {
 }
 interface EmpRow {
   employeeId: number; name: string; batches: number; winners: number; losers: number;
-  scaleTasksCreated: number; tasksCompleted: number; spend: number; revenue: number;
+  scaleTasksCreated: number; tasksCompleted: number; clicks: number; spend: number; revenue: number;
   profit: number; roi: number;
 }
-
-// Phase 10c: status badges now mirror the shared 6-state helper so
-// reports look identical to the worker pages and Operations Hub.
-import { batchStatusConfig as _bsc } from "@/lib/batch-status";
-const STATUS_DOT: Record<string, string> = {
-  NEW_BATCH:                     "bg-slate-400",
-  WAITING_FOR_TRACKER_CAMPAIGNS: "bg-amber-500",
-  OFFER_READY_FOR_LIVE_TESTING:  "bg-orange-500",
-  LIVE_TESTS:                    "bg-green-500",
-  TESTED:                        "bg-purple-500",
-  COMPLETED:                     "bg-teal-500",
-};
-const STATUS_LABEL: Record<string, string> = {
-  NEW_BATCH:                     "New",
-  WAITING_FOR_TRACKER_CAMPAIGNS: "Waiting Trackers",
-  OFFER_READY_FOR_LIVE_TESTING:  "Ready for Live",
-  LIVE_TESTS:                    "Live Tests",
-  TESTED:                        "Pick Winners",
-  COMPLETED:                     "Completed",
-};
 
 type ReportTab = "batches" | "sources" | "networks" | "employees" | "ops" | "winners";
 
@@ -211,6 +208,7 @@ export default function Reports() {
   const [filterGeo, setFilterGeo]           = useState("");
   const [filterSource, setFilterSource]     = useState("");
   const [filterStatus, setFilterStatus]     = useState("");
+  const [filterCampaignType, setFilterCampaignType] = useState("");
 
   // Reset workspace-sensitive filters when the active workspace changes
   useEffect(() => {
@@ -218,6 +216,7 @@ export default function Reports() {
     setFilterGeo("");
     setFilterSource("");
     setFilterStatus("");
+    setFilterCampaignType("");
     setFilterEmployee("");
   }, [activeWorkspaceId]);
 
@@ -240,10 +239,43 @@ export default function Reports() {
     perfParams,
     wsQueryOpts(activeWorkspaceId, getListPerformanceQueryKey(perfParams)),
   );
-  const reportsCoreLoading = batchesLoading || perfLoading;
-  const { data: offers = [] }   = useListOffers(wsParams, wsQueryOpts(activeWorkspaceId, getListOffersQueryKey(wsParams)));
-  const { data: tasks = [] }    = useListTodoTasks(wsParams, wsQueryOpts(activeWorkspaceId, getListTodoTasksQueryKey(wsParams)));
   const { data: employees = [] } = useListEmployees(wsParams, wsQueryOpts(activeWorkspaceId, getListEmployeesQueryKey(wsParams)));
+  const { data: affiliateNetworks = [] } = useListAffiliateNetworks(
+    wsParams,
+    wsQueryOpts(activeWorkspaceId, getListAffiliateNetworksQueryKey(wsParams)),
+  );
+  const { data: geosCatalog = [] } = useListGeos(
+    wsParams,
+    wsQueryOpts(activeWorkspaceId, getListGeosQueryKey(wsParams)),
+  );
+  const { data: trafficSourcesCatalog = [] } = useListWorkspaceTrafficSources(
+    wsParams,
+    wsQueryOpts(activeWorkspaceId, getListWorkspaceTrafficSourcesQueryKey(wsParams)),
+  );
+
+  const { data: liveCampaigns = [], isLoading: liveCampaignsLoading } = useQuery({
+    queryKey: ["reports-live-campaigns", activeWorkspaceId],
+    enabled: !!activeWorkspaceId,
+    queryFn: async () => {
+      const statuses = ["live", "tested", "closed"] as const;
+      const chunks = await Promise.all(
+        statuses.map((status) =>
+          authedJson<LiveCampaignsListResponse>(
+            `/api/live-campaigns?workspace_id=${activeWorkspaceId}&status=${status}&limit=400&offset=0`,
+          ),
+        ),
+      );
+      const byId = new Map<number, LiveCampaignsListResponse["items"][0]>();
+      for (const chunk of chunks) {
+        for (const c of chunk.items ?? []) byId.set(c.id, c);
+      }
+      return [...byId.values()];
+    },
+  });
+
+  const reportsCoreLoading = batchesLoading || perfLoading || liveCampaignsLoading;
+  const { data: offers = [] } = useListOffers(wsParams, wsQueryOpts(activeWorkspaceId, getListOffersQueryKey(wsParams)));
+  const { data: tasks = [] } = useListTodoTasks(wsParams, wsQueryOpts(activeWorkspaceId, getListTodoTasksQueryKey(wsParams)));
 
   useEffect(() => {
     if (tab !== "winners" || !activeWorkspaceId) {
@@ -267,21 +299,6 @@ export default function Reports() {
     };
   }, [tab, activeWorkspaceId]);
 
-  // Build batch perf lookup: batchId → aggregated perf
-  const perfByBatch = useMemo(() => {
-    const map = new Map<number, { clicks: number; spend: number; revenue: number; profit: number; conversions: number }>();
-    for (const p of perfAll) {
-      const e = map.get(p.batchId) ?? { clicks: 0, spend: 0, revenue: 0, profit: 0, conversions: 0 };
-      e.clicks      += Number(p.clicks ?? 0);
-      e.spend       += Number(p.spend ?? 0);
-      e.revenue     += Number(p.revenue ?? 0);
-      e.profit      += Number(p.profit ?? 0);
-      e.conversions += Number(p.conversions ?? 0);
-      map.set(p.batchId, e);
-    }
-    return map;
-  }, [perfAll]);
-
   // Build offer lookup: batchId → { winners, losers, total }
   const offersByBatch = useMemo(() => {
     const map = new Map<number, { winners: number; losers: number; retest: number; total: number }>();
@@ -295,49 +312,50 @@ export default function Reports() {
     return map;
   }, [offers]);
 
-  // Filter batches
-  const filteredBatches = useMemo(() => batches.filter(b => {
-    if (filterEmployee && b.employeeId !== filterEmployee) return false;
-    if (filterNetwork && b.affiliateNetwork !== filterNetwork) return false;
-    if (filterGeo && b.geo !== filterGeo) return false;
-    if (filterSource && b.trafficSource !== filterSource) return false;
-    if (filterStatus && b.status !== filterStatus) return false;
-    return true;
-  }), [batches, filterEmployee, filterNetwork, filterGeo, filterSource, filterStatus]);
+  const allReportEntities = useMemo(
+    () => buildAllReportEntities(batches, liveCampaigns, perfAll, offersByBatch),
+    [batches, liveCampaigns, perfAll, offersByBatch],
+  );
 
-  // ── Batch rows
-  const batchRows = useMemo<BatchRow[]>(() => filteredBatches.map(b => {
-    const p  = perfByBatch.get(b.id) ?? { clicks: 0, spend: 0, revenue: 0, profit: 0, conversions: 0 };
-    const oc = offersByBatch.get(b.id) ?? { winners: 0, losers: 0, retest: 0, total: 0 };
-    const roi = p.spend > 0 ? ((p.revenue - p.spend) / p.spend) * 100 : 0;
-    const daysRunning = b.liveAt ? Math.floor((Date.now() - new Date(b.liveAt).getTime()) / 86400000) : 0;
-    return {
-      id: b.id, batchName: b.batchName, network: b.affiliateNetwork, geo: b.geo,
-      trafficSource: b.trafficSource, employee: b.employeeName ?? "—", status: b.status,
-      clicks: p.clicks, spend: p.spend, revenue: p.revenue, profit: p.profit, roi,
-      conversions: p.conversions, winners: oc.winners, losers: oc.losers,
-      totalOffers: oc.total, daysRunning, liveAt: b.liveAt ?? null,
-    };
-  }), [filteredBatches, perfByBatch, offersByBatch]);
+  const filteredReportEntities = useMemo(
+    () =>
+      filterReportEntities(allReportEntities, {
+        employeeId: filterEmployee,
+        network: filterNetwork,
+        geo: filterGeo,
+        source: filterSource,
+        status: filterStatus,
+        campaignType: filterCampaignType,
+      }),
+    [allReportEntities, filterEmployee, filterNetwork, filterGeo, filterSource, filterStatus, filterCampaignType],
+  );
+
+  /** @deprecated alias — report rows include testing batches + standalone live campaigns */
+  const filteredBatches = filteredReportEntities;
+  const batchRows = filteredReportEntities;
 
   // ── Source rows
   const sourceRows = useMemo<SourceRow[]>(() => {
     const map = new Map<string, SourceRow>();
-    for (const b of filteredBatches) {
-      const s = b.trafficSource;
-      const p = perfByBatch.get(b.id) ?? { clicks: 0, spend: 0, revenue: 0, profit: 0, conversions: 0 };
-      const oc = offersByBatch.get(b.id) ?? { winners: 0, losers: 0, retest: 0, total: 0 };
+    for (const r of filteredReportEntities) {
+      const s = r.trafficSource || "—";
       const e = map.get(s) ?? { source: s, batches: 0, clicks: 0, spend: 0, revenue: 0, profit: 0, roi: 0, conversions: 0, winners: 0, losers: 0, winnerRate: 0 };
-      e.batches++; e.clicks += p.clicks; e.spend += p.spend; e.revenue += p.revenue;
-      e.profit += p.profit; e.conversions += p.conversions; e.winners += oc.winners; e.losers += oc.losers;
+      e.batches++;
+      e.clicks += r.clicks;
+      e.spend += r.spend;
+      e.revenue += r.revenue;
+      e.profit += r.profit;
+      e.conversions += r.conversions;
+      e.winners += r.winners;
+      e.losers += r.losers;
       map.set(s, e);
     }
-    return [...map.values()].map(r => ({
-      ...r,
-      roi: r.spend > 0 ? ((r.revenue - r.spend) / r.spend) * 100 : 0,
-      winnerRate: (r.winners + r.losers) > 0 ? (r.winners / (r.winners + r.losers)) * 100 : 0,
+    return [...map.values()].map((row) => ({
+      ...row,
+      roi: row.spend > 0 ? ((row.revenue - row.spend) / row.spend) * 100 : 0,
+      winnerRate: (row.winners + row.losers) > 0 ? (row.winners / (row.winners + row.losers)) * 100 : 0,
     }));
-  }, [filteredBatches, perfByBatch, offersByBatch]);
+  }, [filteredReportEntities]);
 
   // ── Network/GEO rows
   const networkGeoRows = useMemo<NetworkGeoRow[]>(() => {
@@ -346,37 +364,41 @@ export default function Reports() {
       revenue: number; profit: number; conversions: number; winners: number; losers: number;
       sourceProfits: Map<string, number>;
     }>();
-    for (const b of filteredBatches) {
-      const key = `${b.affiliateNetwork}|${b.geo}`;
-      const p = perfByBatch.get(b.id) ?? { clicks: 0, spend: 0, revenue: 0, profit: 0, conversions: 0 };
-      const oc = offersByBatch.get(b.id) ?? { winners: 0, losers: 0, retest: 0, total: 0 };
+    for (const r of filteredReportEntities) {
+      const key = `${r.network}|${r.geo}`;
       const e = map.get(key) ?? {
-        network: b.affiliateNetwork, geo: b.geo, batches: 0, clicks: 0, spend: 0,
+        network: r.network, geo: r.geo, batches: 0, clicks: 0, spend: 0,
         revenue: 0, profit: 0, conversions: 0, winners: 0, losers: 0,
         sourceProfits: new Map<string, number>(),
       };
-      e.batches++; e.clicks += p.clicks; e.spend += p.spend; e.revenue += p.revenue;
-      e.profit += p.profit; e.conversions += p.conversions; e.winners += oc.winners; e.losers += oc.losers;
-      const sp = e.sourceProfits.get(b.trafficSource) ?? 0;
-      e.sourceProfits.set(b.trafficSource, sp + p.profit);
+      e.batches++;
+      e.clicks += r.clicks;
+      e.spend += r.spend;
+      e.revenue += r.revenue;
+      e.profit += r.profit;
+      e.conversions += r.conversions;
+      e.winners += r.winners;
+      e.losers += r.losers;
+      const sp = e.sourceProfits.get(r.trafficSource) ?? 0;
+      e.sourceProfits.set(r.trafficSource, sp + r.profit);
       map.set(key, e);
     }
-    return [...map.values()].map(r => {
+    return [...map.values()].map((row) => {
       let bestSource = "—";
       let bestProfit = -Infinity;
-      for (const [src, pft] of r.sourceProfits) {
+      for (const [src, pft] of row.sourceProfits) {
         if (pft > bestProfit) { bestProfit = pft; bestSource = src; }
       }
       return {
-        network: r.network, geo: r.geo, batches: r.batches,
-        clicks: r.clicks, spend: r.spend, revenue: r.revenue, profit: r.profit,
-        roi: r.spend > 0 ? ((r.revenue - r.spend) / r.spend) * 100 : 0,
-        conversions: r.conversions, winners: r.winners, losers: r.losers,
-        winnerRate: (r.winners + r.losers) > 0 ? (r.winners / (r.winners + r.losers)) * 100 : 0,
+        network: row.network, geo: row.geo, batches: row.batches,
+        clicks: row.clicks, spend: row.spend, revenue: row.revenue, profit: row.profit,
+        roi: row.spend > 0 ? ((row.revenue - row.spend) / row.spend) * 100 : 0,
+        conversions: row.conversions, winners: row.winners, losers: row.losers,
+        winnerRate: (row.winners + row.losers) > 0 ? (row.winners / (row.winners + row.losers)) * 100 : 0,
         bestSource,
       };
     });
-  }, [filteredBatches, perfByBatch, offersByBatch]);
+  }, [filteredReportEntities]);
 
   // ── Employee rows
   const empRows = useMemo<EmpRow[]>(() => {
@@ -384,20 +406,20 @@ export default function Reports() {
     for (const emp of employees) {
       map.set(emp.id, {
         employeeId: emp.id, name: emp.name, batches: 0, winners: 0, losers: 0,
-        scaleTasksCreated: 0, tasksCompleted: 0, spend: 0, revenue: 0, profit: 0, roi: 0,
+        scaleTasksCreated: 0, tasksCompleted: 0, clicks: 0, spend: 0, revenue: 0, profit: 0, roi: 0,
       });
     }
-    for (const b of filteredBatches) {
-      const row = map.get(b.employeeId);
+    for (const r of filteredReportEntities) {
+      if (r.employeeId == null) continue;
+      const row = map.get(r.employeeId);
       if (!row) continue;
-      const p  = perfByBatch.get(b.id) ?? { clicks: 0, spend: 0, revenue: 0, profit: 0, conversions: 0 };
-      const oc = offersByBatch.get(b.id) ?? { winners: 0, losers: 0, retest: 0, total: 0 };
       row.batches++;
-      row.winners += oc.winners;
-      row.losers  += oc.losers;
-      row.spend   += p.spend;
-      row.revenue += p.revenue;
-      row.profit  += p.profit;
+      row.winners += r.winners;
+      row.losers += r.losers;
+      row.clicks += r.clicks;
+      row.spend += r.spend;
+      row.revenue += r.revenue;
+      row.profit += r.profit;
     }
     for (const t of tasks) {
       const row = map.get(t.employeeId);
@@ -411,55 +433,115 @@ export default function Reports() {
       ...r,
       roi: r.spend > 0 ? ((r.revenue - r.spend) / r.spend) * 100 : 0,
     }));
-  }, [employees, filteredBatches, perfByBatch, offersByBatch, tasks]);
+  }, [employees, filteredReportEntities, tasks]);
 
-  // ── Ops summary
-  const opsSummary = useMemo(() => {
-    const total = filteredBatches.length;
-    // Phase 9: 6-state lifecycle. "live" = trackers active (LIVE_TESTS),
-    // "ready" = thresholds met awaiting winner classification (TESTED),
-    // "optimizing" folds into TESTED (no separate state), "scaling"
-    // and "completed" both become COMPLETED.
-    const live = filteredBatches.filter(b => b.status === "LIVE_TESTS").length;
-    const ready = filteredBatches.filter(b => b.status === "TESTED").length;
-    const optimizing = filteredBatches.filter(b => b.status === "TESTED").length;
-    const scaling = filteredBatches.filter(b => b.status === "COMPLETED").length;
-    const completed = filteredBatches.filter(b => b.status === "COMPLETED").length;
-    const totalWinners = offers.filter(o => o.status === "winner").length;
-    const totalLosers  = offers.filter(o => o.status === "loser").length;
-    const openTasks  = tasks.filter(t => t.status === "TODO" || t.status === "IN_PROGRESS").length;
-    const doneTasks  = tasks.filter(t => t.status === "DONE").length;
-    const scaleTasks = tasks.filter(t => t.taskType === "find_winners" || t.taskType === "FIND_WINNERS").length;
+  const rangeSummary = useMemo(() => {
+    const visits = batchRows.reduce((a, b) => a + b.clicks, 0);
+    const spend = batchRows.reduce((a, b) => a + b.spend, 0);
+    const revenue = batchRows.reduce((a, b) => a + b.revenue, 0);
+    const profit = batchRows.reduce((a, b) => a + b.profit, 0);
+    const winners = batchRows.reduce((a, b) => a + b.winners, 0);
+    const losers = batchRows.reduce((a, b) => a + b.losers, 0);
+    const roi = spend > 0 ? ((revenue - spend) / spend) * 100 : 0;
+    const hasImportedMetrics = perfMatchesFilteredEntities(perfAll, filteredReportEntities);
+    const isFiltered = Boolean(
+      filterEmployee || filterNetwork || filterGeo || filterSource || filterStatus || filterCampaignType,
+    );
+    return {
+      visits,
+      spend,
+      revenue,
+      profit,
+      roi,
+      winners,
+      losers,
+      batchCount: filteredReportEntities.length,
+      hasImportedMetrics,
+      isFiltered,
+    };
+  }, [
+    batchRows,
+    perfAll,
+    filteredReportEntities,
+    filterEmployee,
+    filterNetwork,
+    filterGeo,
+    filterSource,
+    filterStatus,
+    filterCampaignType,
+  ]);
 
-    const totalSpend = batchRows.reduce((a, b) => a + b.spend, 0);
-    const totalRevenue = batchRows.reduce((a, b) => a + b.revenue, 0);
-    const totalProfit = batchRows.reduce((a, b) => a + b.profit, 0);
-    const avgROI = batchRows.length > 0 ? batchRows.reduce((a, b) => a + b.roi, 0) / batchRows.length : 0;
+  const { data: goalsConfigRaw } = useGoalsConfig();
+  const kpiTargets = (goalsConfigRaw ?? DEFAULT_CONFIG).kpiTargets ?? [];
+  const { isWorker, workerRow } = useWorkerMonthlyGoals();
 
-    // Phase 10c: chart bins follow the 6-state lifecycle. "New" rolls
-    // up the two pre-tracker states (NEW_BATCH +
-    // WAITING_FOR_TRACKER_CAMPAIGNS) since they're operationally the
-    // same line item from a reporting POV: "not yet running".
-    const newCount = filteredBatches.filter(b =>
-      b.status === "NEW_BATCH" || b.status === "WAITING_FOR_TRACKER_CAMPAIGNS"
-    ).length;
-    const readyForLive = filteredBatches.filter(b => b.status === "OFFER_READY_FOR_LIVE_TESTING").length;
-    const statusChart = [
-      { name: "New",          value: newCount,    fill: "#94a3b8" },
-      { name: "Ready",        value: readyForLive, fill: "#f97316" },
-      { name: "Live Tests",   value: live,         fill: "#22c55e" },
-      { name: "Pick Winners", value: ready,        fill: "#a855f7" },
-      { name: "Completed",    value: completed,    fill: "#14b8a6" },
-    ].filter(d => d.value > 0);
+  const { data: assignedNetworks = [] } = useQuery({
+    queryKey: ["reports-assigned-networks", activeWorkspaceId, currentEmployee?.id],
+    enabled: isWorker && !!activeWorkspaceId && !!currentEmployee,
+    queryFn: () =>
+      authedJson<{ affiliateNetworkName: string | null }[]>(
+        `/api/worker-affiliate-networks?workspace_id=${activeWorkspaceId}&employee_id=${currentEmployee!.id}`,
+      ),
+  });
 
-    return { total, live, ready, optimizing, scaling, completed, totalWinners, totalLosers, openTasks, doneTasks, scaleTasks, totalSpend, totalRevenue, totalProfit, avgROI, statusChart };
-  }, [filteredBatches, offers, tasks, batchRows]);
+  const workerPe = workerRow
+    ? {
+        revenue: { current: workerRow.revenue.current, target: workerRow.revenue.target },
+        testing: { current: workerRow.testing.current, target: workerRow.testing.target },
+        working: { current: workerRow.working.current, target: workerRow.working.target },
+      }
+    : null;
 
-  // ── Unique filter options
-  const networks   = [...new Set(batches.map(b => b.affiliateNetwork))].sort();
-  const geos       = [...new Set(batches.map(b => b.geo))].sort();
-  const sources    = [...new Set(batches.map(b => b.trafficSource))].sort();
-  const statuses   = [...new Set(batches.map(b => b.status))].sort();
+  const dashboardEntities = useMemo(
+    () => scopeEntitiesForDashboard(filteredReportEntities, isAdmin, currentEmployee?.id),
+    [filteredReportEntities, isAdmin, currentEmployee?.id],
+  );
+
+  const goalDashboard = useMemo(
+    () => buildReportsGoalDashboard(dashboardEntities, employees, isWorker ? [] : kpiTargets, workerPe),
+    [dashboardEntities, employees, isWorker, kpiTargets, workerPe],
+  );
+
+  // Master filter catalogs — worker sees only assigned networks in dropdown
+  const networks = useMemo(() => {
+    if (isWorker) {
+      return buildMasterStringOptions(
+        assignedNetworks.map((n) => n.affiliateNetworkName).filter((n): n is string => !!n),
+        ...filteredReportEntities.map((r) => r.network),
+      );
+    }
+    return buildMasterStringOptions(
+      affiliateNetworks.map((n) => n.name),
+      ...batches.map((b) => b.affiliateNetwork),
+      ...liveCampaigns.map((c) => c.batchAffiliateNetwork),
+    );
+  }, [isWorker, assignedNetworks, affiliateNetworks, batches, liveCampaigns, filteredReportEntities]);
+  const geos = useMemo(
+    () =>
+      buildMasterStringOptions(
+        geosCatalog.map((g) => g.code),
+        ...batches.map((b) => b.geo),
+        ...liveCampaigns.map((c) => c.batchGeo),
+      ),
+    [geosCatalog, batches, liveCampaigns],
+  );
+  const sources = useMemo(
+    () =>
+      buildMasterStringOptions(
+        trafficSourcesCatalog.map((s) => s.name),
+        ...batches.map((b) => b.trafficSource),
+        ...liveCampaigns.map((c) => c.trafficSourceName),
+      ),
+    [trafficSourcesCatalog, batches, liveCampaigns],
+  );
+  const statuses = useMemo(
+    () => [...new Set(allReportEntities.map((r) => r.status))].sort(),
+    [allReportEntities],
+  );
+  const campaignTypeOptions = useMemo(
+    () => buildReportCampaignTypeOptions(allReportEntities),
+    [allReportEntities],
+  );
 
   // ── Sort states
   const batchSort  = useSortState("profit");
@@ -489,7 +571,7 @@ export default function Reports() {
     })), [empRows]);
 
   const TABS: { id: ReportTab; label: string; icon: React.ElementType }[] = [
-    { id: "ops",       label: "Operations",     icon: BarChart3 },
+    { id: "ops",       label: "Dashboard",      icon: BarChart3 },
     { id: "batches",   label: "Batches",        icon: Target },
     { id: "sources",   label: "Traffic Sources", icon: Globe },
     { id: "networks",  label: "Networks & GEOs", icon: Network },
@@ -512,16 +594,23 @@ export default function Reports() {
       </div>
 
       {/* Global filters */}
-      <Card className="border border-border shadow-sm">
-        <CardContent className="py-3 px-4">
-          <DateFilterBar
-            preset={datePreset}
-            onPresetChange={setDatePreset}
-            dateFrom={dateFrom}
-            dateTo={dateTo}
-            onCustomRangeChange={setCustomRange}
-            className="mb-3"
-          />
+      <Card className="border border-slate-200/90 bg-white shadow-sm ring-1 ring-slate-100">
+        <CardContent className="px-4 py-3">
+          <div className="mb-3 max-w-xl">
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              Date Range
+            </label>
+            <PerformanceRangePicker
+              preset={datePreset}
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              onPresetChange={setDatePreset}
+              onCustomRangeChange={setCustomRange}
+            />
+            <p className="mt-1.5 text-[10px] text-muted-foreground">
+              {DATE_RANGE_PRESET_LABELS[datePreset]} · metrics from imported Voluum daily data
+            </p>
+          </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
             {isAdmin && (
               <div>
@@ -553,12 +642,21 @@ export default function Reports() {
                 {sources.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
+            <div>
+              <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide block mb-1">Campaign Type</label>
+              <select value={filterCampaignType} onChange={e => setFilterCampaignType(e.target.value)} className={selFilter}>
+                <option value="">All campaign types</option>
+                {campaignTypeOptions.map(({ key, label }) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+            </div>
           </div>
-          {(dateFrom || dateTo || filterEmployee || filterNetwork || filterGeo || filterSource || filterStatus) && (
+          {(dateFrom || dateTo || filterEmployee || filterNetwork || filterGeo || filterSource || filterStatus || filterCampaignType) && (
             <div className="flex items-center justify-between mt-2 pt-2 border-t border-border">
-              <span className="text-xs text-muted-foreground">{filteredBatches.length} batch{filteredBatches.length !== 1 ? "es" : ""} in view</span>
+              <span className="text-xs text-muted-foreground">{filteredReportEntities.length} in view</span>
               <button
-                onClick={() => { clearDateRange(); setFilterEmployee(""); setFilterNetwork(""); setFilterGeo(""); setFilterSource(""); setFilterStatus(""); }}
+                onClick={() => { clearDateRange(); setFilterEmployee(""); setFilterNetwork(""); setFilterGeo(""); setFilterSource(""); setFilterStatus(""); setFilterCampaignType(""); }}
                 className="text-xs text-primary hover:underline"
               >
                 Clear filters
@@ -567,6 +665,12 @@ export default function Reports() {
           )}
         </CardContent>
       </Card>
+
+      {reportsCoreLoading ? (
+        <ReportKpiCardsSkeleton count={6} />
+      ) : (
+        <ReportsSummaryCards summary={rangeSummary} />
+      )}
 
       {/* Tabs */}
       <div className="flex items-center gap-1 border-b border-border">
@@ -585,118 +689,14 @@ export default function Reports() {
       </div>
 
       {/* ══════════════════════════════════════
-          OPERATIONS TAB
+          DASHBOARD TAB
       ══════════════════════════════════════ */}
       {tab === "ops" && (
-        <div className="space-y-5">
-          {reportsCoreLoading ? (
-            <>
-              <ReportKpiCardsSkeleton count={4} />
-              <ReportKpiCardsSkeleton count={4} />
-            </>
-          ) : (
-          <>
-          {/* KPI cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {[
-              { label: "Total Batches",   value: opsSummary.total,       sub: `${opsSummary.live} live`, icon: Target, color: "" },
-              { label: "Total Winners",   value: opsSummary.totalWinners, sub: `${opsSummary.totalLosers} losers`, icon: Trophy, color: "text-green-600" },
-              { label: "Scale Tasks",     value: opsSummary.scaleTasks,  sub: `${opsSummary.doneTasks} tasks completed`, icon: Rocket, color: "text-purple-600" },
-              { label: "Open Tasks",      value: opsSummary.openTasks,   sub: `${opsSummary.doneTasks} done`, icon: BarChart3, color: opsSummary.openTasks > 10 ? "text-red-500" : "" },
-            ].map(({ label, value, sub, icon: Icon, color }) => (
-              <Card key={label} className="border border-border shadow-sm">
-                <CardContent className="px-4 py-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="text-xs text-muted-foreground font-medium">{label}</p>
-                    <Icon size={13} className="text-muted-foreground opacity-40" />
-                  </div>
-                  <p className={`text-2xl font-bold ${color}`}>{value}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-
-          {/* P&L summary */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {[
-              { label: "Total Spend",   value: fmt$(opsSummary.totalSpend), color: "" },
-              { label: "Total Revenue", value: fmt$(opsSummary.totalRevenue), color: "" },
-              { label: "Total Profit",  value: fmt$(opsSummary.totalProfit), color: profitColor(opsSummary.totalProfit) },
-              { label: "Average ROI",   value: fmtPct(opsSummary.avgROI), color: roiColor(opsSummary.avgROI) },
-            ].map(({ label, value, color }) => (
-              <Card key={label} className="border border-border shadow-sm">
-                <CardContent className="px-4 py-3">
-                  <p className="text-xs text-muted-foreground font-medium mb-1">{label}</p>
-                  <p className={`text-xl font-bold ${color}`}>{value}</p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-
-          {/* Status breakdown + pipeline */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Card className="border border-border shadow-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold">Batch Pipeline</CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <div className="space-y-2">
-                  {opsSummary.statusChart.map(s => (
-                    <div key={s.name} className="flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground w-20 flex-shrink-0">{s.name}</span>
-                      <div className="flex-1 h-5 rounded bg-muted overflow-hidden">
-                        <div className="h-full rounded transition-all" style={{ width: `${opsSummary.total > 0 ? (s.value / opsSummary.total) * 100 : 0}%`, background: s.fill }} />
-                      </div>
-                      <span className="text-xs font-semibold text-foreground w-5 text-right">{s.value}</span>
-                    </div>
-                  ))}
-                  {opsSummary.statusChart.length === 0 && (
-                    <p className="text-xs text-muted-foreground text-center py-4">
-                      No active testing batches in this range.
-                    </p>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border border-border shadow-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold">Win/Loss Breakdown</CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Winners found</span>
-                    <span className="text-sm font-bold text-green-600">{opsSummary.totalWinners}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Losers identified</span>
-                    <span className="text-sm font-bold text-red-500">{opsSummary.totalLosers}</span>
-                  </div>
-                  <div className="flex items-center justify-between border-t border-border pt-2">
-                    <span className="text-sm text-muted-foreground">Win rate</span>
-                    <span className="text-sm font-bold">
-                      {(opsSummary.totalWinners + opsSummary.totalLosers) > 0
-                        ? fmtPct((opsSummary.totalWinners / (opsSummary.totalWinners + opsSummary.totalLosers)) * 100)
-                        : "—"}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Scale tasks created</span>
-                    <span className="text-sm font-bold text-purple-600">{opsSummary.scaleTasks}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Batches scaling</span>
-                    <span className="text-sm font-bold">{opsSummary.scaling}</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-          </>
-          )}
-        </div>
+        <ReportsGoalDashboardTab
+          loading={reportsCoreLoading}
+          isAdmin={isAdmin}
+          model={goalDashboard}
+        />
       )}
 
       {/* ══════════════════════════════════════
@@ -709,7 +709,7 @@ export default function Reports() {
           ) : (
           <>
           <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">{sortedBatches.length} batch{sortedBatches.length !== 1 ? "es" : ""}</p>
+            <p className="text-sm text-muted-foreground">{sortedBatches.length} row{sortedBatches.length !== 1 ? "s" : ""}</p>
             <button
               onClick={() => exportCSV(
                 "batches-report.csv",
@@ -722,76 +722,105 @@ export default function Reports() {
             </button>
           </div>
 
-          <Card className="border border-border shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="border-b border-border bg-muted/30">
+          <Card className="overflow-hidden border border-slate-200/90 bg-white shadow-sm ring-1 ring-slate-100">
+            <table className="w-full table-fixed">
+              <colgroup>
+                <col style={{ width: isAdmin ? "26%" : "28%" }} />
+                <col style={{ width: isAdmin ? "10%" : "11%" }} />
+                <col style={{ width: isAdmin ? "8%" : "9%" }} />
+                {isAdmin && <col style={{ width: "8%" }} />}
+                <col style={{ width: "6%" }} />
+                <col style={{ width: "6%" }} />
+                <col style={{ width: "6%" }} />
+                <col style={{ width: "6%" }} />
+                <col style={{ width: "5%" }} />
+                <col style={{ width: isAdmin ? "13%" : "14%" }} />
+              </colgroup>
+              <thead className="sticky top-0 z-10 border-b border-slate-100 bg-slate-50/95">
+                <tr>
+                  <ThSort label="Batch" col="batchName" sort={batchSort} onToggle={batchSort.toggle} />
+                  <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">Network / GEO</th>
+                  <ThSort label="Source" col="trafficSource" sort={batchSort} onToggle={batchSort.toggle} />
+                  {isAdmin && <ThSort label="Employee" col="employee" sort={batchSort} onToggle={batchSort.toggle} />}
+                  <ThSort label="Visits" col="clicks" sort={batchSort} onToggle={batchSort.toggle} align="right" />
+                  <ThSort label="Spend" col="spend" sort={batchSort} onToggle={batchSort.toggle} align="right" />
+                  <ThSort label="Revenue" col="revenue" sort={batchSort} onToggle={batchSort.toggle} align="right" />
+                  <ThSort label="Profit" col="profit" sort={batchSort} onToggle={batchSort.toggle} align="right" />
+                  <ThSort label="ROI" col="roi" sort={batchSort} onToggle={batchSort.toggle} align="right" />
+                  <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">Insight</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sortedBatches.length === 0 ? (
                   <tr>
-                    <ThSort label="Batch" col="batchName" sort={batchSort} onToggle={batchSort.toggle} />
-                    <ThSort label="Network" col="network" sort={batchSort} onToggle={batchSort.toggle} />
-                    <ThSort label="GEO" col="geo" sort={batchSort} onToggle={batchSort.toggle} />
-                    <ThSort label="Source" col="trafficSource" sort={batchSort} onToggle={batchSort.toggle} />
-                    {isAdmin && <ThSort label="Employee" col="employee" sort={batchSort} onToggle={batchSort.toggle} />}
-                    <th className="text-left text-xs font-semibold text-muted-foreground py-2 px-3">Status</th>
-                    <ThSort label="Visits" col="clicks" sort={batchSort} onToggle={batchSort.toggle} />
-                    <ThSort label="Spend" col="spend" sort={batchSort} onToggle={batchSort.toggle} />
-                    <ThSort label="Revenue" col="revenue" sort={batchSort} onToggle={batchSort.toggle} />
-                    <ThSort label="Profit" col="profit" sort={batchSort} onToggle={batchSort.toggle} />
-                    <ThSort label="ROI" col="roi" sort={batchSort} onToggle={batchSort.toggle} />
-                    <ThSort label="W" col="winners" sort={batchSort} onToggle={batchSort.toggle} />
-                    <ThSort label="L" col="losers" sort={batchSort} onToggle={batchSort.toggle} />
-                    <ThSort label="Days" col="daysRunning" sort={batchSort} onToggle={batchSort.toggle} />
-                    <th className="py-2 px-3" />
+                    <td colSpan={isAdmin ? 10 : 9} className="p-4">
+                      <OperationalEmpty
+                        icon={Target}
+                        title="No batches match these filters"
+                        description="Clear filters or widen the date range to see batch performance."
+                        compact
+                      />
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {sortedBatches.length === 0 ? (
-                    <tr>
-                      <td colSpan={15} className="p-4">
-                        <OperationalEmpty
-                          icon={Target}
-                          title="No batches match these filters"
-                          description="Clear filters or widen the date range to see batch performance."
-                          compact
-                        />
+                ) : sortedBatches.map((r) => (
+                  <tr
+                    key={r.rowKey}
+                    className="cursor-pointer hover:bg-slate-50/80"
+                    onClick={() => {
+                      if (r.entityKind === "batch") navigate(`/testing-batches/${r.id}`);
+                      else navigate("/live-campaigns");
+                    }}
+                  >
+                    <td className="min-w-0 px-2 py-2.5 align-top">
+                      <p
+                        className="text-sm font-semibold leading-snug text-slate-900 whitespace-normal break-words line-clamp-3"
+                        title={r.batchName}
+                      >
+                        {r.batchName}
+                      </p>
+                      <p className="mt-0.5 text-[10px] leading-snug text-slate-500" title={reportCampaignTypeLabel(r.campaignType)}>
+                        {reportCampaignTypeLabel(r.campaignType)} · #{r.id}
+                      </p>
+                    </td>
+                    <td className="min-w-0 px-2 py-2.5 align-top text-xs leading-snug text-slate-700">
+                      <div className="break-words line-clamp-2" title={r.network}>{r.network}</div>
+                      <div className="text-slate-500">{r.geo}</div>
+                    </td>
+                    <td className="min-w-0 px-2 py-2.5 align-top text-xs leading-snug text-slate-600 break-words line-clamp-2" title={r.trafficSource}>
+                      {r.trafficSource}
+                    </td>
+                    {isAdmin && (
+                      <td className="min-w-0 px-2 py-2.5 align-top text-xs leading-snug text-slate-600 break-words line-clamp-2" title={r.employee}>
+                        {r.employee}
                       </td>
-                    </tr>
-                  ) : sortedBatches.map(r => (
-                    <tr key={r.id} className="hover:bg-muted/20 transition-colors">
-                      <td className="py-2.5 px-3">
-                        <p className="text-sm font-medium text-foreground max-w-[180px] truncate">{r.batchName}</p>
-                      </td>
-                      <td className="py-2.5 px-3 text-sm text-muted-foreground whitespace-nowrap">{r.network}</td>
-                      <td className="py-2.5 px-3 text-sm font-medium text-foreground">{r.geo}</td>
-                      <td className="py-2.5 px-3 text-sm text-muted-foreground whitespace-nowrap">{r.trafficSource}</td>
-                      {isAdmin && <td className="py-2.5 px-3 text-sm text-muted-foreground">{r.employee}</td>}
-                      <td className="py-2.5 px-3">
-                        <span className="inline-flex items-center gap-1 text-xs font-medium whitespace-nowrap">
-                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${STATUS_DOT[r.status] ?? "bg-gray-400"}`} />
-                          {STATUS_LABEL[r.status] ?? r.status}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-sm text-right tabular-nums">{fmtK(r.clicks)}</td>
-                      <td className="py-2.5 px-3 text-sm text-right tabular-nums text-muted-foreground">{fmt$(r.spend)}</td>
-                      <td className="py-2.5 px-3 text-sm text-right tabular-nums">{fmt$(r.revenue)}</td>
-                      <td className={`py-2.5 px-3 text-sm text-right tabular-nums font-semibold ${profitColor(r.profit)}`}>{fmt$(r.profit)}</td>
-                      <td className="py-2.5 px-3 text-right"><RoiBadge roi={r.roi} /></td>
-                      <td className="py-2.5 px-3 text-center text-xs font-semibold text-green-700">{r.winners > 0 ? r.winners : "—"}</td>
-                      <td className="py-2.5 px-3 text-center text-xs font-semibold text-red-500">{r.losers > 0 ? r.losers : "—"}</td>
-                      <td className="py-2.5 px-3 text-sm text-right text-muted-foreground">{r.daysRunning > 0 ? `${r.daysRunning}d` : "—"}</td>
-                      <td className="py-2.5 px-3">
-                        <button
-                          onClick={() => navigate(`/testing-batches/${r.id}`)}
-                          className="w-6 h-6 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                        >
-                          <ArrowRight size={13} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                    )}
+                    <td className="min-w-0 px-2 py-2.5 align-top text-right text-xs tabular-nums text-slate-700 whitespace-nowrap">{fmtReportVisits(r.clicks)}</td>
+                    <td className="min-w-0 px-2 py-2.5 align-top text-right text-xs tabular-nums text-slate-500 whitespace-nowrap">{fmtReportMoney(r.spend)}</td>
+                    <td className="min-w-0 px-2 py-2.5 align-top text-right text-xs tabular-nums text-slate-800 whitespace-nowrap">{fmtReportMoney(r.revenue)}</td>
+                    <td className={`min-w-0 px-2 py-2.5 align-top text-right text-xs font-semibold tabular-nums whitespace-nowrap ${reportProfitColor(r.profit)}`}>{fmtReportMoney(r.profit)}</td>
+                    <td
+                      className={`min-w-0 px-2 py-2.5 align-top text-right text-xs font-semibold tabular-nums whitespace-nowrap ${reportRoiColor(r.roi)}`}
+                      title={fmtReportPct(r.roi)}
+                    >
+                      {fmtReportPctCompact(r.roi)}
+                    </td>
+                    <td className="min-w-0 px-2 py-2.5 align-top overflow-hidden">
+                      <ReportsInsightPill
+                        insight={deriveReportInsight({
+                          clicks: r.clicks,
+                          spend: r.spend,
+                          revenue: r.revenue,
+                          profit: r.profit,
+                          roi: r.roi,
+                          conversions: r.conversions,
+                          winners: r.winners,
+                        })}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </Card>
           </>
           )}
@@ -865,56 +894,58 @@ export default function Reports() {
             </button>
           </div>
 
-          <Card className="border border-border shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="border-b border-border bg-muted/30">
+          <Card className="overflow-hidden border border-slate-200/90 bg-white shadow-sm ring-1 ring-slate-100">
+            <table className="w-full table-fixed">
+              <thead className="sticky top-0 z-10 border-b border-slate-100 bg-slate-50/95">
+                <tr>
+                  <ThSort label="Source" col="source" sort={srcSort} onToggle={srcSort.toggle} />
+                  <ThSort label="Batches" col="batches" sort={srcSort} onToggle={srcSort.toggle} />
+                  <ThSort label="Visits" col="clicks" sort={srcSort} onToggle={srcSort.toggle} />
+                  <ThSort label="Spend" col="spend" sort={srcSort} onToggle={srcSort.toggle} />
+                  <ThSort label="Revenue" col="revenue" sort={srcSort} onToggle={srcSort.toggle} />
+                  <ThSort label="Profit" col="profit" sort={srcSort} onToggle={srcSort.toggle} />
+                  <ThSort label="ROI" col="roi" sort={srcSort} onToggle={srcSort.toggle} />
+                  <th className="w-[16%] px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">Insight</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sortedSrc.length === 0 ? (
                   <tr>
-                    <ThSort label="Traffic Source" col="source" sort={srcSort} onToggle={srcSort.toggle} />
-                    <ThSort label="Batches" col="batches" sort={srcSort} onToggle={srcSort.toggle} />
-                    <ThSort label="Visits" col="clicks" sort={srcSort} onToggle={srcSort.toggle} />
-                    <ThSort label="Spend" col="spend" sort={srcSort} onToggle={srcSort.toggle} />
-                    <ThSort label="Revenue" col="revenue" sort={srcSort} onToggle={srcSort.toggle} />
-                    <ThSort label="Profit" col="profit" sort={srcSort} onToggle={srcSort.toggle} />
-                    <ThSort label="ROI" col="roi" sort={srcSort} onToggle={srcSort.toggle} />
-                    <ThSort label="Conversions" col="conversions" sort={srcSort} onToggle={srcSort.toggle} />
-                    <ThSort label="Winners" col="winners" sort={srcSort} onToggle={srcSort.toggle} />
-                    <ThSort label="Win Rate" col="winnerRate" sort={srcSort} onToggle={srcSort.toggle} />
+                    <td colSpan={8} className="p-4">
+                      <OperationalEmpty
+                        icon={Globe}
+                        title="No traffic source metrics in this range"
+                        description="Import daily metrics or widen the date filter to see source breakdowns."
+                        compact
+                      />
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {sortedSrc.length === 0 ? (
-                    <tr>
-                      <td colSpan={10} className="p-4">
-                        <OperationalEmpty
-                          icon={Globe}
-                          title="No traffic source metrics in this range"
-                          description="Import daily metrics or widen the date filter to see source breakdowns."
-                          compact
-                        />
-                      </td>
-                    </tr>
-                  ) : sortedSrc.map(r => (
-                    <tr key={r.source} className="hover:bg-muted/20 transition-colors">
-                      <td className="py-2.5 px-3 text-sm font-semibold text-foreground">{r.source}</td>
-                      <td className="py-2.5 px-3 text-sm text-center text-muted-foreground">{r.batches}</td>
-                      <td className="py-2.5 px-3 text-sm text-right tabular-nums">{fmtK(r.clicks)}</td>
-                      <td className="py-2.5 px-3 text-sm text-right tabular-nums text-muted-foreground">{fmt$(r.spend)}</td>
-                      <td className="py-2.5 px-3 text-sm text-right tabular-nums">{fmt$(r.revenue)}</td>
-                      <td className={`py-2.5 px-3 text-sm text-right tabular-nums font-semibold ${profitColor(r.profit)}`}>{fmt$(r.profit)}</td>
-                      <td className="py-2.5 px-3 text-right"><RoiBadge roi={r.roi} /></td>
-                      <td className="py-2.5 px-3 text-sm text-right tabular-nums">{r.conversions}</td>
-                      <td className="py-2.5 px-3 text-sm text-center font-semibold text-green-700">{r.winners > 0 ? r.winners : "—"}</td>
-                      <td className="py-2.5 px-3 text-sm text-right">
-                        <span className={`font-semibold ${r.winnerRate > 50 ? "text-green-600" : r.winnerRate > 25 ? "text-amber-600" : "text-muted-foreground"}`}>
-                          {(r.winners + r.losers) > 0 ? fmtPct(r.winnerRate) : "—"}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ) : sortedSrc.map((r) => (
+                  <tr key={r.source} className="hover:bg-slate-50/80">
+                    <td className="truncate px-3 py-2.5 text-sm font-semibold text-slate-900" title={r.source}>{r.source}</td>
+                    <td className="px-3 py-2.5 text-center text-sm text-slate-500">{r.batches}</td>
+                    <td className="px-3 py-2.5 text-right text-sm tabular-nums text-slate-700">{fmtReportVisits(r.clicks)}</td>
+                    <td className="px-3 py-2.5 text-right text-sm tabular-nums text-slate-500">{fmtReportMoney(r.spend)}</td>
+                    <td className="px-3 py-2.5 text-right text-sm tabular-nums text-slate-800">{fmtReportMoney(r.revenue)}</td>
+                    <td className={`px-3 py-2.5 text-right text-sm font-semibold tabular-nums ${reportProfitColor(r.profit)}`}>{fmtReportMoney(r.profit)}</td>
+                    <td className={`px-3 py-2.5 text-right text-sm font-semibold tabular-nums ${reportRoiColor(r.roi)}`}>{fmtReportPct(r.roi)}</td>
+                    <td className="px-3 py-2.5">
+                      <ReportsInsightPill
+                        insight={deriveReportInsight({
+                          clicks: r.clicks,
+                          spend: r.spend,
+                          revenue: r.revenue,
+                          profit: r.profit,
+                          roi: r.roi,
+                          conversions: r.conversions,
+                          winners: r.winners,
+                        })}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </Card>
         </div>
       )}
@@ -961,58 +992,61 @@ export default function Reports() {
             </button>
           </div>
 
-          <Card className="border border-border shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="border-b border-border bg-muted/30">
+          <Card className="overflow-hidden border border-slate-200/90 bg-white shadow-sm ring-1 ring-slate-100">
+            <table className="w-full table-fixed">
+              <thead className="sticky top-0 z-10 border-b border-slate-100 bg-slate-50/95">
+                <tr>
+                  <th className="w-[22%] px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">Network / GEO</th>
+                  <ThSort label="Batches" col="batches" sort={netSort} onToggle={netSort.toggle} />
+                  <ThSort label="Visits" col="clicks" sort={netSort} onToggle={netSort.toggle} />
+                  <ThSort label="Spend" col="spend" sort={netSort} onToggle={netSort.toggle} />
+                  <ThSort label="Revenue" col="revenue" sort={netSort} onToggle={netSort.toggle} />
+                  <ThSort label="Profit" col="profit" sort={netSort} onToggle={netSort.toggle} />
+                  <ThSort label="ROI" col="roi" sort={netSort} onToggle={netSort.toggle} />
+                  <th className="w-[16%] px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">Insight</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sortedNet.length === 0 ? (
                   <tr>
-                    <ThSort label="Network" col="network" sort={netSort} onToggle={netSort.toggle} />
-                    <ThSort label="GEO" col="geo" sort={netSort} onToggle={netSort.toggle} />
-                    <ThSort label="Batches" col="batches" sort={netSort} onToggle={netSort.toggle} />
-                    <ThSort label="Visits" col="clicks" sort={netSort} onToggle={netSort.toggle} />
-                    <ThSort label="Spend" col="spend" sort={netSort} onToggle={netSort.toggle} />
-                    <ThSort label="Revenue" col="revenue" sort={netSort} onToggle={netSort.toggle} />
-                    <ThSort label="Profit" col="profit" sort={netSort} onToggle={netSort.toggle} />
-                    <ThSort label="ROI" col="roi" sort={netSort} onToggle={netSort.toggle} />
-                    <ThSort label="Winners" col="winners" sort={netSort} onToggle={netSort.toggle} />
-                    <ThSort label="Win Rate" col="winnerRate" sort={netSort} onToggle={netSort.toggle} />
-                    <th className="text-left text-xs font-semibold text-muted-foreground py-2 px-3">Best Source</th>
+                    <td colSpan={8} className="p-4">
+                      <OperationalEmpty
+                        icon={Network}
+                        title="No network / GEO metrics in this range"
+                        description="Adjust filters or import Voluum metrics for the selected period."
+                        compact
+                      />
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {sortedNet.length === 0 ? (
-                    <tr>
-                      <td colSpan={11} className="p-4">
-                        <OperationalEmpty
-                          icon={Network}
-                          title="No network / GEO metrics in this range"
-                          description="Adjust filters or import Voluum metrics for the selected period."
-                          compact
-                        />
-                      </td>
-                    </tr>
-                  ) : sortedNet.map((r, i) => (
-                    <tr key={i} className="hover:bg-muted/20 transition-colors">
-                      <td className="py-2.5 px-3 text-sm font-semibold text-foreground">{r.network}</td>
-                      <td className="py-2.5 px-3 text-sm font-semibold text-foreground">{r.geo}</td>
-                      <td className="py-2.5 px-3 text-sm text-center text-muted-foreground">{r.batches}</td>
-                      <td className="py-2.5 px-3 text-sm text-right tabular-nums">{fmtK(r.clicks)}</td>
-                      <td className="py-2.5 px-3 text-sm text-right tabular-nums text-muted-foreground">{fmt$(r.spend)}</td>
-                      <td className="py-2.5 px-3 text-sm text-right tabular-nums">{fmt$(r.revenue)}</td>
-                      <td className={`py-2.5 px-3 text-sm text-right tabular-nums font-semibold ${profitColor(r.profit)}`}>{fmt$(r.profit)}</td>
-                      <td className="py-2.5 px-3 text-right"><RoiBadge roi={r.roi} /></td>
-                      <td className="py-2.5 px-3 text-sm text-center font-semibold text-green-700">{r.winners > 0 ? r.winners : "—"}</td>
-                      <td className="py-2.5 px-3 text-sm text-right">
-                        <span className={`font-semibold ${r.winnerRate > 50 ? "text-green-600" : r.winnerRate > 25 ? "text-amber-600" : "text-muted-foreground"}`}>
-                          {(r.winners + r.losers) > 0 ? fmtPct(r.winnerRate) : "—"}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-xs text-muted-foreground">{r.bestSource}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ) : sortedNet.map((r, i) => (
+                  <tr key={i} className="hover:bg-slate-50/80">
+                    <td className="px-3 py-2.5 text-xs leading-snug text-slate-700">
+                      <div className="truncate font-semibold text-slate-900">{r.network}</div>
+                      <div className="text-slate-500">{r.geo}</div>
+                    </td>
+                    <td className="px-3 py-2.5 text-center text-sm text-slate-500">{r.batches}</td>
+                    <td className="px-3 py-2.5 text-right text-sm tabular-nums text-slate-700">{fmtReportVisits(r.clicks)}</td>
+                    <td className="px-3 py-2.5 text-right text-sm tabular-nums text-slate-500">{fmtReportMoney(r.spend)}</td>
+                    <td className="px-3 py-2.5 text-right text-sm tabular-nums text-slate-800">{fmtReportMoney(r.revenue)}</td>
+                    <td className={`px-3 py-2.5 text-right text-sm font-semibold tabular-nums ${reportProfitColor(r.profit)}`}>{fmtReportMoney(r.profit)}</td>
+                    <td className={`px-3 py-2.5 text-right text-sm font-semibold tabular-nums ${reportRoiColor(r.roi)}`}>{fmtReportPct(r.roi)}</td>
+                    <td className="px-3 py-2.5">
+                      <ReportsInsightPill
+                        insight={deriveReportInsight({
+                          clicks: r.clicks,
+                          spend: r.spend,
+                          revenue: r.revenue,
+                          profit: r.profit,
+                          roi: r.roi,
+                          conversions: r.conversions,
+                          winners: r.winners,
+                        })}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </Card>
         </div>
       )}
@@ -1102,125 +1136,140 @@ export default function Reports() {
             </button>
           </div>
 
-          <Card className="border border-border shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="border-b border-border bg-muted/30">
+          <Card className="overflow-hidden border border-slate-200/90 bg-white shadow-sm ring-1 ring-slate-100">
+            <table className="w-full table-fixed">
+              <thead className="sticky top-0 z-10 border-b border-slate-100 bg-slate-50/95">
+                <tr>
+                  <ThSort label="Employee" col="name" sort={empSort} onToggle={empSort.toggle} />
+                  <ThSort label="Batches" col="batches" sort={empSort} onToggle={empSort.toggle} />
+                  <ThSort label="Visits" col="clicks" sort={empSort} onToggle={empSort.toggle} />
+                  <ThSort label="Spend" col="spend" sort={empSort} onToggle={empSort.toggle} />
+                  <ThSort label="Revenue" col="revenue" sort={empSort} onToggle={empSort.toggle} />
+                  <ThSort label="Profit" col="profit" sort={empSort} onToggle={empSort.toggle} />
+                  <ThSort label="ROI" col="roi" sort={empSort} onToggle={empSort.toggle} />
+                  <th className="w-[10%] px-3 py-2 text-center text-[10px] font-bold uppercase tracking-wide text-slate-500">W / L</th>
+                  <th className="w-[14%] px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">Insight</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sortedEmp.length === 0 ? (
                   <tr>
-                    <ThSort label="Employee" col="name" sort={empSort} onToggle={empSort.toggle} />
-                    <ThSort label="Batches" col="batches" sort={empSort} onToggle={empSort.toggle} />
-                    <ThSort label="Winners" col="winners" sort={empSort} onToggle={empSort.toggle} />
-                    <ThSort label="Losers" col="losers" sort={empSort} onToggle={empSort.toggle} />
-                    <ThSort label="Scale Tasks" col="scaleTasksCreated" sort={empSort} onToggle={empSort.toggle} />
-                    <ThSort label="Tasks Done" col="tasksCompleted" sort={empSort} onToggle={empSort.toggle} />
-                    <ThSort label="Spend" col="spend" sort={empSort} onToggle={empSort.toggle} />
-                    <ThSort label="Revenue" col="revenue" sort={empSort} onToggle={empSort.toggle} />
-                    <ThSort label="Profit" col="profit" sort={empSort} onToggle={empSort.toggle} />
-                    <ThSort label="ROI" col="roi" sort={empSort} onToggle={empSort.toggle} />
+                    <td colSpan={9} className="p-4">
+                      <OperationalEmpty
+                        icon={Users}
+                        title="No employee performance in this range"
+                        description="Assign batches to employees or adjust filters to see breakdowns."
+                        compact
+                      />
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {sortedEmp.length === 0 ? (
-                    <tr>
-                      <td colSpan={10} className="p-4">
-                        <OperationalEmpty
-                          icon={Users}
-                          title="No employee performance in this range"
-                          description="Assign batches to employees or adjust filters to see breakdowns."
-                          compact
-                        />
-                      </td>
-                    </tr>
-                  ) : sortedEmp.map(r => (
-                    <tr key={r.employeeId} className="hover:bg-muted/20 transition-colors">
-                      <td className="py-2.5 px-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center text-xs font-bold text-primary flex-shrink-0">
-                            {r.name.charAt(0)}
-                          </div>
-                          <span className="text-sm font-medium text-foreground">{r.name}</span>
+                ) : sortedEmp.map((r) => (
+                  <tr key={r.employeeId} className="hover:bg-slate-50/80">
+                    <td className="px-3 py-2.5">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
+                          {r.name.charAt(0)}
                         </div>
-                      </td>
-                      <td className="py-2.5 px-3 text-sm text-center text-muted-foreground">{r.batches}</td>
-                      <td className="py-2.5 px-3 text-sm text-center font-semibold text-green-700">{r.winners > 0 ? r.winners : "—"}</td>
-                      <td className="py-2.5 px-3 text-sm text-center font-semibold text-red-500">{r.losers > 0 ? r.losers : "—"}</td>
-                      <td className="py-2.5 px-3 text-sm text-center text-purple-600 font-semibold">{r.scaleTasksCreated > 0 ? r.scaleTasksCreated : "—"}</td>
-                      <td className="py-2.5 px-3 text-sm text-center text-muted-foreground">{r.tasksCompleted}</td>
-                      <td className="py-2.5 px-3 text-sm text-right tabular-nums text-muted-foreground">{fmt$(r.spend)}</td>
-                      <td className="py-2.5 px-3 text-sm text-right tabular-nums">{fmt$(r.revenue)}</td>
-                      <td className={`py-2.5 px-3 text-sm text-right tabular-nums font-semibold ${profitColor(r.profit)}`}>{fmt$(r.profit)}</td>
-                      <td className="py-2.5 px-3 text-right"><RoiBadge roi={r.roi} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                        <span className="truncate text-sm font-medium text-slate-900">{r.name}</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 text-center text-sm text-slate-500">{r.batches}</td>
+                    <td className="px-3 py-2.5 text-right text-sm tabular-nums text-slate-700">{fmtReportVisits(r.clicks)}</td>
+                    <td className="px-3 py-2.5 text-right text-sm tabular-nums text-slate-500">{fmtReportMoney(r.spend)}</td>
+                    <td className="px-3 py-2.5 text-right text-sm tabular-nums text-slate-800">{fmtReportMoney(r.revenue)}</td>
+                    <td className={`px-3 py-2.5 text-right text-sm font-semibold tabular-nums ${reportProfitColor(r.profit)}`}>{fmtReportMoney(r.profit)}</td>
+                    <td className={`px-3 py-2.5 text-right text-sm font-semibold tabular-nums ${reportRoiColor(r.roi)}`}>{fmtReportPct(r.roi)}</td>
+                    <td className="px-3 py-2.5 text-center text-xs font-semibold text-slate-700">
+                      <span className="text-emerald-600">{r.winners}</span>
+                      <span className="text-slate-400"> / </span>
+                      <span className="text-red-500">{r.losers}</span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <ReportsInsightPill
+                        insight={deriveReportInsight({
+                          clicks: r.clicks,
+                          spend: r.spend,
+                          revenue: r.revenue,
+                          profit: r.profit,
+                          roi: r.roi,
+                          winners: r.winners,
+                        })}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </Card>
         </div>
       )}
 
       {tab === "winners" && (
         <div className="space-y-4">
-          <Card className="border border-border shadow-sm overflow-hidden">
-            <CardHeader className="pb-2 flex flex-row items-center justify-between flex-wrap gap-2">
-              <CardTitle className="text-sm font-semibold">Campaign winners</CardTitle>
-              <button
-                type="button"
-                onClick={() => {
-                  const ids = [...new Set(winnerRows.map((r) => r.offerId))].join(", ");
-                  void navigator.clipboard.writeText(ids);
-                }}
-                className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground border border-border rounded-md px-2 py-1"
-                disabled={winnerRows.length === 0}
-              >
-                <Copy size={12} /> Copy offer IDs
-              </button>
-            </CardHeader>
-            <CardContent className="pt-0">
-              {winnersLoading ? (
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">{winnerRows.length} winner{winnerRows.length !== 1 ? "s" : ""}</p>
+            <button
+              type="button"
+              onClick={() => {
+                const ids = [...new Set(winnerRows.map((r) => r.offerId))].join(", ");
+                void navigator.clipboard.writeText(ids);
+              }}
+              className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground border border-border rounded-md px-2.5 py-1.5 hover:bg-muted/50 transition-colors"
+              disabled={winnerRows.length === 0}
+            >
+              <Copy size={12} /> Copy offer IDs
+            </button>
+          </div>
+
+          <Card className="overflow-hidden border border-slate-200/90 bg-white shadow-sm ring-1 ring-slate-100">
+            {winnersLoading ? (
+              <div className="p-4">
                 <DataTableSkeleton rows={5} cols={6} />
-              ) : winnerRows.length === 0 ? (
+              </div>
+            ) : winnerRows.length === 0 ? (
+              <div className="p-4">
                 <OperationalEmpty
                   icon={Trophy}
                   title="No campaign winners recorded yet"
                   description="Winners appear when find-winners tasks complete or winners are entered manually."
                   compact
                 />
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="border-b border-border bg-muted/30">
-                      <tr>
-                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Date</th>
-                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Batch</th>
-                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Traffic source</th>
-                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Platform</th>
-                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Campaign</th>
-                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Offer ID</th>
-                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Source</th>
-                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Entered by</th>
-                        <th className="text-left py-2 px-2 font-semibold text-xs text-muted-foreground">Notes</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {winnerRows.map((r, i) => (
-                        <tr key={`${r.offerId}-${i}`} className="border-b border-border/60 hover:bg-muted/20">
-                          <td className="py-2 px-2 text-muted-foreground whitespace-nowrap">{r.detectedAt.slice(0, 10)}</td>
-                          <td className="py-2 px-2">{r.batchName ?? "—"}</td>
-                          <td className="py-2 px-2">{r.trafficSourceName ?? "—"}</td>
-                          <td className="py-2 px-2">{r.platform}</td>
-                          <td className="py-2 px-2 max-w-[200px] truncate" title={r.campaignName}>{r.campaignName}</td>
-                          <td className="py-2 px-2 font-mono tabular-nums">{r.offerId}</td>
-                          <td className="py-2 px-2">{r.sourceLabel}</td>
-                          <td className="py-2 px-2">{r.enteredBy ?? "—"}</td>
-                          <td className="py-2 px-2 text-muted-foreground max-w-[180px] truncate" title={r.notes ?? ""}>{r.notes ?? "—"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </CardContent>
+              </div>
+            ) : (
+              <table className="w-full table-fixed">
+                <thead className="sticky top-0 z-10 border-b border-slate-100 bg-slate-50/95">
+                  <tr>
+                    <th className="w-[22%] px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">Entity</th>
+                    <th className="w-[10%] px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">Type</th>
+                    <th className="w-[16%] px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">Network / GEO</th>
+                    <th className="w-[10%] px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wide text-slate-500">Visits</th>
+                    <th className="w-[10%] px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wide text-slate-500">Profit</th>
+                    <th className="w-[10%] px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wide text-slate-500">ROI</th>
+                    <th className="w-[22%] px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">Suggested Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {winnerRows.map((r, i) => (
+                    <tr key={`${r.offerId}-${i}`} className="hover:bg-slate-50/80">
+                      <td className="px-3 py-2.5">
+                        <p className="truncate text-sm font-medium text-slate-900" title={r.campaignName}>{r.campaignName}</p>
+                        <p className="truncate text-[10px] text-slate-500">{r.batchName ?? "—"}</p>
+                      </td>
+                      <td className="px-3 py-2.5 text-xs uppercase text-slate-600">{r.platform}</td>
+                      <td className="px-3 py-2.5 text-xs text-slate-600">
+                        <div className="truncate">{r.trafficSourceName ?? "—"}</div>
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-sm text-slate-400">—</td>
+                      <td className="px-3 py-2.5 text-right text-sm text-slate-400">—</td>
+                      <td className="px-3 py-2.5 text-right text-sm text-slate-400">—</td>
+                      <td className="px-3 py-2.5 text-xs text-primary">
+                        {r.source === "manual" ? "Review manual entry" : "Scale or monitor batch"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </Card>
         </div>
       )}

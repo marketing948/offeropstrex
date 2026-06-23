@@ -16,6 +16,10 @@ import {
 } from "@workspace/db";
 import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access";
 import { getEmployeeFromToken } from "./auth";
+import {
+  enforceEmployeeIdAccess,
+  requireWorkspaceWithNetworkScope,
+} from "../lib/worker-network-access";
 
 const router: IRouter = Router();
 
@@ -31,15 +35,26 @@ router.get("/worker-affiliate-networks", async (req, res): Promise<void> => {
   const wsId = await requireWorkspaceFromQuery(req, res);
   if (wsId === null) return;
 
+  const scoped = await requireWorkspaceWithNetworkScope(req, res, wsId);
+  if (scoped === null) return;
+
   const employeeIdRaw = req.query["employee_id"];
-  const conditions = [eq(workerAffiliateNetworksTable.workspaceId, wsId)];
+  let filterEmployeeId: number | undefined;
   if (employeeIdRaw != null && employeeIdRaw !== "") {
     const n = Number(employeeIdRaw);
     if (!Number.isInteger(n) || n <= 0) {
       res.status(400).json({ error: "employee_id must be a positive integer" });
       return;
     }
-    conditions.push(eq(workerAffiliateNetworksTable.employeeId, n));
+    if (!enforceEmployeeIdAccess(res, scoped.scope, n)) return;
+    filterEmployeeId = n;
+  } else if (!scoped.scope.isAdmin) {
+    filterEmployeeId = scoped.scope.employeeId;
+  }
+
+  const conditions = [eq(workerAffiliateNetworksTable.workspaceId, wsId)];
+  if (filterEmployeeId != null) {
+    conditions.push(eq(workerAffiliateNetworksTable.employeeId, filterEmployeeId));
   }
 
   const rows = await db

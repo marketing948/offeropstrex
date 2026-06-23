@@ -9,6 +9,7 @@ import {
   Layers,
   Radio,
   Settings,
+  Trophy,
   Users,
 } from "lucide-react";
 
@@ -48,6 +49,7 @@ export function getNavigationSections(isAdmin: boolean): NavSection[] {
       label: "Administration",
       items: [
         { href: "/dashboard", label: "Executive Overview", icon: BarChart3 },
+        { href: "/performance/monthly-goals", label: "Performance Engine", icon: Trophy },
         { href: "/employees", label: "Team", icon: Users },
         { href: "/settings", label: "Settings", icon: Settings },
       ],
@@ -60,12 +62,14 @@ export function getNavigationSections(isAdmin: boolean): NavSection[] {
 /** Legacy bookmarks — routes stay registered but redirect to canonical homes. */
 export const LEGACY_ROUTE_REDIRECTS: Record<string, string> = {
   "/employee-dashboard": "/ops",
-  "/performance": "/ops",
   "/mission-control": "/ops",
   "/daily-reports": "/reports",
   "/weekly-reports": "/reports",
 };
 
 export function isNavActive(location: string, href: string): boolean {
+  if (href.startsWith("/performance") && location.startsWith("/performance")) {
+    return href === "/performance/monthly-goals" || location === href || location.startsWith(`${href}/`);
+  }
   return location === href || location.startsWith(`${href}/`);
 }

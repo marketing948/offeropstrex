@@ -1,8 +1,10 @@
 import { useLocation } from "wouter";
+import { useState } from "react";
 import type { AlertRulesConfig } from "@workspace/alert-rules";
 import { DEFAULT_ALERT_RULES } from "@workspace/alert-rules";
 import type { ReviewQueueCampaign, SuggestedReviewAction } from "@/lib/campaign-review/types";
-import { recordReviewEvent, dismissCampaignUntil } from "@/lib/campaign-review/memory";
+import { recordReviewEvent, dismissCampaignUntil, getLatestMediaBuyerNote } from "@/lib/campaign-review/memory";
+import { AddToWorkQueueDialog } from "@/components/campaign-review/add-to-work-queue-dialog";
 import {
   Sheet,
   SheetContent,
@@ -13,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { CampaignHealthBadge } from "@/components/campaign-review/health-badge";
 import { useToast } from "@/hooks/use-toast";
+import { ListTodo } from "lucide-react";
 
 function fmt$(n: number) {
   return `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
@@ -37,9 +40,11 @@ export function ReviewDetailSheet({
 }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const [workQueueOpen, setWorkQueueOpen] = useState(false);
 
   if (!item) return null;
   const review = item;
+  const mediaBuyerNote = getLatestMediaBuyerNote(workspaceId, actorEmployeeId, review.campaignId);
 
   function applyAction(action: SuggestedReviewAction) {
     recordReviewEvent(workspaceId, actorEmployeeId, {
@@ -86,6 +91,18 @@ export function ReviewDetailSheet({
         </SheetHeader>
 
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+          {mediaBuyerNote?.note?.trim() && (
+            <div className="rounded-lg border border-primary/25 bg-primary/5 px-3 py-3">
+              <p className="text-xs font-bold uppercase tracking-widest text-primary">
+                Media buyer note
+              </p>
+              <p className="mt-2 whitespace-pre-wrap text-sm">{mediaBuyerNote.note}</p>
+              <p className="mt-2 text-[10px] text-muted-foreground">
+                Captured locally from Live Campaigns — not persisted to backend.
+              </p>
+            </div>
+          )}
+
           <div>
             <p className="mb-2 text-xs font-bold uppercase tracking-widest text-muted-foreground">
               Metrics snapshot
@@ -127,6 +144,21 @@ export function ReviewDetailSheet({
               from the batch when you choose to scale or close work.
             </p>
             <div className="flex flex-col gap-2">
+              <Button
+                type="button"
+                className="h-auto min-h-9 justify-start whitespace-normal py-2 text-left text-sm"
+                onClick={() => setWorkQueueOpen(true)}
+              >
+                <span className="flex items-start gap-2">
+                  <ListTodo className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>
+                    <span className="font-medium">Add to work queue</span>
+                    <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+                      Create a Work Queue task from this review or media buyer note.
+                    </span>
+                  </span>
+                </span>
+              </Button>
               {review.suggestedActions.map((action) => (
                 <Button
                   key={action.id}
@@ -146,6 +178,16 @@ export function ReviewDetailSheet({
             </div>
           </div>
         </div>
+
+        <AddToWorkQueueDialog
+          open={workQueueOpen}
+          onOpenChange={setWorkQueueOpen}
+          review={review}
+          mediaBuyerNote={mediaBuyerNote}
+          workspaceId={workspaceId}
+          actorEmployeeId={actorEmployeeId}
+          onTaskCreated={onMemoryRecorded}
+        />
       </SheetContent>
     </Sheet>
   );

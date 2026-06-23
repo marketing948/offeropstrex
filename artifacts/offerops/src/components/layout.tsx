@@ -20,6 +20,8 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useState, useRef, useEffect } from "react";
 import { useWorkspace } from "@/lib/workspace-context";
+import { CurrentRankCard } from "@/components/performance-engine/current-rank-card";
+import { useCurrentRank } from "@/lib/performance-engine/use-current-rank";
 
 function WorkspaceSwitcher() {
   const { currentEmployee } = useAuth();
@@ -248,6 +250,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
     },
   });
 
+  const rankData = useCurrentRank();
+
   if (isLoading) {
     return <div className="min-h-screen bg-background flex items-center justify-center text-muted-foreground">Loading...</div>;
   }
@@ -257,8 +261,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
   }
 
   const isAdmin = currentEmployee.role === "admin";
+  const showWorkerRank = !isAdmin;
 
   const navSections = getNavigationSections(isAdmin);
+  const opsPath = location.split("?")[0] ?? location;
+  const isOpsHub = opsPath === "/ops" || opsPath === "/operations";
+  const isPerformanceEngine = opsPath.startsWith("/performance");
 
   // Phase 9e: Bible §9 notification taxonomy. Severity drives the
   // colored ring around the icon (info/warning/high/critical), the
@@ -280,7 +288,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="flex h-screen min-h-0 overflow-hidden bg-background">
       {/* Sidebar */}
       <aside className="w-60 flex flex-col" style={{ background: "hsl(var(--sidebar))" }}>
 
@@ -345,6 +353,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Footer */}
         <div className="p-3 border-t" style={{ borderColor: "hsl(var(--sidebar-border))" }}>
+          {showWorkerRank && (
+            <div className="mb-3">
+              <CurrentRankCard
+                variant="sidebar"
+                rank={rankData.rank}
+                nextRank={rankData.nextRank}
+                myXp={rankData.myXp}
+                progressToNext={rankData.progressToNext}
+                xpReady={rankData.xpReady}
+              />
+            </div>
+          )}
           {/* Notification bell */}
           <div ref={notifRef} className="relative mb-1">
             <button
@@ -485,13 +505,21 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-background">
-        <div className="flex-1 overflow-y-auto p-8">
-          <div className="max-w-6xl mx-auto">
-            {children}
+      {/* Main Content — ops hub scrolls on <main> to avoid nested flex-1 blank space */}
+      <main
+        className={
+          isOpsHub || isPerformanceEngine
+            ? "min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-background"
+            : "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
+        }
+      >
+        {isOpsHub || isPerformanceEngine ? (
+          children
+        ) : (
+          <div className="h-0 min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-8">
+            <div className="mx-auto max-w-6xl">{children}</div>
           </div>
-        </div>
+        )}
       </main>
     </div>
   );

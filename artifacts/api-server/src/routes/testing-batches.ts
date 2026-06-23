@@ -20,6 +20,11 @@ import {
   ListTestingBatchesQueryParams,
 } from "@workspace/api-zod";
 import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access";
+import {
+  enforceEmployeeIdAccess,
+  networkNameAllowed,
+  requireWorkspaceWithNetworkScope,
+} from "../lib/worker-network-access";
 import { recordBatchCreatedOperationalEvent } from "../lib/campaignops-operational-events.ts";
 import { emit } from "../engine/event-bus.ts";
 import {
@@ -226,16 +231,42 @@ router.get("/testing-batches", async (req, res): Promise<void> => {
   const workspaceId = await requireWorkspaceFromQuery(req, res);
   if (workspaceId === null) return;
 
+  const scoped = await requireWorkspaceWithNetworkScope(req, res, workspaceId);
+  if (scoped === null) return;
+
   const params = ListTestingBatchesQueryParams.safeParse(req.query);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
     return;
   }
 
+  if (
+    !enforceEmployeeIdAccess(res, scoped.scope, params.data.employee_id ?? undefined)
+  ) {
+    return;
+  }
+
   const conditions = [eq(testingBatchesTable.workspaceId, workspaceId)];
-  if (params.data.employee_id) {
+
+  if (!scoped.scope.isAdmin) {
+    conditions.push(eq(testingBatchesTable.employeeId, scoped.scope.employeeId));
+    const allowed = scoped.scope.allowedNetworkNames ?? [];
+    if (allowed.length === 0) {
+      res.json([]);
+      return;
+    }
+    conditions.push(inArray(testingBatchesTable.affiliateNetwork, allowed));
+    if (
+      params.data.affiliate_network &&
+      !networkNameAllowed(scoped.scope, params.data.affiliate_network)
+    ) {
+      res.status(403).json({ error: "Affiliate network not assigned to you" });
+      return;
+    }
+  } else if (params.data.employee_id) {
     conditions.push(eq(testingBatchesTable.employeeId, params.data.employee_id));
   }
+
   if (params.data.status) {
     conditions.push(eq(testingBatchesTable.status, params.data.status as (typeof testingBatchesTable.$inferSelect)["status"]));
   }
