@@ -23,7 +23,12 @@ import {
 } from "../lib/monthly-goals-service.ts";
 import { buildMetricBreakdown } from "../lib/metric-breakdown-service.ts";
 import { currentMonthKey, monthKeyToRange } from "../lib/xp-award-service.ts";
-import { loadGoalsConfig, findDuplicateGoal, goalsForMonth } from "../lib/goals-config-server.ts";
+import {
+  loadGoalsConfig,
+  findDuplicateGoal,
+  goalsForMonth,
+} from "../lib/goals-config-server.ts";
+import { removeNetworkGoalsFromTargets } from "../lib/goal-plan-scope.ts";
 import { getSettingValue, upsertSetting } from "../lib/settings-store.ts";
 import { awardXp, rewardRuleIdempotencyKey } from "../lib/xp-award-service.ts";
 import {
@@ -94,6 +99,14 @@ const replaceGoalPlanSchema = z.object({
       }),
     )
     .optional(),
+});
+
+const resetNetworkGoalPlanSchema = z.object({
+  workspaceId: z.number().int().positive(),
+  employeeId: z.number().int().positive(),
+  monthKey: monthKeySchema,
+  affiliateNetworkName: z.string().min(1),
+  confirmation: z.literal(true),
 });
 
 router.get("/performance/monthly-goals", async (req, res): Promise<void> => {
@@ -537,6 +550,54 @@ router.post("/performance/worker-goals/plan", async (req, res): Promise<void> =>
   await upsertSetting(workspaceId, "goals_config", JSON.stringify(cfg));
 
   res.json({ ok: true, goals: nextGoals });
+});
+
+router.post("/performance/worker-goals/plan/reset-network", async (req, res): Promise<void> => {
+  const employee = await getEmployeeFromToken(req);
+  if (!employee || employee.role !== "admin") {
+    res.status(employee ? 403 : 401).json({ error: employee ? "Admin access required" : "Unauthorized" });
+    return;
+  }
+
+  const parsed = resetNetworkGoalPlanSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const { workspaceId, employeeId, monthKey, affiliateNetworkName } = parsed.data;
+  if ((await requireWorkspaceAccess(req, res, workspaceId)) === null) return;
+
+  const scopeNet = affiliateNetworkName.trim();
+  if (
+    !(await assertWorkerNetworkAccess(workspaceId, employeeId, scopeNet, null, res))
+  ) {
+    return;
+  }
+
+  const raw = await getSettingValue(workspaceId, "goals_config");
+  let cfg: Record<string, unknown> = {};
+  try {
+    cfg = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+  } catch {
+    cfg = {};
+  }
+
+  const targets = Array.isArray(cfg.workerGoalTargets)
+    ? (cfg.workerGoalTargets as import("../lib/goals-config-server.ts").ServerWorkerGoalTarget[])
+    : [];
+
+  const { kept, removed } = removeNetworkGoalsFromTargets(
+    targets,
+    employeeId,
+    monthKey,
+    scopeNet,
+  );
+
+  cfg.workerGoalTargets = kept;
+  await upsertSetting(workspaceId, "goals_config", JSON.stringify(cfg));
+
+  res.json({ ok: true, removedCount: removed.length, removedGoalIds: removed.map((g) => g.id) });
 });
 
 router.post("/performance/worker-goals", async (req, res): Promise<void> => {

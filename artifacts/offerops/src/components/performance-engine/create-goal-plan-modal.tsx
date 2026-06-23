@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   Dialog,
   DialogContent,
@@ -7,6 +7,16 @@ import {
   DialogFooter,
   DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,13 +38,15 @@ import { useToast } from "@/hooks/use-toast";
 import { ChevronDown, AlertTriangle, Pencil, Trash2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { authedJson } from "@/lib/api-fetch";
-import { replaceWorkerGoalPlan } from "@/lib/performance-engine/api";
+import { replaceWorkerGoalPlan, resetWorkerGoalPlanNetwork } from "@/lib/performance-engine/api";
 import type { GoalMetric } from "@/lib/performance-engine/goal-plan-utils";
 import {
+  buildPlanHydrationKey,
   formatSharePreview,
   loadPlanFromGoals,
   networkNamesInPlan,
   previewInheritedShares,
+  shouldRehydratePlanForm,
 } from "@/lib/performance-engine/goal-plan-utils";
 import type { WorkerGoalTarget } from "@/lib/worker-goals";
 
@@ -53,6 +65,11 @@ type GeoOverrideRow = {
   geoCode: string;
   target: string;
 };
+
+type PendingScopeChange =
+  | { type: "month"; value: string }
+  | { type: "employee"; value: number }
+  | { type: "network"; value: string };
 
 const METRIC_ROWS: {
   key: GoalMetric;
@@ -126,8 +143,15 @@ export function CreateGoalPlanModal({
   const { toast } = useToast();
   const isEdit = editContext != null;
   const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [scopedToNetwork, setScopedToNetwork] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [resetZoneOpen, setResetZoneOpen] = useState(false);
+  const [resetNetworkName, setResetNetworkName] = useState("");
+  const [resetSafetyChecked, setResetSafetyChecked] = useState(false);
 
   const [employeeId, setEmployeeId] = useState<number>(employees[0]?.id ?? 0);
   const [month, setMonth] = useState(monthKey);
@@ -136,6 +160,11 @@ export function CreateGoalPlanModal({
   const [selectedGeoCodes, setSelectedGeoCodes] = useState<Set<string>>(new Set());
   const [geoSearch, setGeoSearch] = useState("");
   const [overrides, setOverrides] = useState<GeoOverrideRow[]>([]);
+
+  const lastHydratedKeyRef = useRef<string | null>(null);
+  const allGoalsRef = useRef(allGoals);
+  const pendingScopeChangeRef = useRef<PendingScopeChange | null>(null);
+  allGoalsRef.current = allGoals;
 
   const workerNetworksQ = useQuery({
     queryKey: ["worker-affiliate-networks", workspaceId, employeeId],
@@ -162,6 +191,12 @@ export function CreateGoalPlanModal({
     [allGoals, employeeId, month],
   );
 
+  const resetNetworkOptions = useMemo(() => {
+    const names = new Set<string>(existingNetworks);
+    for (const n of workerNetworks) names.add(n.name);
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [existingNetworks, workerNetworks]);
+
   const sortedGeos = useMemo(
     () => [...geos].sort((a, b) => a.code.toUpperCase().localeCompare(b.code.toUpperCase())),
     [geos],
@@ -178,36 +213,112 @@ export function CreateGoalPlanModal({
     [selectedGeoCodes],
   );
 
-  useEffect(() => {
-    if (!open) return;
-    if (editContext) {
-      setEmployeeId(editContext.employeeId);
-      setMonth(editContext.monthKey);
-      const net = editContext.networkName ?? existingNetworks[0] ?? "";
-      const loaded = loadPlanFromGoals(allGoals, editContext.employeeId, editContext.monthKey, net || null);
-      setRows(loaded.metrics);
-      setOverrides(loaded.overrides);
-      setSelectedGeoCodes(new Set(loaded.selectedGeoCodes));
-      setNetworkName(net);
-      setScopedToNetwork(!!net);
-      setAdvancedOpen(true);
-      return;
+  const networkForHydrationKey = isEdit
+    ? networkName || editContext?.networkName || ""
+    : scopedToNetwork
+      ? networkName
+      : "";
+
+  const hydrationKey = useMemo(() => {
+    if (!open) return null;
+    if (isEdit && editContext) {
+      return buildPlanHydrationKey({
+        mode: "edit",
+        employeeId: editContext.employeeId,
+        monthKey: editContext.monthKey,
+        networkName: networkForHydrationKey,
+      });
     }
-    setRows(emptyRows());
-    setNetworkName("");
-    setSelectedGeoCodes(new Set());
-    setOverrides([]);
-    setScopedToNetwork(false);
-    setAdvancedOpen(false);
-    setMonth(monthKey);
-    setEmployeeId(employees[0]?.id ?? 0);
-  }, [open, editContext, allGoals, existingNetworks, monthKey, employees]);
+    return buildPlanHydrationKey({
+      mode: "create",
+      employeeId,
+      monthKey: month,
+      networkName: networkForHydrationKey,
+    });
+  }, [open, isEdit, editContext, employeeId, month, networkForHydrationKey]);
+
+  const markDirty = useCallback(() => {
+    setIsDirty(true);
+  }, []);
+
+  const applyHydration = useCallback(
+    (key: string) => {
+      const goals = allGoalsRef.current;
+      if (isEdit && editContext) {
+        const net = networkForHydrationKey.trim() || null;
+        const loaded = loadPlanFromGoals(
+          goals,
+          editContext.employeeId,
+          editContext.monthKey,
+          net,
+        );
+        setEmployeeId(editContext.employeeId);
+        setMonth(editContext.monthKey);
+        setRows(loaded.metrics);
+        setOverrides(loaded.overrides);
+        setSelectedGeoCodes(new Set(loaded.selectedGeoCodes));
+        setNetworkName(net ?? "");
+        setScopedToNetwork(!!net);
+        setAdvancedOpen(!!net);
+      } else {
+        setRows(emptyRows());
+        setNetworkName("");
+        setSelectedGeoCodes(new Set());
+        setOverrides([]);
+        setScopedToNetwork(false);
+        setAdvancedOpen(false);
+        setMonth(monthKey);
+        setEmployeeId(employees[0]?.id ?? 0);
+      }
+      setGeoSearch("");
+      setIsDirty(false);
+      lastHydratedKeyRef.current = key;
+    },
+    [isEdit, editContext, networkForHydrationKey, monthKey, employees],
+  );
 
   useEffect(() => {
-    if (networkName && !workerNetworks.some((n) => n.name === networkName)) {
-      setNetworkName("");
+    if (
+      !shouldRehydratePlanForm({
+        open,
+        hydrationKey,
+        lastHydratedKey: lastHydratedKeyRef.current,
+        isDirty,
+      })
+    ) {
+      return;
     }
-  }, [employeeId, networkName, workerNetworks]);
+    if (hydrationKey != null) {
+      applyHydration(hydrationKey);
+    }
+  }, [open, hydrationKey, isDirty, applyHydration]);
+
+  useEffect(() => {
+    if (!open) {
+      lastHydratedKeyRef.current = null;
+      setIsDirty(false);
+      setDiscardConfirmOpen(false);
+      setResetConfirmOpen(false);
+      setResetZoneOpen(false);
+      setResetNetworkName("");
+      setResetSafetyChecked(false);
+      pendingScopeChangeRef.current = null;
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!workerNetworksQ.isSuccess || !networkName || isDirty) return;
+    const allowed = new Set([
+      ...workerNetworks.map((n) => n.name),
+      ...networkNamesInPlan(
+        allGoalsRef.current.filter((g) => g.employeeId === employeeId && g.monthKey === month),
+      ),
+    ]);
+    if (!allowed.has(networkName)) {
+      setNetworkName("");
+      lastHydratedKeyRef.current = null;
+    }
+  }, [employeeId, month, networkName, workerNetworks, workerNetworksQ.isSuccess, isDirty]);
 
   function resetForm() {
     setRows(emptyRows());
@@ -219,13 +330,47 @@ export function CreateGoalPlanModal({
     setGeoSearch("");
     setMonth(monthKey);
     setEmployeeId(employees[0]?.id ?? 0);
+    setIsDirty(false);
+    setResetNetworkName("");
+    setResetSafetyChecked(false);
+    lastHydratedKeyRef.current = null;
+  }
+
+  function applyScopeChange(change: PendingScopeChange) {
+    pendingScopeChangeRef.current = null;
+    setDiscardConfirmOpen(false);
+    setIsDirty(false);
+    lastHydratedKeyRef.current = null;
+    switch (change.type) {
+      case "month":
+        setMonth(change.value);
+        break;
+      case "employee":
+        setEmployeeId(change.value);
+        setNetworkName("");
+        break;
+      case "network":
+        setNetworkName(change.value);
+        break;
+    }
+  }
+
+  function requestScopeChange(change: PendingScopeChange) {
+    if (isDirty) {
+      pendingScopeChangeRef.current = change;
+      setDiscardConfirmOpen(true);
+      return;
+    }
+    applyScopeChange(change);
   }
 
   function updateRow(metric: GoalMetric, patch: Partial<GoalRowState>) {
+    markDirty();
     setRows((prev) => ({ ...prev, [metric]: { ...prev[metric], ...patch } }));
   }
 
   function toggleGeo(code: string, checked: boolean) {
+    markDirty();
     setSelectedGeoCodes((prev) => {
       const next = new Set(prev);
       if (checked) next.add(code);
@@ -235,14 +380,17 @@ export function CreateGoalPlanModal({
   }
 
   function selectAllGeos() {
+    markDirty();
     setSelectedGeoCodes(new Set(sortedGeos.map((g) => g.code)));
   }
 
   function clearAllGeos() {
+    markDirty();
     setSelectedGeoCodes(new Set());
   }
 
   function addOverride() {
+    markDirty();
     const geo = selectedGeoList[0];
     if (!geo) return;
     setOverrides((prev) => [
@@ -318,347 +466,504 @@ export function CreateGoalPlanModal({
     }
   }
 
+  async function confirmResetNetwork() {
+    if (!resetNetworkName || !resetSafetyChecked) return;
+    const resetName = resetNetworkName;
+    setResetting(true);
+    try {
+      await resetWorkerGoalPlanNetwork({
+        workspaceId,
+        employeeId,
+        monthKey: month,
+        affiliateNetworkName: resetName,
+        confirmation: true,
+      });
+      if (networkName === resetName) {
+        setRows(emptyRows());
+        setSelectedGeoCodes(new Set());
+        setOverrides([]);
+        setNetworkName("");
+        setScopedToNetwork(false);
+        lastHydratedKeyRef.current = null;
+      }
+      setResetNetworkName("");
+      setResetSafetyChecked(false);
+      setResetConfirmOpen(false);
+      setIsDirty(false);
+      toast({
+        title: "Network goal scope reset",
+        description: `${resetName} goals removed for this month.`,
+      });
+      onSaved();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Reset failed";
+      toast({ title: "Reset failed", description: msg, variant: "destructive" });
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  const workerLabel = employees.find((e) => e.id === employeeId)?.name ?? "worker";
+
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(v) => {
-        if (!v) resetForm();
-        onOpenChange(v);
-      }}
-    >
-      <DialogContent className="max-w-[820px] w-[95vw] max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit Monthly Goal Plan" : "Create Monthly Goal Plan"}</DialogTitle>
-          <DialogDescription>
-            Set monthly targets and choose which GEOs receive inherited shares from network goals.
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <Dialog
+        open={open}
+        onOpenChange={(v) => {
+          if (!v) resetForm();
+          onOpenChange(v);
+        }}
+      >
+        <DialogContent className="max-w-[820px] w-[95vw] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{isEdit ? "Edit Monthly Goal Plan" : "Create Monthly Goal Plan"}</DialogTitle>
+            <DialogDescription>
+              Set monthly targets and choose which GEOs receive inherited shares from network goals.
+            </DialogDescription>
+          </DialogHeader>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <Label>Month</Label>
-            <Input
-              type="month"
-              className="mt-1"
-              value={month}
-              onChange={(e) => setMonth(e.target.value)}
-              disabled={isEdit}
-            />
-          </div>
-          <div>
-            <Label>Worker</Label>
-            <Select
-              value={String(employeeId)}
-              onValueChange={(v) => {
-                setEmployeeId(Number(v));
-                setNetworkName("");
-              }}
-              disabled={isEdit}
-            >
-              <SelectTrigger className="mt-1"><SelectValue placeholder="Select worker" /></SelectTrigger>
-              <SelectContent>
-                {employees.map((e) => (
-                  <SelectItem key={e.id} value={String(e.id)}>{e.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <div className="space-y-3">
-          <h3 className="text-sm font-semibold">Goal Targets</h3>
-          {METRIC_ROWS.map((def) => {
-            const row = rows[def.key];
-            const preview =
-              scopedToNetwork && networkName && selectedGeoList.length > 0 && row.enabled && Number(row.target) > 0
-                ? formatSharePreview(def.key, Number(row.target), selectedGeoList.length)
-                : null;
-            return (
-              <div
-                key={def.key}
-                className={`rounded-lg border p-4 transition-colors ${
-                  row.enabled ? "border-border bg-card" : "border-dashed bg-muted/20"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3 mb-3">
-                  <p className="font-medium text-sm">{def.title}</p>
-                  <div className="flex items-center gap-2">
-                    <Label htmlFor={`enable-${def.key}`} className="text-xs text-muted-foreground">
-                      Enabled
-                    </Label>
-                    <Switch
-                      id={`enable-${def.key}`}
-                      checked={row.enabled}
-                      onCheckedChange={(v) => updateRow(def.key, { enabled: v })}
-                    />
-                  </div>
-                </div>
-                {row.enabled && (
-                  <>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div>
-                        <Label className="text-xs">{def.targetLabel}</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          className="mt-1"
-                          placeholder={def.targetPlaceholder}
-                          value={row.target}
-                          onChange={(e) => updateRow(def.key, { target: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-xs">XP reward</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          className="mt-1"
-                          value={row.xp}
-                          onChange={(e) => updateRow(def.key, { xp: e.target.value })}
-                        />
-                      </div>
-                    </div>
-                    {preview && (
-                      <p className="mt-2 text-xs text-muted-foreground">Inherited split: {preview}</p>
-                    )}
-                  </>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-          <CollapsibleTrigger asChild>
-            <button
-              type="button"
-              className="flex w-full items-center justify-between rounded-lg border px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/40"
-            >
-              Network & GEO Scope
-              <ChevronDown size={16} className={`transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
-            </button>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="pt-3 space-y-4">
-            <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/20 px-3 py-2">
-              <div>
-                <p className="text-sm font-medium">Scope goals to affiliate network</p>
-                <p className="text-xs text-muted-foreground">
-                  Required to choose GEOs for inherited breakdown before activity exists.
-                </p>
-              </div>
-              <Switch checked={scopedToNetwork} onCheckedChange={setScopedToNetwork} />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <Label>Month</Label>
+              <Input
+                type="month"
+                className="mt-1"
+                value={month}
+                onChange={(e) => requestScopeChange({ type: "month", value: e.target.value })}
+                disabled={isEdit}
+              />
             </div>
+            <div>
+              <Label>Worker</Label>
+              <Select
+                value={String(employeeId)}
+                onValueChange={(v) => requestScopeChange({ type: "employee", value: Number(v) })}
+                disabled={isEdit}
+              >
+                <SelectTrigger className="mt-1"><SelectValue placeholder="Select worker" /></SelectTrigger>
+                <SelectContent>
+                  {employees.map((e) => (
+                    <SelectItem key={e.id} value={String(e.id)}>{e.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
 
-            {scopedToNetwork && (
-              <>
-                <div>
-                  <Label>Affiliate Network</Label>
-                  {employeeId <= 0 ? (
-                    <p className="mt-1 text-xs text-muted-foreground">Select a worker first.</p>
-                  ) : workerNetworksQ.isLoading ? (
-                    <p className="mt-1 text-xs text-muted-foreground">Loading networks…</p>
-                  ) : workerNetworks.length === 0 ? (
-                    <div className="mt-1 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                      <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-                      No affiliate networks assigned to this worker. Assign networks before saving network goals.
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold">Goal Targets</h3>
+            {METRIC_ROWS.map((def) => {
+              const row = rows[def.key];
+              const preview =
+                scopedToNetwork && networkName && selectedGeoList.length > 0 && row.enabled && Number(row.target) > 0
+                  ? formatSharePreview(def.key, Number(row.target), selectedGeoList.length)
+                  : null;
+              return (
+                <div
+                  key={def.key}
+                  className={`rounded-lg border p-4 transition-colors ${
+                    row.enabled ? "border-border bg-card" : "border-dashed bg-muted/20"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <p className="font-medium text-sm">{def.title}</p>
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor={`enable-${def.key}`} className="text-xs text-muted-foreground">
+                        Enabled
+                      </Label>
+                      <Switch
+                        id={`enable-${def.key}`}
+                        checked={row.enabled}
+                        onCheckedChange={(v) => updateRow(def.key, { enabled: v })}
+                      />
                     </div>
-                  ) : (
-                    <Select value={networkName || "none"} onValueChange={(v) => setNetworkName(v === "none" ? "" : v)}>
-                      <SelectTrigger className="mt-1"><SelectValue placeholder="Select network" /></SelectTrigger>
-                      <SelectContent>
-                        {workerNetworks.map((n) => (
-                          <SelectItem key={n.id} value={n.name}>{n.name}</SelectItem>
-                        ))}
-                        {existingNetworks
-                          .filter((name) => !workerNetworks.some((n) => n.name === name))
-                          .map((name) => (
-                            <SelectItem key={name} value={name}>{name}</SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
+                  </div>
+                  {row.enabled && (
+                    <>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div>
+                          <Label className="text-xs">{def.targetLabel}</Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            className="mt-1"
+                            placeholder={def.targetPlaceholder}
+                            value={row.target}
+                            onChange={(e) => updateRow(def.key, { target: e.target.value })}
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">XP reward</Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            className="mt-1"
+                            value={row.xp}
+                            onChange={(e) => updateRow(def.key, { xp: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                      {preview && (
+                        <p className="mt-2 text-xs text-muted-foreground">Inherited split: {preview}</p>
+                      )}
+                    </>
                   )}
                 </div>
+              );
+            })}
+          </div>
 
-                <div className="rounded-lg border p-3 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-medium">Selected GEOs for distribution</p>
-                      <p className="text-xs text-muted-foreground">
-                        {selectedGeoList.length} GEO{selectedGeoList.length === 1 ? "" : "s"} selected
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button type="button" variant="outline" size="sm" onClick={selectAllGeos}>
-                        Select all
-                      </Button>
-                      <Button type="button" variant="outline" size="sm" onClick={clearAllGeos}>
-                        Clear all
-                      </Button>
-                    </div>
-                  </div>
-                  <Input
-                    placeholder="Search GEO…"
-                    value={geoSearch}
-                    onChange={(e) => setGeoSearch(e.target.value)}
-                  />
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto">
-                    {filteredGeos.map((g) => (
-                      <label
-                        key={g.id}
-                        className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm cursor-pointer hover:bg-muted/40"
-                      >
-                        <Checkbox
-                          checked={selectedGeoCodes.has(g.code)}
-                          onCheckedChange={(v) => toggleGeo(g.code, v === true)}
-                        />
-                        <span>{g.code}</span>
-                      </label>
-                    ))}
-                  </div>
+          <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-lg border px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/40"
+              >
+                Network & GEO Scope
+                <ChevronDown size={16} className={`transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
+              </button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="pt-3 space-y-4">
+              <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/20 px-3 py-2">
+                <div>
+                  <p className="text-sm font-medium">Scope goals to affiliate network</p>
+                  <p className="text-xs text-muted-foreground">
+                    Required to choose GEOs for inherited breakdown before activity exists.
+                  </p>
                 </div>
+                <Switch
+                  checked={scopedToNetwork}
+                  onCheckedChange={(v) => {
+                    markDirty();
+                    setScopedToNetwork(v);
+                    if (!v) setNetworkName("");
+                  }}
+                />
+              </div>
 
-                {selectedGeoList.length > 0 && (
-                  <div className="rounded-lg border p-3 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <p className="text-sm font-medium">Custom GEO overrides</p>
-                      <Button type="button" variant="outline" size="sm" onClick={addOverride}>
-                        Add override
-                      </Button>
-                    </div>
-                    {overrides.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">
-                        Optional per-GEO custom targets replace inherited shares for that GEO.
-                      </p>
-                    ) : (
-                      <div className="space-y-2">
-                        {overrides.map((row, idx) => (
-                          <div key={`${row.geoCode}-${idx}`} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 items-end">
-                            <div>
-                              <Label className="text-xs">GEO</Label>
-                              <Select
-                                value={row.geoCode}
-                                onValueChange={(v) =>
-                                  setOverrides((prev) =>
-                                    prev.map((r, i) => (i === idx ? { ...r, geoCode: v } : r)),
-                                  )
-                                }
-                              >
-                                <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                  {selectedGeoList.map((code) => (
-                                    <SelectItem key={code} value={code}>{code}</SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            <div>
-                              <Label className="text-xs">Metric</Label>
-                              <Select
-                                value={row.metricKey}
-                                onValueChange={(v) =>
-                                  setOverrides((prev) =>
-                                    prev.map((r, i) =>
-                                      i === idx ? { ...r, metricKey: v as GoalMetric } : r,
-                                    ),
-                                  )
-                                }
-                              >
-                                <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                  {METRIC_ROWS.map((m) => (
-                                    <SelectItem key={m.key} value={m.key}>{m.title}</SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            <div>
-                              <Label className="text-xs">Custom target</Label>
-                              <Input
-                                type="number"
-                                min={0}
-                                className="mt-1 h-9"
-                                value={row.target}
-                                onChange={(e) =>
-                                  setOverrides((prev) =>
-                                    prev.map((r, i) => (i === idx ? { ...r, target: e.target.value } : r)),
-                                  )
-                                }
-                              />
-                            </div>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-9 w-9 text-destructive"
-                              onClick={() => setOverrides((prev) => prev.filter((_, i) => i !== idx))}
-                            >
-                              <Trash2 size={14} />
-                            </Button>
-                          </div>
-                        ))}
+              {scopedToNetwork && (
+                <>
+                  <div>
+                    <Label>Affiliate Network</Label>
+                    {employeeId <= 0 ? (
+                      <p className="mt-1 text-xs text-muted-foreground">Select a worker first.</p>
+                    ) : workerNetworksQ.isLoading ? (
+                      <p className="mt-1 text-xs text-muted-foreground">Loading networks…</p>
+                    ) : workerNetworks.length === 0 && existingNetworks.length === 0 ? (
+                      <div className="mt-1 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                        No affiliate networks assigned to this worker. Assign networks before saving network goals.
                       </div>
+                    ) : (
+                      <Select
+                        value={networkName || "none"}
+                        onValueChange={(v) =>
+                          requestScopeChange({ type: "network", value: v === "none" ? "" : v })
+                        }
+                      >
+                        <SelectTrigger className="mt-1"><SelectValue placeholder="Select network" /></SelectTrigger>
+                        <SelectContent>
+                          {workerNetworks.map((n) => (
+                            <SelectItem key={n.id} value={n.name}>{n.name}</SelectItem>
+                          ))}
+                          {existingNetworks
+                            .filter((name) => !workerNetworks.some((n) => n.name === name))
+                            .map((name) => (
+                              <SelectItem key={name} value={name}>{name}</SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
                     )}
-                    {METRIC_ROWS.map((def) => {
-                      if (!rows[def.key].enabled || Number(rows[def.key].target) <= 0) return null;
-                      const shares = previewInheritedShares(
-                        def.key,
-                        Number(rows[def.key].target),
-                        selectedGeoList,
-                      );
-                      if (shares.size === 0) return null;
-                      return (
-                        <div key={def.key} className="rounded-md bg-muted/30 px-3 py-2">
-                          <p className="text-xs font-semibold text-muted-foreground mb-1">{def.title} preview</p>
-                          <div className="flex flex-wrap gap-1.5">
-                            {selectedGeoList.map((code) => {
-                              const custom = overrides.find(
-                                (o) => o.metricKey === def.key && o.geoCode === code && o.target !== "",
-                              );
-                              const inherited = shares.get(code);
-                              const isCustom = custom != null;
-                              return (
-                                <span
-                                  key={code}
-                                  className={`rounded border px-1.5 py-0.5 text-[11px] ${
-                                    isCustom
-                                      ? "border-blue-200 bg-blue-50 text-blue-700"
-                                      : "border-slate-200 bg-white text-slate-600"
-                                  }`}
-                                >
-                                  {code}{" "}
-                                  {isCustom
-                                    ? custom.target
-                                    : def.key === "revenue"
-                                      ? `$${(inherited ?? 0).toLocaleString()}`
-                                      : inherited}
-                                  {isCustom ? " custom" : " inherited"}
-                                </span>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })}
                   </div>
-                )}
-              </>
-            )}
-          </CollapsibleContent>
-        </Collapsible>
 
-        <DialogFooter className="gap-2 flex-wrap sm:justify-end">
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-            Cancel
-          </Button>
-          <Button
-            disabled={saving || (scopedToNetwork && workerNetworks.length === 0)}
-            onClick={() => void savePlan()}
-          >
-            {saving ? "Saving…" : isEdit ? "Save Changes" : "Save Goal Plan"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+                  <div className="rounded-lg border p-3 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-medium">Selected GEOs for distribution</p>
+                        <p className="text-xs text-muted-foreground">
+                          {selectedGeoList.length} GEO{selectedGeoList.length === 1 ? "" : "s"} selected
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={selectAllGeos}>
+                          Select all
+                        </Button>
+                        <Button type="button" variant="outline" size="sm" onClick={clearAllGeos}>
+                          Clear all
+                        </Button>
+                      </div>
+                    </div>
+                    <Input
+                      placeholder="Search GEO…"
+                      value={geoSearch}
+                      onChange={(e) => setGeoSearch(e.target.value)}
+                    />
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto">
+                      {filteredGeos.map((g) => (
+                        <label
+                          key={g.id}
+                          className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm cursor-pointer hover:bg-muted/40"
+                        >
+                          <Checkbox
+                            checked={selectedGeoCodes.has(g.code)}
+                            onCheckedChange={(v) => toggleGeo(g.code, v === true)}
+                          />
+                          <span>{g.code}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {selectedGeoList.length > 0 && (
+                    <div className="rounded-lg border p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-medium">Custom GEO overrides</p>
+                        <Button type="button" variant="outline" size="sm" onClick={addOverride}>
+                          Add override
+                        </Button>
+                      </div>
+                      {overrides.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          Optional per-GEO custom targets replace inherited shares for that GEO.
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {overrides.map((row, idx) => (
+                            <div key={`${row.geoCode}-${idx}`} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 items-end">
+                              <div>
+                                <Label className="text-xs">GEO</Label>
+                                <Select
+                                  value={row.geoCode}
+                                  onValueChange={(v) => {
+                                    markDirty();
+                                    setOverrides((prev) =>
+                                      prev.map((r, i) => (i === idx ? { ...r, geoCode: v } : r)),
+                                    );
+                                  }}
+                                >
+                                  <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
+                                  <SelectContent>
+                                    {selectedGeoList.map((code) => (
+                                      <SelectItem key={code} value={code}>{code}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div>
+                                <Label className="text-xs">Metric</Label>
+                                <Select
+                                  value={row.metricKey}
+                                  onValueChange={(v) => {
+                                    markDirty();
+                                    setOverrides((prev) =>
+                                      prev.map((r, i) =>
+                                        i === idx ? { ...r, metricKey: v as GoalMetric } : r,
+                                      ),
+                                    );
+                                  }}
+                                >
+                                  <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
+                                  <SelectContent>
+                                    {METRIC_ROWS.map((m) => (
+                                      <SelectItem key={m.key} value={m.key}>{m.title}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div>
+                                <Label className="text-xs">Custom target</Label>
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  className="mt-1 h-9"
+                                  value={row.target}
+                                  onChange={(e) => {
+                                    markDirty();
+                                    setOverrides((prev) =>
+                                      prev.map((r, i) => (i === idx ? { ...r, target: e.target.value } : r)),
+                                    );
+                                  }}
+                                />
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-9 w-9 text-destructive"
+                                onClick={() => {
+                                  markDirty();
+                                  setOverrides((prev) => prev.filter((_, i) => i !== idx));
+                                }}
+                              >
+                                <Trash2 size={14} />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {METRIC_ROWS.map((def) => {
+                        if (!rows[def.key].enabled || Number(rows[def.key].target) <= 0) return null;
+                        const shares = previewInheritedShares(
+                          def.key,
+                          Number(rows[def.key].target),
+                          selectedGeoList,
+                        );
+                        if (shares.size === 0) return null;
+                        return (
+                          <div key={def.key} className="rounded-md bg-muted/30 px-3 py-2">
+                            <p className="text-xs font-semibold text-muted-foreground mb-1">{def.title} preview</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {selectedGeoList.map((code) => {
+                                const custom = overrides.find(
+                                  (o) => o.metricKey === def.key && o.geoCode === code && o.target !== "",
+                                );
+                                const inherited = shares.get(code);
+                                const isCustom = custom != null;
+                                return (
+                                  <span
+                                    key={code}
+                                    className={`rounded border px-1.5 py-0.5 text-[11px] ${
+                                      isCustom
+                                        ? "border-blue-200 bg-blue-50 text-blue-700"
+                                        : "border-slate-200 bg-white text-slate-600"
+                                    }`}
+                                  >
+                                    {code}{" "}
+                                    {isCustom
+                                      ? custom.target
+                                      : def.key === "revenue"
+                                        ? `$${(inherited ?? 0).toLocaleString()}`
+                                        : inherited}
+                                    {isCustom ? " custom" : " inherited"}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+            </CollapsibleContent>
+          </Collapsible>
+
+          {isEdit && (
+            <Collapsible open={resetZoneOpen} onOpenChange={setResetZoneOpen}>
+              <CollapsibleTrigger asChild>
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between rounded-lg border border-red-200 bg-red-50/50 px-3 py-2 text-sm font-medium text-red-800 hover:bg-red-50"
+                >
+                  Danger Zone — Reset Network Scope
+                  <ChevronDown size={16} className={`transition-transform ${resetZoneOpen ? "rotate-180" : ""}`} />
+                </button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="pt-3 space-y-4 rounded-lg border border-red-200 bg-red-50/30 p-3">
+                <p className="text-xs text-red-800">
+                  Remove goal scope and GEO overrides for one affiliate network. Other networks and workers are not affected.
+                </p>
+                <div>
+                  <Label>Affiliate network to reset</Label>
+                  <Select value={resetNetworkName || "none"} onValueChange={(v) => setResetNetworkName(v === "none" ? "" : v)}>
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Choose network to reset" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none" disabled>Choose network to reset</SelectItem>
+                      {resetNetworkOptions.map((name) => (
+                        <SelectItem key={name} value={name}>{name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <label className="flex items-start gap-2 text-sm cursor-pointer">
+                  <Checkbox
+                    checked={resetSafetyChecked}
+                    onCheckedChange={(v) => setResetSafetyChecked(v === true)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    I understand this will remove this network&apos;s goal scope and GEO overrides for this worker/month.
+                  </span>
+                </label>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={!resetNetworkName || !resetSafetyChecked || resetting}
+                  onClick={() => setResetConfirmOpen(true)}
+                >
+                  {resetting ? "Resetting…" : "Reset network goals"}
+                </Button>
+              </CollapsibleContent>
+            </Collapsible>
+          )}
+
+          <DialogFooter className="gap-2 flex-wrap sm:justify-end">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving || resetting}>
+              Cancel
+            </Button>
+            <Button
+              disabled={saving || resetting || (scopedToNetwork && workerNetworks.length === 0 && existingNetworks.length === 0)}
+              onClick={() => void savePlan()}
+            >
+              {saving ? "Saving…" : isEdit ? "Save Changes" : "Save Goal Plan"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={discardConfirmOpen} onOpenChange={setDiscardConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Changing worker, month, or network will discard unsaved changes.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                pendingScopeChangeRef.current = null;
+              }}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const pending = pendingScopeChangeRef.current;
+                if (pending) applyScopeChange(pending);
+              }}
+            >
+              Continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={resetConfirmOpen} onOpenChange={setResetConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reset network goals?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Reset goals for {resetNetworkName} in {month} for {workerLabel}? This cannot be undone after saving.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={resetting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={resetting}
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmResetNetwork();
+              }}
+            >
+              Reset
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
