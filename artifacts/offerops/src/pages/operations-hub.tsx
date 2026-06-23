@@ -10,11 +10,13 @@ import {
   useListPerformance,
   useListCampaigns,
   useListOffers,
+  useListEmployees,
   getListTestingBatchesQueryKey,
   getListTodoTasksQueryKey,
   getListPerformanceQueryKey,
   getListCampaignsQueryKey,
   getListOffersQueryKey,
+  getListEmployeesQueryKey,
 } from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -58,6 +60,13 @@ export default function OperationsHub() {
   const [, nav] = useLocation();
   const wsId = activeWorkspaceId ?? 0;
   const today = todayIso();
+  const isAdmin = !isWorker;
+
+  const { data: employees = [] } = useListEmployees(
+    { workspace_id: wsId },
+    wsQueryOpts(activeWorkspaceId, getListEmployeesQueryKey({ workspace_id: wsId })),
+  );
+  const [scopeEmployeeId, setScopeEmployeeId] = useState<number | "">("");
 
   const batchParams = { workspace_id: wsId };
   const { data: batches = [], isLoading: batchesLoading } = useListTestingBatches(
@@ -81,7 +90,7 @@ export default function OperationsHub() {
 
   const campaignsTyped = campaignCast(campaigns);
   const drilldownRoute = useOpsDrilldownRoute();
-  const drilldown = useOpsDrilldownData(batches, campaignsTyped, tasks);
+  const drilldown = useOpsDrilldownData(batches, campaignsTyped, tasks, scopeEmployeeId);
 
   const winnersParams = { workspace_id: wsId, date_from: today, date_to: today };
   const { data: todayPerf = [] } = useListPerformance(
@@ -159,12 +168,34 @@ export default function OperationsHub() {
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2 rounded-xl border border-slate-200/80 bg-white px-4 py-2.5 shadow-sm">
-                <CalendarDays className="h-4 w-4 text-violet-600" strokeWidth={2.25} />
-                <p className="text-sm font-bold tabular-nums text-slate-800">
-                  {drilldown.monthLabel} · {drilldown.daysRemaining} day
-                  {drilldown.daysRemaining === 1 ? "" : "s"} left
-                </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-2 rounded-xl border border-slate-200/80 bg-white px-4 py-2.5 shadow-sm">
+                  <CalendarDays className="h-4 w-4 text-violet-600" strokeWidth={2.25} />
+                  <p className="text-sm font-bold tabular-nums text-slate-800">
+                    {drilldown.monthLabel} · {drilldown.daysRemaining} day
+                    {drilldown.daysRemaining === 1 ? "" : "s"} left
+                  </p>
+                </div>
+                {isAdmin && (
+                  <div className="flex items-center gap-2 rounded-xl border border-slate-200/80 bg-white px-3 py-2 shadow-sm">
+                    <label htmlFor="ops-employee-filter" className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                      Employee
+                    </label>
+                    <select
+                      id="ops-employee-filter"
+                      value={scopeEmployeeId}
+                      onChange={(e) => setScopeEmployeeId(e.target.value ? Number(e.target.value) : "")}
+                      className="h-8 min-w-[10rem] rounded-md border border-input bg-background px-2 text-sm"
+                    >
+                      <option value="">All employees</option>
+                      {employees.map((e) => (
+                        <option key={e.id} value={e.id}>
+                          {e.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
             </div>
             <p className="flex items-center gap-1.5 text-xs text-violet-600/80">
@@ -180,6 +211,7 @@ export default function OperationsHub() {
             loading={loading}
             selectedMetric={selectedMetric}
             onSelectMetric={setSelectedMetric}
+            scopeEmployeeId={scopeEmployeeId}
           />
 
           {drilldownRoute && (
@@ -200,6 +232,7 @@ export default function OperationsHub() {
             attributedRevenueMtd={drilldown.attributedRevenueMtd}
             unattributedRevenueMtd={drilldown.unattributedRevenueMtd}
             loading={loading}
+            scopeEmployeeId={scopeEmployeeId}
           />
 
           {isWorker && (

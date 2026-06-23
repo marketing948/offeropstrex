@@ -101,7 +101,7 @@ export function GoalHeroCard({
           <p className="mt-1 text-sm font-medium text-slate-500">
             of {fmtActual(card.target, card.format)} monthly target
           </p>
-          <PaceDetailPanel pace={card.pace} actual={card.actual} format={card.format} />
+          <PaceDetailPanel pace={card.pace} actual={card.actual} monthlyTarget={card.target} format={card.format} />
           <div className="mt-auto space-y-2.5 pt-4">
             <div className={`h-3.5 overflow-hidden rounded-full ${theme.barTrack}`}>
               <div

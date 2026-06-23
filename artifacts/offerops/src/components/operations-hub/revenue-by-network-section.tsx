@@ -287,6 +287,7 @@ export function RevenueByNetworkSection({
   attributedRevenueMtd,
   unattributedRevenueMtd,
   loading,
+  scopeEmployeeId,
 }: {
   selectedMetric: GoalKind;
   goalCards: GoalCardModel[];
@@ -295,6 +296,7 @@ export function RevenueByNetworkSection({
   attributedRevenueMtd: number;
   unattributedRevenueMtd: number;
   loading?: boolean;
+  scopeEmployeeId?: number | "" | null;
 }) {
   const { currentEmployee } = useAuth();
   const { activeWorkspaceId } = useWorkspace();
@@ -304,8 +306,15 @@ export function RevenueByNetworkSection({
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [viewOpen, setViewOpen] = useState(true);
 
+  const breakdownEmployeeId =
+    isWorker
+      ? currentEmployee!.id
+      : scopeEmployeeId !== "" && scopeEmployeeId != null
+        ? scopeEmployeeId
+        : undefined;
+
   const breakdownQ = useQuery({
-    queryKey: ["ops-metric-breakdown", activeWorkspaceId, selectedMetric, currentEmployee?.id, currentMonthKey()],
+    queryKey: ["ops-metric-breakdown", activeWorkspaceId, selectedMetric, breakdownEmployeeId ?? "team", currentMonthKey()],
     enabled: !!activeWorkspaceId && !!currentEmployee,
     staleTime: 60_000,
     queryFn: () =>
@@ -313,7 +322,7 @@ export function RevenueByNetworkSection({
         activeWorkspaceId!,
         currentMonthKey(),
         metricKindForGoal(selectedMetric),
-        isWorker ? currentEmployee!.id : undefined,
+        breakdownEmployeeId,
       ),
   });
 
