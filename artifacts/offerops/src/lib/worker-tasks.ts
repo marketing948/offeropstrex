@@ -10,13 +10,17 @@ function extractQuotedTitle(title: string, pattern: RegExp): string | null {
 
 /** Best-effort campaign label for display (batch + platform or parsed title). */
 export function resolveTaskCampaignLabel(task: TodoTask): string {
-  const fromTake = extractQuotedTitle(task.title, /^Take "(.+)" live$/i);
+  const title = task.title?.trim() ?? "";
+  if (!title && task.batchName?.trim()) return task.batchName.trim();
+  if (!title) return "Task";
+
+  const fromTake = extractQuotedTitle(title, /^Take "(.+)" live$/i);
   if (fromTake) return fromTake;
 
-  const fromFind = extractQuotedTitle(task.title, /^Find winners for "(.+)"$/i);
+  const fromFind = extractQuotedTitle(title, /^Find winners for "(.+)"$/i);
   if (fromFind) return fromFind;
 
-  const fromReview = extractQuotedTitle(task.title, /^Review winners for "(.+)"$/i);
+  const fromReview = extractQuotedTitle(title, /^Review winners for "(.+)"$/i);
   if (fromReview) return fromReview;
 
   const platform = platformLabel(task);
@@ -28,17 +32,17 @@ export function resolveTaskCampaignLabel(task: TodoTask): string {
     return batch;
   }
 
-  if (task.title.includes(TITLE_ACTION_SEP)) {
-    return task.title.split(TITLE_ACTION_SEP)[0]!.trim();
+  if (title.includes(TITLE_ACTION_SEP)) {
+    return title.split(TITLE_ACTION_SEP)[0]!.trim() || title;
   }
 
-  const stripped = task.title
+  const stripped = title
     .replace(/^Create Voluum campaign(?:\s+\([^)]+\))?(?:\s+for)?\s*/i, "")
     .replace(/^Optimization follow-up for\s*/i, "")
     .replace(/\s+on\s+.+$/i, "")
     .trim();
 
-  return stripped || task.title;
+  return stripped || title;
 }
 
 export function taskActionPhrase(
@@ -46,6 +50,7 @@ export function taskActionPhrase(
   trafficSourceName?: string | null,
 ): string {
   const type = task.taskType as string;
+  const title = task.title?.trim() ?? "";
   const ts = trafficSourceName?.trim() || task.trafficSourceName?.trim() || "Traffic Source";
 
   switch (type) {
@@ -75,16 +80,16 @@ export function taskActionPhrase(
     case "MANUAL":
       return "Complete manual follow-up";
     default:
-      if (/^Take .+ live$/i.test(task.title)) return `Go live on ${ts}`;
-      if (/optimization follow-up/i.test(task.title)) return "Optimize traffic allocation";
-      if (/scale/i.test(task.title)) return "Scale campaign traffic";
-      if (/review/i.test(task.title)) return "Review campaign performance";
-      if (/Create Voluum/i.test(task.title)) {
+      if (title && /^Take .+ live$/i.test(title)) return `Go live on ${ts}`;
+      if (title && /optimization follow-up/i.test(title)) return "Optimize traffic allocation";
+      if (title && /scale/i.test(title)) return "Scale campaign traffic";
+      if (title && /review/i.test(title)) return "Review campaign performance";
+      if (title && /Create Voluum/i.test(title)) {
         return platformLabel(task) === "Android"
           ? "Open Voluum Android Campaign"
           : "Open Voluum iOS Campaign";
       }
-      return getTaskTypeVisual(type).label;
+      return getTaskTypeVisual(type).label || "Review task";
   }
 }
 
@@ -93,13 +98,15 @@ export function workerTaskHeadline(
   task: TodoTask,
   trafficSourceName?: string | null,
 ): string {
-  if (task.title.includes(TITLE_ACTION_SEP)) {
-    const [campaign, action] = task.title.split(TITLE_ACTION_SEP);
-    if (campaign?.trim() && action?.trim()) return task.title;
+  const title = task.title?.trim() ?? "";
+  if (title.includes(TITLE_ACTION_SEP)) {
+    const [campaign, action] = title.split(TITLE_ACTION_SEP);
+    if (campaign?.trim() && action?.trim()) return title;
   }
 
   const campaign = resolveTaskCampaignLabel(task);
   const action = taskActionPhrase(task, trafficSourceName);
+  if (!campaign && !action) return title || "Review task";
   return `${campaign}${TITLE_ACTION_SEP}${action}`;
 }
 

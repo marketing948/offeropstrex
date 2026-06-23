@@ -105,6 +105,21 @@ export function TaskDetailDrawer({
 
   const updateTask = useUpdateTodoTask();
   const { celebrateTaskCompletion } = useExpFeedback();
+  const [blockOpen, setBlockOpen] = useState(false);
+
+  const trafficSourceId =
+    task != null ? (task as { trafficSourceId?: number | null }).trafficSourceId : null;
+  const tsParams = { workspace_id: activeWorkspaceId ?? 0 };
+  const { data: trafficSources = [] } = useListWorkspaceTrafficSources(
+    tsParams,
+    wsQueryOpts(activeWorkspaceId, getListWorkspaceTrafficSourcesQueryKey(tsParams), {
+      enabled: !!activeWorkspaceId && open && trafficSourceId != null,
+    }),
+  );
+
+  useEffect(() => {
+    if (!open) setBlockOpen(false);
+  }, [open]);
 
   function invalidate() {
     if (!activeWorkspaceId) return;
@@ -144,21 +159,12 @@ export function TaskDetailDrawer({
   const platform = platformFromTaskType(task.taskType);
   const visual = getTaskTypeVisual(task.taskType as string);
   const VisualIcon = visual.icon;
-  const trafficSourceId = (task as { trafficSourceId?: number | null }).trafficSourceId;
-  const tsParams = { workspace_id: activeWorkspaceId ?? 0 };
-  const { data: trafficSources = [] } = useListWorkspaceTrafficSources(
-    tsParams,
-    wsQueryOpts(activeWorkspaceId, getListWorkspaceTrafficSourcesQueryKey(tsParams), {
-      enabled: !!activeWorkspaceId && trafficSourceId != null,
-    }),
-  );
   const trafficSourceName =
     task.trafficSourceName ??
     (trafficSourceId != null
       ? trafficSources.find((t) => t.id === trafficSourceId)?.name ?? null
       : null);
   const headline = workerTaskHeadline(task, trafficSourceName);
-  const [blockOpen, setBlockOpen] = useState(false);
 
   return (
     <Sheet open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
