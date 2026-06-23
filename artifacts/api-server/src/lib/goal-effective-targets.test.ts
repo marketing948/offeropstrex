@@ -2,9 +2,11 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   computeNetworkEffectiveTarget,
+  eligibleGeosForNetwork,
   resolveEffectiveGeoTargets,
   sortEligibleGeos,
 } from "./goal-effective-targets.ts";
+import type { ServerWorkerGoalTarget } from "./goals-config-server.ts";
 
 const TEN_GEOS = ["AU", "CA", "DE", "ES", "FR", "GB", "IT", "NL", "PL", "US"];
 
@@ -135,5 +137,162 @@ describe("computeNetworkEffectiveTarget — working explicit zero", () => {
     assert.equal(gb?.target, 0);
     assert.equal(rows.filter((g) => g.geo !== "GB").every((g) => g.target === 4), true);
     assert.equal(effectiveNetworkTarget, 12);
+  });
+});
+
+describe("selectedGeoCodes priority", () => {
+  const networkGoals: ServerWorkerGoalTarget[] = [
+    {
+      id: "net-testing",
+      employeeId: 44,
+      affiliateNetworkName: "Linkhaitao SLG",
+      metricKey: "testingBatches",
+      monthlyTarget: 14,
+      isActive: true,
+      monthKey: "2026-06",
+      selectedGeoCodes: ["CA", "DE", "FR", "GB"],
+    },
+  ];
+
+  it("returns GEO rows with inherited targets and zero current when no activity", () => {
+    const { geos, effectiveNetworkTarget } = computeNetworkEffectiveTarget(
+      "Linkhaitao SLG",
+      networkGoals,
+      "testingBatches",
+      44,
+      [],
+    );
+    assert.equal(geos.length, 4);
+    assert.equal(effectiveNetworkTarget, 14);
+    assert.equal(geos.every((g) => g.source === "inherited"), true);
+    assert.equal(geos.reduce((s, g) => s + g.target, 0), 14);
+  });
+
+  it("does not include activity GEOs outside selectedGeoCodes", () => {
+    const eligible = eligibleGeosForNetwork(
+      "Linkhaitao SLG",
+      networkGoals,
+      "testingBatches",
+      44,
+      ["US", "JP"],
+    );
+    assert.deepEqual(eligible, ["CA", "DE", "FR", "GB"]);
+  });
+
+  it("revenue split across selected GEOs without activity", () => {
+    const goals: ServerWorkerGoalTarget[] = [
+      {
+        id: "net-rev",
+        employeeId: 44,
+        affiliateNetworkName: "Linkhaitao SLG",
+        metricKey: "revenue",
+        monthlyTarget: 10000,
+        isActive: true,
+        monthKey: "2026-06",
+        selectedGeoCodes: ["CA", "DE", "FR", "GB", "IT", "NL", "PL", "US"],
+      },
+    ];
+    const { geos, effectiveNetworkTarget } = computeNetworkEffectiveTarget(
+      "Linkhaitao SLG",
+      goals,
+      "revenue",
+      44,
+      [],
+    );
+    assert.equal(geos.length, 8);
+    assert.equal(effectiveNetworkTarget, 10000);
+    assert.equal(geos[0].target, 1250);
+  });
+
+  it("revenue override with selectedGeoCodes", () => {
+    const goals: ServerWorkerGoalTarget[] = [
+      {
+        id: "net-rev",
+        employeeId: 44,
+        affiliateNetworkName: "Linkhaitao SLG",
+        metricKey: "revenue",
+        monthlyTarget: 10000,
+        isActive: true,
+        monthKey: "2026-06",
+        selectedGeoCodes: ["CA", "DE", "FR", "GB", "IT", "NL", "PL", "US"],
+      },
+      {
+        id: "geo-gb",
+        employeeId: 44,
+        affiliateNetworkName: "Linkhaitao SLG",
+        geoCode: "GB",
+        metricKey: "revenue",
+        monthlyTarget: 3000,
+        isActive: true,
+        monthKey: "2026-06",
+      },
+    ];
+    const { geos, effectiveNetworkTarget } = computeNetworkEffectiveTarget(
+      "Linkhaitao SLG",
+      goals,
+      "revenue",
+      44,
+      [],
+    );
+    const gb = geos.find((g) => g.geo === "GB");
+    assert.equal(gb?.target, 3000);
+    assert.equal(effectiveNetworkTarget, 11750);
+  });
+
+  it("explicit zero with selectedGeoCodes", () => {
+    const goals: ServerWorkerGoalTarget[] = [
+      {
+        id: "net-rev",
+        employeeId: 44,
+        affiliateNetworkName: "Linkhaitao SLG",
+        metricKey: "revenue",
+        monthlyTarget: 10000,
+        isActive: true,
+        monthKey: "2026-06",
+        selectedGeoCodes: ["CA", "DE", "FR", "GB", "IT", "NL", "PL", "US"],
+      },
+      {
+        id: "geo-gb",
+        employeeId: 44,
+        affiliateNetworkName: "Linkhaitao SLG",
+        geoCode: "GB",
+        metricKey: "revenue",
+        monthlyTarget: 0,
+        isActive: true,
+        monthKey: "2026-06",
+      },
+    ];
+    const { effectiveNetworkTarget } = computeNetworkEffectiveTarget(
+      "Linkhaitao SLG",
+      goals,
+      "revenue",
+      44,
+      [],
+    );
+    assert.equal(effectiveNetworkTarget, 8750);
+  });
+});
+
+describe("legacy fallback without selectedGeoCodes", () => {
+  it("uses activity GEOs when selectedGeoCodes missing", () => {
+    const goals: ServerWorkerGoalTarget[] = [
+      {
+        id: "net",
+        employeeId: 42,
+        affiliateNetworkName: "Yieldkit CBV",
+        metricKey: "testingBatches",
+        monthlyTarget: 18,
+        isActive: true,
+        monthKey: "2026-06",
+      },
+    ];
+    const eligible = eligibleGeosForNetwork(
+      "Yieldkit CBV",
+      goals,
+      "testingBatches",
+      42,
+      ["GB"],
+    );
+    assert.deepEqual(eligible, ["GB"]);
   });
 });

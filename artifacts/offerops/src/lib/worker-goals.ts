@@ -21,6 +21,7 @@ export interface WorkerGoalTarget {
   affiliateNetworkName?: string | null;
   geoId?: number | null;
   geoCode?: string | null;
+  selectedGeoCodes?: string[] | null;
   metricKey: WorkerGoalMetricKey | string;
   monthlyTarget: number;
   isActive: boolean;

@@ -181,7 +181,7 @@ export function KpiBreakdownPanel({
                   GEO breakdown for {selectedNetwork.label}
                 </h4>
                 {selectedNetwork.geos.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No GEO breakdown for this network yet.</p>
+                  <p className="text-sm text-muted-foreground">No GEO targets configured for this network.</p>
                 ) : (
                   <ul className="space-y-2">
                     {selectedNetwork.geos.map((geo) => {

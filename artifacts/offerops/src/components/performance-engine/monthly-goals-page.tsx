@@ -12,6 +12,7 @@ import {
   Zap,
   AlertCircle,
   RefreshCw,
+  Pencil,
 } from "lucide-react";
 import {
   useListEmployees,
@@ -33,7 +34,8 @@ import { KpiCard } from "@/components/performance-engine/kpi-card";
 import { KpiBreakdownPanel } from "@/components/performance-engine/kpi-breakdown-panel";
 import { InitialsBadge } from "@/components/performance-engine/initials-badge";
 import { SegmentedProgress } from "@/components/performance-engine/segmented-progress";
-import { CreateGoalPlanModal } from "@/components/performance-engine/create-goal-plan-modal";
+import { CreateGoalPlanModal, type GoalPlanEditContext } from "@/components/performance-engine/create-goal-plan-modal";
+import { ensureGoalsConfig, useGoalsConfig } from "@/lib/goals-config";
 import {
   currentMonthKey,
   fetchMonthlyGoalsDashboard,
@@ -43,6 +45,7 @@ import {
   type MetricBreakdownKind,
   type WorkerMonthlyRow,
 } from "@/lib/performance-engine/api";
+import { goalsForWorkerMonth, networkNamesInPlan } from "@/lib/performance-engine/goal-plan-utils";
 import { Link } from "wouter";
 
 function StatusPill({ status }: { status: WorkerMonthlyRow["status"] }) {
@@ -94,7 +97,11 @@ export function MonthlyGoalsPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedBreakdown, setSelectedBreakdown] = useState<MetricBreakdownKind | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editContext, setEditContext] = useState<GoalPlanEditContext | null>(null);
   const [howOpen, setHowOpen] = useState(false);
+
+  const { data: goalsCfgRaw } = useGoalsConfig();
+  const goalsCfg = ensureGoalsConfig(goalsCfgRaw);
 
   const scopeEmployeeId = workerFilter !== "all" ? Number(workerFilter) : undefined;
 
@@ -129,9 +136,26 @@ export function MonthlyGoalsPage() {
     return rows;
   }, [dashQ.data?.workers, workerFilter, statusFilter]);
 
+  function openCreate() {
+    setEditContext(null);
+    setCreateOpen(true);
+  }
+
+  function openEdit(worker: WorkerMonthlyRow) {
+    const workerGoals = goalsForWorkerMonth(goalsCfg.workerGoalTargets, worker.employeeId, monthKey);
+    const networks = networkNamesInPlan(workerGoals);
+    setEditContext({
+      employeeId: worker.employeeId,
+      monthKey,
+      networkName: networks[0] ?? null,
+    });
+    setCreateOpen(true);
+  }
+
   function refresh() {
     void qc.invalidateQueries({ queryKey: ["monthly-goals", wsId, monthKey] });
     void qc.invalidateQueries({ queryKey: ["metric-breakdown", wsId, monthKey] });
+    void qc.invalidateQueries({ queryKey: ["goals-config"] });
   }
 
   function toggleBreakdown(metricKey: string) {
@@ -164,7 +188,7 @@ export function MonthlyGoalsPage() {
             <HelpCircle size={14} className="mr-1.5" />
             How it works
           </Button>
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Button size="sm" onClick={openCreate}>
             <Plus size={14} className="mr-1.5" />
             Create Monthly Goal Plan
           </Button>
@@ -277,19 +301,20 @@ export function MonthlyGoalsPage() {
                 <th className="px-4 py-3 font-medium">Profit</th>
                 <th className="px-4 py-3 font-medium">XP Earned</th>
                 <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium min-w-[100px]">Progress</th>
+                <th className="px-4 py-3 font-medium">Progress</th>
+                <th className="px-4 py-3 font-medium w-[100px]">Plan</th>
               </tr>
             </thead>
             <tbody>
               {dashQ.isLoading ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-muted-foreground">
+                  <td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">
                     Loading team goals…
                   </td>
                 </tr>
               ) : filteredWorkers.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-muted-foreground">
+                  <td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">
                     No workers match the current filters. Create a monthly goal plan to get started.
                   </td>
                 </tr>
@@ -326,6 +351,17 @@ export function MonthlyGoalsPage() {
                     <td className="px-4 py-3">
                       <SegmentedProgress filled={w.progressSegments} status={w.status} />
                     </td>
+                    <td className="px-4 py-3">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 px-2"
+                        onClick={() => openEdit(w)}
+                      >
+                        <Pencil size={14} className="mr-1" />
+                        Edit
+                      </Button>
+                    </td>
                   </tr>
                 ))
               )}
@@ -343,7 +379,7 @@ export function MonthlyGoalsPage() {
           <div className="grid gap-2 sm:grid-cols-2">
             <button
               type="button"
-              onClick={() => setCreateOpen(true)}
+              onClick={openCreate}
               className="rounded-lg border p-3 text-left hover:bg-slate-50 transition-colors"
             >
               <p className="text-sm font-medium">Create Goal Plan</p>
@@ -393,11 +429,16 @@ export function MonthlyGoalsPage() {
 
       <CreateGoalPlanModal
         open={createOpen}
-        onOpenChange={setCreateOpen}
+        onOpenChange={(v) => {
+          if (!v) setEditContext(null);
+          setCreateOpen(v);
+        }}
         workspaceId={wsId}
         monthKey={monthKey}
         employees={employees.map((e) => ({ id: e.id, name: e.name }))}
         geos={geos.map((g) => ({ id: g.id, code: g.code }))}
+        allGoals={goalsCfg.workerGoalTargets}
+        editContext={editContext}
         onSaved={refresh}
       />
     </div>

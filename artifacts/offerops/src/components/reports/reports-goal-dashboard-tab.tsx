@@ -107,6 +107,13 @@ function GoalPerformanceCard({
   );
 }
 
+function geoTargetConfigured(
+  target: number,
+  targetSource?: "inherited" | "custom" | "none",
+): boolean {
+  return targetSource === "inherited" || targetSource === "custom" || target > 0;
+}
+
 function BreakdownTables({
   metric,
   breakdown,
@@ -184,17 +191,21 @@ function BreakdownTables({
                 <th className="px-3 py-2 text-right">Current</th>
                 <th className="px-3 py-2 text-right">Target</th>
                 <th className="px-3 py-2 text-right">Progress</th>
+                <th className="px-3 py-2 text-right">Remaining</th>
+                <th className="px-3 py-2 text-left">Source</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {geos.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-3 py-6 text-center text-xs text-slate-500">
-                    No GEO breakdown this month.
+                  <td colSpan={7} className="px-3 py-6 text-center text-xs text-slate-500">
+                    No GEO targets configured for this metric.
                   </td>
                 </tr>
               ) : (
-                geos.map((row) => (
+                geos.map((row) => {
+                  const configured = geoTargetConfigured(row.target, row.targetSource);
+                  return (
                   <tr key={`${row.network}-${row.key}`} className="hover:bg-slate-50/80">
                     <td className="px-3 py-2 text-sm font-medium text-slate-900">{row.label}</td>
                     <td className="max-w-[10rem] px-3 py-2">
@@ -206,13 +217,32 @@ function BreakdownTables({
                       {fmtValue(row.current, meta.format, unitLabel)}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums text-xs text-slate-600">
-                      {row.target > 0 ? fmtValue(row.target, meta.format, unitLabel) : "No GEO target"}
+                      {configured ? fmtValue(row.target, meta.format, unitLabel) : "—"}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums text-xs">
-                      {row.target > 0 ? `${row.percent}%` : "—"}
+                      {configured ? `${row.percent}%` : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-xs text-slate-600">
+                      {configured
+                        ? fmtValue(gapRemaining(row.current, row.target), meta.format, unitLabel)
+                        : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-500">
+                      {row.targetSource === "custom" ? (
+                        <span className="rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-blue-600">
+                          Custom
+                        </span>
+                      ) : row.targetSource === "inherited" ? (
+                        <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-500">
+                          Inherited
+                        </span>
+                      ) : (
+                        "—"
+                      )}
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

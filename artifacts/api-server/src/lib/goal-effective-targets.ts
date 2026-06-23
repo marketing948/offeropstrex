@@ -29,6 +29,34 @@ export function isExplicitNetworkGeoGoal(g: ServerWorkerGoalTarget): boolean {
   return !!(g.affiliateNetworkName?.trim() && g.geoCode?.trim());
 }
 
+function isNetworkScopedGoal(g: ServerWorkerGoalTarget): boolean {
+  return !!(g.affiliateNetworkName?.trim() && !g.geoCode?.trim());
+}
+
+function selectedGeoCodesFromNetworkGoals(
+  networkKey: string,
+  goals: ServerWorkerGoalTarget[],
+  metricKey: ServerWorkerGoalTarget["metricKey"],
+  employeeId: number | null,
+): string[] | null {
+  const codes = new Set<string>();
+  let found = false;
+  for (const g of goals) {
+    if (g.metricKey !== metricKey) continue;
+    if (employeeId != null && g.employeeId !== employeeId) continue;
+    if (g.affiliateNetworkName?.trim() !== networkKey) continue;
+    if (!isNetworkScopedGoal(g)) continue;
+    if (!Array.isArray(g.selectedGeoCodes) || g.selectedGeoCodes.length === 0) continue;
+    found = true;
+    for (const code of g.selectedGeoCodes) {
+      const trimmed = code.trim();
+      if (trimmed) codes.add(trimmed);
+    }
+  }
+  if (!found || codes.size === 0) return null;
+  return sortEligibleGeos([...codes]);
+}
+
 export function eligibleGeosForNetwork(
   networkKey: string,
   goals: ServerWorkerGoalTarget[],
@@ -36,6 +64,19 @@ export function eligibleGeosForNetwork(
   employeeId: number | null,
   activityGeos: Iterable<string>,
 ): string[] {
+  const selected = selectedGeoCodesFromNetworkGoals(networkKey, goals, metricKey, employeeId);
+  if (selected != null && selected.length > 0) {
+    const geoKeys = new Set<string>(selected);
+    for (const g of goals) {
+      if (g.metricKey !== metricKey) continue;
+      if (employeeId != null && g.employeeId !== employeeId) continue;
+      if (g.affiliateNetworkName?.trim() === networkKey && g.geoCode?.trim()) {
+        geoKeys.add(g.geoCode.trim());
+      }
+    }
+    return sortEligibleGeos([...geoKeys]);
+  }
+
   const geoKeys = new Set<string>();
   for (const geo of activityGeos) {
     const trimmed = geo.trim();
@@ -199,4 +240,19 @@ export function computeEffectiveMetricTarget(
 export function geoHasConfiguredTarget(target: number, source?: GeoTargetSource): boolean {
   if (source === "inherited" || source === "custom") return true;
   return target > 0;
+}
+
+/** Preview inherited per-GEO share for goal plan UI. */
+export function previewInheritedGeoShares(
+  metricKind: MetricTargetKind,
+  networkTarget: number,
+  eligibleGeos: string[],
+): Map<string, number> {
+  const { geos } = resolveEffectiveGeoTargets({
+    metricKind,
+    networkTarget,
+    explicitGeoTargets: new Map(),
+    eligibleGeos,
+  });
+  return new Map(geos.map((g) => [g.geo, g.target]));
 }

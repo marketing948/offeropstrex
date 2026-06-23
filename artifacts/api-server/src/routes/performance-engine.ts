@@ -35,6 +35,8 @@ const router: IRouter = Router();
 
 const monthKeySchema = z.string().regex(/^\d{4}-\d{2}$/);
 
+const goalMetricKeySchema = z.enum(["revenue", "testingBatches", "workingCampaigns"]);
+
 const upsertGoalSchema = z.object({
   workspaceId: z.number().int().positive(),
   goal: z.object({
@@ -45,15 +47,53 @@ const upsertGoalSchema = z.object({
     affiliateNetworkName: z.string().nullable().optional(),
     geoId: z.number().int().positive().nullable().optional(),
     geoCode: z.string().nullable().optional(),
-    metricKey: z.enum(["revenue", "testingBatches", "workingCampaigns"]),
-    monthlyTarget: z.number().positive(),
+    selectedGeoCodes: z.array(z.string().min(1)).nullable().optional(),
+    metricKey: goalMetricKeySchema,
+    monthlyTarget: z.number().nonnegative(),
     isActive: z.boolean(),
     monthKey: z.string().regex(/^\d{4}-\d{2}$/).nullable().optional(),
     xpReward: z.number().int().nonnegative().nullable().optional(),
     overachieveXpReward: z.number().int().nonnegative().nullable().optional(),
     notes: z.string().optional(),
+  }).superRefine((goal, ctx) => {
+    const hasGeo = Boolean(goal.geoCode?.trim());
+    if (!hasGeo && goal.monthlyTarget <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Network and worker-wide goals require a positive monthlyTarget.",
+        path: ["monthlyTarget"],
+      });
+    }
   }),
   replaceExisting: z.boolean().optional(),
+});
+
+const replaceGoalPlanSchema = z.object({
+  workspaceId: z.number().int().positive(),
+  employeeId: z.number().int().positive(),
+  employeeName: z.string().optional(),
+  monthKey: monthKeySchema,
+  affiliateNetworkName: z.string().nullable().optional(),
+  affiliateNetworkId: z.number().int().positive().nullable().optional(),
+  selectedGeoCodes: z.array(z.string().min(1)).optional(),
+  metrics: z.array(
+    z.object({
+      metricKey: goalMetricKeySchema,
+      monthlyTarget: z.number().positive(),
+      xpReward: z.number().int().nonnegative().optional(),
+      enabled: z.boolean(),
+    }),
+  ),
+  geoOverrides: z
+    .array(
+      z.object({
+        metricKey: goalMetricKeySchema,
+        geoCode: z.string().min(1),
+        geoId: z.number().int().positive().nullable().optional(),
+        monthlyTarget: z.number().nonnegative(),
+      }),
+    )
+    .optional(),
 });
 
 router.get("/performance/monthly-goals", async (req, res): Promise<void> => {
@@ -307,6 +347,196 @@ router.get("/performance/worker-activity", async (req, res): Promise<void> => {
       createdAt: r.createdAt.toISOString(),
     })),
   });
+});
+
+async function assertWorkerNetworkAccess(
+  workspaceId: number,
+  employeeId: number,
+  affiliateNetworkName: string | null | undefined,
+  affiliateNetworkId: number | null | undefined,
+  res: import("express").Response,
+): Promise<boolean> {
+  if (!affiliateNetworkName && !affiliateNetworkId) return true;
+
+  let networkId = affiliateNetworkId ?? null;
+  if (!networkId && affiliateNetworkName) {
+    const [net] = await db
+      .select({ id: affiliateNetworksTable.id })
+      .from(affiliateNetworksTable)
+      .where(
+        and(
+          eq(affiliateNetworksTable.workspaceId, workspaceId),
+          eq(affiliateNetworksTable.name, affiliateNetworkName),
+        ),
+      )
+      .limit(1);
+    networkId = net?.id ?? null;
+  }
+  if (networkId) {
+    const [assign] = await db
+      .select({ id: workerAffiliateNetworksTable.id })
+      .from(workerAffiliateNetworksTable)
+      .where(
+        and(
+          eq(workerAffiliateNetworksTable.workspaceId, workspaceId),
+          eq(workerAffiliateNetworksTable.employeeId, employeeId),
+          eq(workerAffiliateNetworksTable.affiliateNetworkId, networkId),
+        ),
+      )
+      .limit(1);
+    if (!assign) {
+      res.status(403).json({ error: "Worker does not have access to this affiliate network." });
+      return false;
+    }
+  }
+  return true;
+}
+
+function goalMatchesPlanScope(
+  g: { employeeId: number; monthKey?: string | null; affiliateNetworkName?: string | null },
+  employeeId: number,
+  monthKey: string,
+  affiliateNetworkName: string | null | undefined,
+): boolean {
+  if (g.employeeId !== employeeId) return false;
+  if (!g.monthKey || g.monthKey !== monthKey) return false;
+  const net = (g.affiliateNetworkName ?? "").trim();
+  const scopeNet = (affiliateNetworkName ?? "").trim();
+  if (scopeNet) return net === scopeNet;
+  return !net;
+}
+
+function sortSelectedGeoCodes(codes: string[]): string[] {
+  return [...new Set(codes.map((c) => c.trim()).filter(Boolean))].sort((a, b) =>
+    a.toUpperCase().localeCompare(b.toUpperCase()),
+  );
+}
+
+router.post("/performance/worker-goals/plan", async (req, res): Promise<void> => {
+  const employee = await getEmployeeFromToken(req);
+  if (!employee || employee.role !== "admin") {
+    res.status(employee ? 403 : 401).json({ error: employee ? "Admin access required" : "Unauthorized" });
+    return;
+  }
+
+  const parsed = replaceGoalPlanSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const {
+    workspaceId,
+    employeeId,
+    employeeName,
+    monthKey,
+    affiliateNetworkName,
+    affiliateNetworkId,
+    selectedGeoCodes,
+    metrics,
+    geoOverrides,
+  } = parsed.data;
+
+  if ((await requireWorkspaceAccess(req, res, workspaceId)) === null) return;
+
+  const scopeNet = affiliateNetworkName?.trim() || null;
+  if (scopeNet) {
+    const enabledMetrics = metrics.filter((m) => m.enabled);
+    if (enabledMetrics.length === 0) {
+      res.status(400).json({ error: "Enable at least one metric for this network plan." });
+      return;
+    }
+    if (!selectedGeoCodes || selectedGeoCodes.length === 0) {
+      res.status(400).json({ error: "Select at least one GEO for network-scoped goal plans." });
+      return;
+    }
+    if (
+      !(await assertWorkerNetworkAccess(
+        workspaceId,
+        employeeId,
+        scopeNet,
+        affiliateNetworkId ?? null,
+        res,
+      ))
+    ) {
+      return;
+    }
+  }
+
+  const raw = await getSettingValue(workspaceId, "goals_config");
+  let cfg: Record<string, unknown> = {};
+  try {
+    cfg = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+  } catch {
+    cfg = {};
+  }
+
+  const targets = Array.isArray(cfg.workerGoalTargets)
+    ? (cfg.workerGoalTargets as Array<Record<string, unknown>>)
+    : [];
+
+  const kept = targets.filter(
+    (g) =>
+      !goalMatchesPlanScope(
+        g as { employeeId: number; monthKey?: string | null; affiliateNetworkName?: string | null },
+        employeeId,
+        monthKey,
+        scopeNet,
+      ),
+  );
+
+  const now = new Date().toISOString();
+  const ts = Date.now();
+  const nextGoals: Record<string, unknown>[] = [];
+
+  for (const metric of metrics) {
+    if (!metric.enabled) continue;
+    nextGoals.push({
+      id: `wg_${metric.metricKey}_${employeeId}_${monthKey}_${ts}_${nextGoals.length}`,
+      employeeId,
+      employeeName,
+      monthKey,
+      isActive: true,
+      metricKey: metric.metricKey,
+      monthlyTarget: metric.monthlyTarget,
+      xpReward: metric.xpReward ?? 0,
+      affiliateNetworkId: scopeNet ? (affiliateNetworkId ?? null) : null,
+      affiliateNetworkName: scopeNet,
+      geoId: null,
+      geoCode: null,
+      selectedGeoCodes: scopeNet ? sortSelectedGeoCodes(selectedGeoCodes ?? []) : null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  for (const override of geoOverrides ?? []) {
+    if (!scopeNet) continue;
+    const selected = new Set((selectedGeoCodes ?? []).map((c) => c.trim().toUpperCase()));
+    if (!selected.has(override.geoCode.trim().toUpperCase())) continue;
+    nextGoals.push({
+      id: `wg_${override.metricKey}_${employeeId}_${monthKey}_${override.geoCode}_${ts}_${nextGoals.length}`,
+      employeeId,
+      employeeName,
+      monthKey,
+      isActive: true,
+      metricKey: override.metricKey,
+      monthlyTarget: override.monthlyTarget,
+      xpReward: 0,
+      affiliateNetworkId: affiliateNetworkId ?? null,
+      affiliateNetworkName: scopeNet,
+      geoId: override.geoId ?? null,
+      geoCode: override.geoCode,
+      selectedGeoCodes: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  cfg.workerGoalTargets = [...kept, ...nextGoals];
+  await upsertSetting(workspaceId, "goals_config", JSON.stringify(cfg));
+
+  res.json({ ok: true, goals: nextGoals });
 });
 
 router.post("/performance/worker-goals", async (req, res): Promise<void> => {

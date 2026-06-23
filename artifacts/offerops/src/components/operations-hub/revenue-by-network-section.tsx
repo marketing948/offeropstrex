@@ -511,7 +511,7 @@ export function RevenueByNetworkSection({
                     format={format}
                     unitLabel={unitLabel}
                     theme={theme}
-                    expandable={visibleGeos.length > 0}
+                    expandable={visibleGeos.length > 0 || net.target > 0}
                     expanded={isExpanded}
                     onToggle={() => toggleNetwork(net.key)}
                   />
