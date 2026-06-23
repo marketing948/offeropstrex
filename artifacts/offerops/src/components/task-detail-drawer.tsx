@@ -69,9 +69,18 @@ import {
   parseWinnerHandoffContext,
   winnerHandoffHumanDescription,
 } from "@/lib/winner-handoff";
-import { Copy } from "lucide-react";
+import { Copy, Ban } from "lucide-react";
 import { useExpFeedback } from "@/components/exp-feedback/exp-feedback-context";
 import type { TaskCompletionExpOptions } from "@/lib/exp-task-points";
+import { workerTaskHeadline } from "@/lib/worker-tasks";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 type Platform = "ios" | "android";
 
@@ -129,10 +138,27 @@ export function TaskDetailDrawer({
   if (!task) return null;
 
   const isCompleted = task.status === "DONE";
+  const isBlocked = task.status === "BLOCKED";
+  const canBlock = !isCompleted && !isBlocked;
 
   const platform = platformFromTaskType(task.taskType);
   const visual = getTaskTypeVisual(task.taskType as string);
   const VisualIcon = visual.icon;
+  const trafficSourceId = (task as { trafficSourceId?: number | null }).trafficSourceId;
+  const tsParams = { workspace_id: activeWorkspaceId ?? 0 };
+  const { data: trafficSources = [] } = useListWorkspaceTrafficSources(
+    tsParams,
+    wsQueryOpts(activeWorkspaceId, getListWorkspaceTrafficSourcesQueryKey(tsParams), {
+      enabled: !!activeWorkspaceId && trafficSourceId != null,
+    }),
+  );
+  const trafficSourceName =
+    task.trafficSourceName ??
+    (trafficSourceId != null
+      ? trafficSources.find((t) => t.id === trafficSourceId)?.name ?? null
+      : null);
+  const headline = workerTaskHeadline(task, trafficSourceName);
+  const [blockOpen, setBlockOpen] = useState(false);
 
   return (
     <Sheet open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
@@ -156,8 +182,20 @@ export function TaskDetailDrawer({
                     Legacy
                   </span>
                 )}
+                {canBlock && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="ml-auto h-7 gap-1 text-xs"
+                    onClick={() => setBlockOpen(true)}
+                  >
+                    <Ban className="h-3 w-3" />
+                    Block
+                  </Button>
+                )}
               </div>
-              <SheetTitle className="mt-1.5 text-base">{task.title}</SheetTitle>
+              <SheetTitle className="mt-1.5 text-base leading-snug">{headline}</SheetTitle>
               <SheetDescription className="mt-0.5 text-xs">
                 {visual.subtext}
                 {task.batchName && <span> · Batch: {task.batchName}</span>}
@@ -166,6 +204,14 @@ export function TaskDetailDrawer({
           </div>
         </SheetHeader>
         <div className="px-6 pb-6">
+          {isBlocked && (task as { blockedReason?: string | null }).blockedReason?.trim() && (
+            <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-amber-800 dark:text-amber-200">
+                Blocked
+              </p>
+              <p className="mt-1 whitespace-pre-wrap">{(task as { blockedReason?: string }).blockedReason}</p>
+            </div>
+          )}
           {isCompleted ? (
             <CompletedTaskReadOnly task={task} onClose={onClose} />
           ) : (task.taskType as string) === "create_voluum_campaign_ios" || (task.taskType as string) === "create_voluum_campaign_android" ? (
@@ -192,8 +238,91 @@ export function TaskDetailDrawer({
             <GenericForm onDone={markDone} onCancel={onClose} />
           )}
         </div>
+        <BlockTaskDialog
+          task={task}
+          open={blockOpen}
+          onOpenChange={setBlockOpen}
+          onBlocked={() => {
+            invalidate();
+            onClose();
+          }}
+        />
       </SheetContent>
     </Sheet>
+  );
+}
+
+function BlockTaskDialog({
+  task,
+  open,
+  onOpenChange,
+  onBlocked,
+}: {
+  task: TodoTask;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onBlocked: () => void;
+}) {
+  const { toast } = useToast();
+  const updateTask = useUpdateTodoTask();
+  const [reason, setReason] = useState("");
+
+  useEffect(() => {
+    if (!open) setReason("");
+  }, [open]);
+
+  async function submit() {
+    const trimmed = reason.trim();
+    if (!trimmed) {
+      toast({ title: "Blocker reason is required", variant: "destructive" });
+      return;
+    }
+    try {
+      await updateTask.mutateAsync({
+        id: task.id,
+        data: { status: "BLOCKED", blockedReason: trimmed },
+      });
+      toast({ title: "Task blocked", description: "Moved to the Blocked tab." });
+      onOpenChange(false);
+      onBlocked();
+    } catch (e: unknown) {
+      toast({
+        title: "Could not block task",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Block task</DialogTitle>
+          <DialogDescription>
+            Explain what is blocking this task. It will move to the Blocked tab for follow-up.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2 py-2">
+          <Label htmlFor="block-reason">Blocker reason</Label>
+          <Textarea
+            id="block-reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. Waiting on traffic source approval, missing Voluum access, etc."
+            rows={4}
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={updateTask.isPending}>
+            Cancel
+          </Button>
+          <Button onClick={() => void submit()} disabled={updateTask.isPending}>
+            {updateTask.isPending ? "Saving…" : "Block task"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

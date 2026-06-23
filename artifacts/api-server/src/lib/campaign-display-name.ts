@@ -39,24 +39,44 @@ export function resolveCampaignDisplayName(params: {
   return platformDisplaySuffix(platform);
 }
 
-export function formatTakeCampaignLiveTitle(displayName: string): string {
-  return `Take "${displayName}" live`;
+/** `{campaign} — {action}` title shown in Work Queue. */
+export function formatWorkerTaskTitle(campaignLabel: string, action: string): string {
+  const campaign = campaignLabel.trim();
+  const act = action.trim();
+  if (!campaign) return act;
+  if (!act) return campaign;
+  return `${campaign} — ${act}`;
+}
+
+export function formatTakeCampaignLiveTitle(
+  displayName: string,
+  trafficSourceName?: string | null,
+): string {
+  const source = trafficSourceName?.trim() || "Traffic Source";
+  return formatWorkerTaskTitle(displayName, `Go live on ${source}`);
 }
 
 export function formatCreateVoluumTaskTitle(
   batchLabel: string,
   platform: "ios" | "android",
 ): string {
-  return `Create Voluum campaign for ${batchLabel} ${platformDisplaySuffix(platform)}`;
+  const display = composeCampaignDisplayName(batchLabel, platform);
+  const action =
+    platform === "ios" ? "Open Voluum iOS Campaign" : "Open Voluum Android Campaign";
+  return formatWorkerTaskTitle(display, action);
 }
 
 export function formatFindWinnersTitle(displayName: string): string {
-  return `Find winners for "${displayName}"`;
+  return formatWorkerTaskTitle(displayName, "Review campaign performance");
 }
 
 /** Title for post–traffic-target winner review (human enters offer IDs). */
 export function formatReviewWinnersTitle(batchName: string, trafficSourceName: string): string {
   const b = batchName.trim() || "Batch";
   const t = trafficSourceName.trim() || "Traffic source";
-  return `Review winners for "${b} — ${t}"`;
+  return formatWorkerTaskTitle(`${b} — ${t}`, "Review winners at traffic target");
+}
+
+export function formatOptimizationFollowupTitle(displayName: string): string {
+  return formatWorkerTaskTitle(displayName, "Optimize traffic allocation");
 }

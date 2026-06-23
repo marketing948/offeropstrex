@@ -1,6 +1,108 @@
 import type { TodoTask } from "@workspace/api-client-react";
 import { getTaskTypeVisual } from "@/lib/task-type-visuals";
 
+const TITLE_ACTION_SEP = " — ";
+
+function extractQuotedTitle(title: string, pattern: RegExp): string | null {
+  const m = title.match(pattern);
+  return m?.[1]?.trim() ?? null;
+}
+
+/** Best-effort campaign label for display (batch + platform or parsed title). */
+export function resolveTaskCampaignLabel(task: TodoTask): string {
+  const fromTake = extractQuotedTitle(task.title, /^Take "(.+)" live$/i);
+  if (fromTake) return fromTake;
+
+  const fromFind = extractQuotedTitle(task.title, /^Find winners for "(.+)"$/i);
+  if (fromFind) return fromFind;
+
+  const fromReview = extractQuotedTitle(task.title, /^Review winners for "(.+)"$/i);
+  if (fromReview) return fromReview;
+
+  const platform = platformLabel(task);
+  if (task.batchName?.trim()) {
+    const batch = task.batchName.trim();
+    if (platform && !batch.toLowerCase().includes(platform.toLowerCase())) {
+      return `${batch} ${platform}`;
+    }
+    return batch;
+  }
+
+  if (task.title.includes(TITLE_ACTION_SEP)) {
+    return task.title.split(TITLE_ACTION_SEP)[0]!.trim();
+  }
+
+  const stripped = task.title
+    .replace(/^Create Voluum campaign(?:\s+\([^)]+\))?(?:\s+for)?\s*/i, "")
+    .replace(/^Optimization follow-up for\s*/i, "")
+    .replace(/\s+on\s+.+$/i, "")
+    .trim();
+
+  return stripped || task.title;
+}
+
+export function taskActionPhrase(
+  task: TodoTask,
+  trafficSourceName?: string | null,
+): string {
+  const type = task.taskType as string;
+  const ts = trafficSourceName?.trim() || task.trafficSourceName?.trim() || "Traffic Source";
+
+  switch (type) {
+    case "create_voluum_campaign_ios":
+    case "CREATE_IOS_CAMPAIGN":
+    case "CREATE_IOS_TRACKER_CAMPAIGN":
+      return "Open Voluum iOS Campaign";
+    case "create_voluum_campaign_android":
+    case "CREATE_ANDROID_CAMPAIGN":
+    case "CREATE_ANDROID_TRACKER_CAMPAIGN":
+      return "Open Voluum Android Campaign";
+    case "take_campaign_live":
+    case "GO_LIVE":
+    case "GO_LIVE_TRAFFIC_SOURCE_CAMPAIGN":
+      return `Go live on ${ts}`;
+    case "find_winners":
+    case "FIND_WINNERS":
+      return "Review campaign performance";
+    case "review_winners_target":
+      return "Review winners at traffic target";
+    case "OPTIMIZATION_FOLLOWUP":
+      return "Optimize traffic allocation";
+    case "MOVE_WINNERS_TO_SCALED_CAMPAIGN":
+      return "Move winners to scaled campaign";
+    case "all_traffic_sources_tested":
+      return "Acknowledge platform fully tested";
+    case "MANUAL":
+      return "Complete manual follow-up";
+    default:
+      if (/^Take .+ live$/i.test(task.title)) return `Go live on ${ts}`;
+      if (/optimization follow-up/i.test(task.title)) return "Optimize traffic allocation";
+      if (/scale/i.test(task.title)) return "Scale campaign traffic";
+      if (/review/i.test(task.title)) return "Review campaign performance";
+      if (/Create Voluum/i.test(task.title)) {
+        return platformLabel(task) === "Android"
+          ? "Open Voluum Android Campaign"
+          : "Open Voluum iOS Campaign";
+      }
+      return getTaskTypeVisual(type).label;
+  }
+}
+
+/** Campaign name + clear action for Work Queue rows and detail header. */
+export function workerTaskHeadline(
+  task: TodoTask,
+  trafficSourceName?: string | null,
+): string {
+  if (task.title.includes(TITLE_ACTION_SEP)) {
+    const [campaign, action] = task.title.split(TITLE_ACTION_SEP);
+    if (campaign?.trim() && action?.trim()) return task.title;
+  }
+
+  const campaign = resolveTaskCampaignLabel(task);
+  const action = taskActionPhrase(task, trafficSourceName);
+  return `${campaign}${TITLE_ACTION_SEP}${action}`;
+}
+
 export const CAMPAIGN_OPS_TASK_TYPES = new Set([
   "create_voluum_campaign_ios",
   "create_voluum_campaign_android",
@@ -67,15 +169,6 @@ export function platformLabel(task: TodoTask): string | null {
   if (device === "ios") return "iOS";
   if (device === "android") return "Android";
   return null;
-}
-
-/** Prefer clean batch/platform headline over verbose internal task titles. */
-export function workerTaskHeadline(task: TodoTask): string {
-  const platform = platformLabel(task);
-  if (/^Create Voluum campaign/i.test(task.title) && task.batchName?.trim() && platform) {
-    return `${task.batchName.trim()} ${platform}`;
-  }
-  return task.title;
 }
 
 export function taskInstructions(task: TodoTask): string {

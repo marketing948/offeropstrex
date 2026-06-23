@@ -198,12 +198,15 @@ function NetworkTable({
   kind,
   valueLabel,
   showGoal = true,
+  showEmployeeColumn = false,
 }: {
   rows: GoalNetworkRow[];
   kind: "currency" | "count";
   valueLabel: string;
   showGoal?: boolean;
+  showEmployeeColumn?: boolean;
 }) {
+  const colSpan = (showGoal ? 6 : 3) + (showEmployeeColumn ? 1 : 0) + 1;
   return (
     <Card className="overflow-hidden border border-slate-200/90 bg-white shadow-sm">
       <table className="w-full table-fixed">
@@ -219,14 +222,16 @@ function NetworkTable({
               </>
             )}
             <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">GEOs</th>
-            <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">Employees</th>
+            {showEmployeeColumn && (
+              <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">Employees</th>
+            )}
             <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">Status</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={showGoal ? 8 : 5} className="px-2 py-4 text-center text-xs text-slate-500">
+              <td colSpan={colSpan} className="px-2 py-4 text-center text-xs text-slate-500">
                 No network breakdown for the selected filters.
               </td>
             </tr>
@@ -247,9 +252,11 @@ function NetworkTable({
                 <td className="min-w-0 px-2 py-2 align-top">
                   <ReportBreakdownChips items={r.geos} maxVisible={2} />
                 </td>
-                <td className="min-w-0 px-2 py-2 align-top">
-                  <ReportBreakdownChips items={r.employees} maxVisible={2} />
-                </td>
+                {showEmployeeColumn && (
+                  <td className="min-w-0 px-2 py-2 align-top">
+                    <ReportBreakdownChips items={r.employees} maxVisible={2} />
+                  </td>
+                )}
                 <td className="min-w-0 px-2 py-2 align-top">
                   <GoalStatusPill status={r.status} />
                 </td>
@@ -338,6 +345,7 @@ function GoalSection({
   geoTitle,
   summaryLabels,
   employeeVariant,
+  showEmployeeBreakdown,
 }: {
   title: string;
   accentClass: string;
@@ -348,16 +356,19 @@ function GoalSection({
   geoTitle: string;
   summaryLabels: { current: string; goal: string; remaining: string; progress: string };
   employeeVariant: "revenue" | "pipeline";
+  showEmployeeBreakdown: boolean;
 }) {
   return (
     <section className={cn("rounded-xl border border-slate-200/90 bg-white p-4 shadow-sm ring-1 ring-slate-100 border-l-4", accentClass)}>
       <h2 className="text-base font-semibold text-slate-900">{title}</h2>
       <div className="mt-3 space-y-4">
         <SummaryMiniCards summary={section.summary} kind={kind} labels={summaryLabels} />
-        <div>
-          <p className="mb-2 text-xs font-semibold text-slate-700">By employee</p>
-          <EmployeeTable rows={section.employees} kind={kind} countLabel={countLabel} variant={employeeVariant} />
-        </div>
+        {showEmployeeBreakdown && (
+          <div>
+            <p className="mb-2 text-xs font-semibold text-slate-700">By employee</p>
+            <EmployeeTable rows={section.employees} kind={kind} countLabel={countLabel} variant={employeeVariant} />
+          </div>
+        )}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div>
             <p className="mb-2 text-xs font-semibold text-slate-700">{networkTitle}</p>
@@ -366,6 +377,7 @@ function GoalSection({
               kind={kind}
               valueLabel={countLabel}
               showGoal={kind === "currency" || section.byNetwork.some((r) => r.goalConfigured)}
+              showEmployeeColumn={showEmployeeBreakdown}
             />
           </div>
           <GeoTable rows={section.byGeo} kind={kind} valueLabel={countLabel} title={geoTitle} />
@@ -398,7 +410,8 @@ export function ReportsGoalDashboardTab({
       <div>
         <h2 className="text-lg font-bold tracking-tight text-slate-900">Goal Dashboard</h2>
         <p className="mt-0.5 text-sm text-muted-foreground">
-          Detailed breakdown of Operation Hub goals by employee, network, and GEO.
+          Detailed breakdown of Operation Hub goals by network and GEO.
+          {isAdmin ? " Use the employee filter above to scope a single operator." : ""}
         </p>
         <p className="mt-1 text-xs text-slate-500">
           Uses the same goal areas as Operation Hub: Revenue, Testing Pipeline, and Working Campaigns.
@@ -417,6 +430,7 @@ export function ReportsGoalDashboardTab({
         networkTitle="Revenue by Network"
         geoTitle="Revenue by GEO"
         employeeVariant="revenue"
+        showEmployeeBreakdown={false}
         summaryLabels={{
           current: "Current Revenue",
           goal: "Revenue Goal",
@@ -434,6 +448,7 @@ export function ReportsGoalDashboardTab({
         networkTitle="Tests by Network"
         geoTitle="Tests by GEO"
         employeeVariant="pipeline"
+        showEmployeeBreakdown={false}
         summaryLabels={{
           current: "Current Test Campaigns",
           goal: "Testing Goal",
@@ -451,6 +466,7 @@ export function ReportsGoalDashboardTab({
         networkTitle="Working by Network"
         geoTitle="Working by GEO"
         employeeVariant="pipeline"
+        showEmployeeBreakdown={false}
         summaryLabels={{
           current: "Current Working Campaigns",
           goal: "Working Goal",

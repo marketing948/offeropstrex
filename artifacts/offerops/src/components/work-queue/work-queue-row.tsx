@@ -151,7 +151,7 @@ export function WorkQueueRow({
 
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold leading-tight text-foreground">
-            {workerTaskHeadline(task)}
+            {workerTaskHeadline(task, trafficSourceName)}
           </p>
           {metaParts.length > 0 && (
             <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0 text-[11px] text-muted-foreground">

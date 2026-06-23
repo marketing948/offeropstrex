@@ -20,6 +20,7 @@ import { emit } from "../engine/event-bus.ts";
 import type { TaskCompletionDetails } from "../engine/types.ts";
 import { getEmployeeFromToken } from "./auth";
 import { composeCampaignDisplayName } from "../lib/campaign-display-name.ts";
+import { recordOperationalEvent } from "../lib/operational-events.ts";
 
 const router: IRouter = Router();
 
@@ -322,6 +323,14 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
     return;
   }
 
+  if (parsed.data.status === "BLOCKED") {
+    const reason = parsed.data.blockedReason?.trim();
+    if (!reason) {
+      res.status(400).json({ error: "blockedReason is required when status is BLOCKED" });
+      return;
+    }
+  }
+
   if (
     CAMPAIGN_OPS_TASK_TYPES.has(existing.taskType) &&
     req.body && typeof req.body === "object" && "relatedBatchId" in req.body
@@ -386,6 +395,24 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
   if (!task) {
     res.status(404).json({ error: "Task not found" });
     return;
+  }
+
+  if (parsed.data.status === "BLOCKED" && existing.status !== "BLOCKED") {
+    const actor = await getEmployeeFromToken(req);
+    await recordOperationalEvent({
+      workspaceId: existing.workspaceId,
+      entityType: "task",
+      entityId: task.id,
+      eventType: "TASK_BLOCKED",
+      actorType: "employee",
+      actorId: actor?.id ?? null,
+      source: "routes.todo-tasks",
+      payloadJson: {
+        taskType: task.taskType,
+        title: task.title,
+        blockedReason: task.blockedReason,
+      },
+    });
   }
 
   res.json(serializeTask(task));

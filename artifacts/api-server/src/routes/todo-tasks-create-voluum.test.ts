@@ -262,7 +262,7 @@ describe("POST /todo-tasks/:id/complete create_voluum_campaign", { concurrency: 
           eq(todoTasksTable.taskType, "take_campaign_live"),
         ),
       );
-    assert.equal(followUp.title, `Take "${batchName} Android" live`);
+    assert.equal(followUp.title, `${batchName} Android — Go live on Source`);
   });
 
   test("rejects duplicate voluumCampaignId in same workspace", async () => {

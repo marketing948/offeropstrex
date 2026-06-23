@@ -23,6 +23,7 @@ import {
   campaignsTable,
   testingBatchesTable,
   batchTrafficSourceRunsTable,
+  workspaceTrafficSourcesTable,
 } from "@workspace/db";
 import {
   formatTakeCampaignLiveTitle,
@@ -58,6 +59,7 @@ export async function handleTaskCompleted(
         id: campaignsTable.id,
         campaignName: campaignsTable.campaignName,
         platform: campaignsTable.platform,
+        trafficSourceId: campaignsTable.trafficSourceId,
       })
       .from(campaignsTable)
       .where(
@@ -68,6 +70,16 @@ export async function handleTaskCompleted(
       )
       .limit(1);
     if (!campaign) return [];
+
+    let trafficSourceName: string | null = null;
+    if (campaign.trafficSourceId != null) {
+      const [source] = await tx
+        .select({ name: workspaceTrafficSourcesTable.name })
+        .from(workspaceTrafficSourcesTable)
+        .where(eq(workspaceTrafficSourcesTable.id, campaign.trafficSourceId))
+        .limit(1);
+      trafficSourceName = source?.name ?? null;
+    }
 
     const [batch] = await tx
       .select({
@@ -93,7 +105,7 @@ export async function handleTaskCompleted(
           employeeId: batch.employeeId,
           relatedBatchId,
           relatedCampaignId,
-          title: formatTakeCampaignLiveTitle(displayName),
+          title: formatTakeCampaignLiveTitle(displayName, trafficSourceName),
           taskType: "take_campaign_live",
           priority: "high",
         },

@@ -189,6 +189,7 @@ export default function Reports() {
   const { activeWorkspaceId } = useWorkspace();
   const [, navigate] = useLocation();
   const isAdmin = currentEmployee?.role === "admin";
+  const isWorker = !isAdmin;
 
   const {
     preset: datePreset,
@@ -277,6 +278,15 @@ export default function Reports() {
   const { data: offers = [] } = useListOffers(wsParams, wsQueryOpts(activeWorkspaceId, getListOffersQueryKey(wsParams)));
   const { data: tasks = [] } = useListTodoTasks(wsParams, wsQueryOpts(activeWorkspaceId, getListTodoTasksQueryKey(wsParams)));
 
+  const { data: assignedNetworks = [] } = useQuery({
+    queryKey: ["reports-assigned-networks", activeWorkspaceId, currentEmployee?.id],
+    enabled: isWorker && !!activeWorkspaceId && !!currentEmployee,
+    queryFn: () =>
+      authedJson<{ affiliateNetworkName: string | null }[]>(
+        `/api/worker-affiliate-networks?workspace_id=${activeWorkspaceId}&employee_id=${currentEmployee!.id}`,
+      ),
+  });
+
   useEffect(() => {
     if (tab !== "winners" || !activeWorkspaceId) {
       setWinnerRows([]);
@@ -317,17 +327,34 @@ export default function Reports() {
     [batches, liveCampaigns, perfAll, offersByBatch],
   );
 
+  const roleScopedReportEntities = useMemo(() => {
+    if (isAdmin) return allReportEntities;
+    const empId = currentEmployee?.id;
+    const assignedNetworkNames = new Set(
+      assignedNetworks
+        .map((n) => n.affiliateNetworkName?.trim().toLowerCase())
+        .filter((n): n is string => Boolean(n)),
+    );
+    return allReportEntities.filter((r) => {
+      const net = (r.network || "").trim().toLowerCase();
+      if (assignedNetworkNames.size > 0) {
+        return assignedNetworkNames.has(net);
+      }
+      return empId != null && r.employeeId === empId;
+    });
+  }, [allReportEntities, isAdmin, currentEmployee?.id, assignedNetworks]);
+
   const filteredReportEntities = useMemo(
     () =>
-      filterReportEntities(allReportEntities, {
-        employeeId: filterEmployee,
+      filterReportEntities(roleScopedReportEntities, {
+        employeeId: isAdmin ? filterEmployee : currentEmployee?.id ?? "",
         network: filterNetwork,
         geo: filterGeo,
         source: filterSource,
         status: filterStatus,
         campaignType: filterCampaignType,
       }),
-    [allReportEntities, filterEmployee, filterNetwork, filterGeo, filterSource, filterStatus, filterCampaignType],
+    [roleScopedReportEntities, isAdmin, currentEmployee?.id, filterEmployee, filterNetwork, filterGeo, filterSource, filterStatus, filterCampaignType],
   );
 
   /** @deprecated alias — report rows include testing batches + standalone live campaigns */
@@ -473,16 +500,7 @@ export default function Reports() {
 
   const { data: goalsConfigRaw } = useGoalsConfig();
   const kpiTargets = (goalsConfigRaw ?? DEFAULT_CONFIG).kpiTargets ?? [];
-  const { isWorker, workerRow } = useWorkerMonthlyGoals();
-
-  const { data: assignedNetworks = [] } = useQuery({
-    queryKey: ["reports-assigned-networks", activeWorkspaceId, currentEmployee?.id],
-    enabled: isWorker && !!activeWorkspaceId && !!currentEmployee,
-    queryFn: () =>
-      authedJson<{ affiliateNetworkName: string | null }[]>(
-        `/api/worker-affiliate-networks?workspace_id=${activeWorkspaceId}&employee_id=${currentEmployee!.id}`,
-      ),
-  });
+  const { workerRow } = useWorkerMonthlyGoals();
 
   const workerPe = workerRow
     ? {
@@ -570,14 +588,23 @@ export default function Reports() {
       name: r.name.split(" ")[0], profit: Math.round(r.profit), winners: r.winners, batches: r.batches,
     })), [empRows]);
 
-  const TABS: { id: ReportTab; label: string; icon: React.ElementType }[] = [
-    { id: "ops",       label: "Dashboard",      icon: BarChart3 },
-    { id: "batches",   label: "Batches",        icon: Target },
-    { id: "sources",   label: "Traffic Sources", icon: Globe },
-    { id: "networks",  label: "Networks & GEOs", icon: Network },
-    { id: "employees", label: "Employees",       icon: Users },
-    { id: "winners",   label: "Winners",         icon: Trophy },
+  const ALL_REPORT_TABS: { id: ReportTab; label: string; icon: React.ElementType }[] = [
+    { id: "ops", label: "Dashboard", icon: BarChart3 },
+    { id: "batches", label: "Batches", icon: Target },
+    { id: "sources", label: "Traffic Sources", icon: Globe },
+    { id: "networks", label: "Networks & GEOs", icon: Network },
+    { id: "employees", label: "Employees", icon: Users },
+    { id: "winners", label: "Winners", icon: Trophy },
   ];
+
+  const TABS = useMemo(
+    () => ALL_REPORT_TABS.filter((t) => isAdmin || t.id !== "employees"),
+    [isAdmin],
+  );
+
+  useEffect(() => {
+    if (!isAdmin && tab === "employees") setTab("ops");
+  }, [isAdmin, tab]);
 
   const selFilter = "h-8 text-sm px-2 rounded-md border border-input bg-background w-full";
 
