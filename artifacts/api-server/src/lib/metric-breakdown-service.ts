@@ -10,7 +10,17 @@ import {
   type MetricsDateRange,
 } from "./campaign-daily-metrics-aggregate.ts";
 import { monthKeyToRange } from "./xp-award-service.ts";
-import { goalsForMonth, loadGoalsConfig, type ServerWorkerGoalTarget } from "./goals-config-server.ts";
+import {
+  goalsForMonthBreakdown,
+  loadGoalsConfig,
+  type ServerWorkerGoalTarget,
+} from "./goals-config-server.ts";
+import {
+  computeEffectiveMetricTarget,
+  computeNetworkEffectiveTarget,
+  geoHasConfiguredTarget,
+  type NetworkGeoMap,
+} from "./goal-effective-targets.ts";
 
 const ACTIVE_TESTING_STATUSES = [
   "NEW_BATCH",
@@ -27,6 +37,7 @@ export type BreakdownGeoRow = {
   current: number;
   target: number;
   percent: number;
+  targetSource?: "inherited" | "custom" | "none";
 };
 
 export type NetworkBreakdownRow = {
@@ -59,7 +70,7 @@ export type MetricBreakdownResult = {
 };
 
 /** network name → geo → current value */
-type NetworkGeoMap = Map<string, Map<string, number>>;
+export type { NetworkGeoMap } from "./goal-effective-targets.ts";
 
 function progressPct(current: number, target: number): number {
   if (target <= 0) return 0;
@@ -109,7 +120,7 @@ function sumGoalTargets(
   };
 }
 
-async function queryRevenueNetworkGeo(
+export async function queryRevenueNetworkGeo(
   workspaceId: number,
   range: MetricsDateRange,
   employeeId: number | null,
@@ -147,7 +158,7 @@ async function queryRevenueNetworkGeo(
   return map;
 }
 
-async function queryTestingNetworkGeo(
+export async function queryTestingNetworkGeo(
   workspaceId: number,
   employeeId: number | null,
   allowedNetworkNames?: string[],
@@ -183,7 +194,7 @@ async function queryTestingNetworkGeo(
   return map;
 }
 
-async function queryWorkingNetworkGeo(
+export async function queryWorkingNetworkGeo(
   workspaceId: number,
   employeeId: number | null,
   allowedNetworkNames?: string[],
@@ -246,63 +257,47 @@ function buildNetworkBreakdown(
     .filter((k) => k !== "(unset)" || networkGeoCurrent.has(k))
     .map((networkKey) => {
       const geoCurrent = networkGeoCurrent.get(networkKey) ?? new Map<string, number>();
+      const activityGeos = geoCurrent.keys();
+      const { geos: effectiveGeos, effectiveNetworkTarget } = computeNetworkEffectiveTarget(
+        networkKey,
+        goals,
+        metricKey,
+        employeeId,
+        activityGeos,
+      );
 
-      const geoKeys = new Set<string>([...geoCurrent.keys()]);
-      for (const g of goals) {
-        if (g.metricKey !== metricKey) continue;
-        if (employeeId != null && g.employeeId !== employeeId) continue;
-        if (g.affiliateNetworkName?.trim() === networkKey && g.geoCode?.trim()) {
-          geoKeys.add(g.geoCode.trim());
-        }
-      }
-
-      const geos: BreakdownGeoRow[] = [...geoKeys]
-        .filter((k) => k !== "(unset)" || geoCurrent.get(k))
-        .map((geoKey) => {
-          const current = geoCurrent.get(geoKey) ?? 0;
-          const target = goals
-            .filter(
-              (g) =>
-                g.metricKey === metricKey &&
-                g.affiliateNetworkName?.trim() === networkKey &&
-                g.geoCode?.trim() === geoKey &&
-                (employeeId == null || g.employeeId === employeeId),
-            )
-            .reduce((s, g) => s + g.monthlyTarget, 0);
+      const geos: BreakdownGeoRow[] = effectiveGeos
+        .map(({ geo, target, source }) => {
+          const current = geoCurrent.get(geo) ?? 0;
           return {
-            key: geoKey,
-            label: geoKey,
+            key: geo,
+            label: geo,
             current,
             target,
             percent: progressPct(current, target),
+            targetSource: source,
           };
         })
         .sort((a, b) => b.target - a.target || b.current - a.current || a.label.localeCompare(b.label));
 
       const current = [...geoCurrent.values()].reduce((s, v) => s + v, 0);
-      const networkOnlyTarget = goals
-        .filter(
-          (g) =>
-            g.metricKey === metricKey &&
-            g.affiliateNetworkName?.trim() === networkKey &&
-            !g.geoCode &&
-            (employeeId == null || g.employeeId === employeeId),
-        )
-        .reduce((s, g) => s + g.monthlyTarget, 0);
-      const geoTargetSum = geos.reduce((s, g) => s + g.target, 0);
-      const target = networkOnlyTarget > 0 ? networkOnlyTarget : geoTargetSum;
+      const hasConfiguredTarget =
+        effectiveNetworkTarget > 0 ||
+        effectiveGeos.some((g) => geoHasConfiguredTarget(g.target, g.source));
 
       return {
         key: networkKey,
         label: networkKey,
         networkId: networkKey,
         current,
-        target,
-        percent: progressPct(current, target),
+        target: effectiveNetworkTarget,
+        percent: progressPct(current, effectiveNetworkTarget),
         geos,
+        hasConfiguredTarget,
       };
     })
-    .filter((n) => n.target > 0 || n.current > 0)
+    .filter((n) => n.hasConfiguredTarget || n.current > 0)
+    .map(({ hasConfiguredTarget: _drop, ...row }) => row)
     .sort((a, b) => b.target - a.target || b.current - a.current || a.label.localeCompare(b.label));
 }
 
@@ -320,7 +315,7 @@ export async function buildMetricBreakdown(
   };
 
   const cfg = await loadGoalsConfig(workspaceId);
-  const monthGoals = goalsForMonth(cfg.workerGoalTargets, monthKey);
+  const monthGoals = goalsForMonthBreakdown(cfg.workerGoalTargets, monthKey);
   const metricKey = metricKeyFor(metric);
 
   let networkGeo: NetworkGeoMap;
@@ -338,16 +333,27 @@ export async function buildMetricBreakdown(
   );
 
   const totalGoals = sumGoalTargets(monthGoals, metricKey, employeeId, "total");
-  const scopedTarget =
-    totalGoals.target > 0
-      ? totalGoals.target
-      : monthGoals
-          .filter((g) => {
-            if (g.metricKey !== metricKey) return false;
-            if (employeeId != null && g.employeeId !== employeeId) return false;
-            return true;
-          })
-          .reduce((s, g) => s + g.monthlyTarget, 0);
+  let scopedTarget = totalGoals.target;
+  if (employeeId != null) {
+    scopedTarget = computeEffectiveMetricTarget(monthGoals, metricKey, employeeId, networkGeo);
+  } else {
+    const employeeIds = [
+      ...new Set(monthGoals.filter((g) => g.metricKey === metricKey).map((g) => g.employeeId)),
+    ];
+    let teamTarget = 0;
+    for (const eid of employeeIds) {
+      let employeeGeo: NetworkGeoMap;
+      if (metric === "revenue") {
+        employeeGeo = await queryRevenueNetworkGeo(workspaceId, range, eid, allowedNetworkNames);
+      } else if (metric === "testing") {
+        employeeGeo = await queryTestingNetworkGeo(workspaceId, eid, allowedNetworkNames);
+      } else {
+        employeeGeo = await queryWorkingNetworkGeo(workspaceId, eid, allowedNetworkNames);
+      }
+      teamTarget += computeEffectiveMetricTarget(monthGoals, metricKey, eid, employeeGeo);
+    }
+    scopedTarget = teamTarget;
+  }
 
   const xpAvailable = monthGoals
     .filter((g) => {

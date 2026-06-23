@@ -50,6 +50,7 @@ export type MetricBreakdownGeoRow = {
   current: number;
   target: number;
   percent: number;
+  targetSource?: "inherited" | "custom" | "none";
 };
 
 export type MetricBreakdownNetworkRow = {

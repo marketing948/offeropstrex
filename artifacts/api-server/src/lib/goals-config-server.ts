@@ -83,6 +83,10 @@ export async function loadGoalsConfig(workspaceId: number): Promise<ServerGoalsC
   }
 }
 
+export function isExplicitNetworkGeoGoal(g: ServerWorkerGoalTarget): boolean {
+  return !!(g.affiliateNetworkName?.trim() && g.geoCode?.trim());
+}
+
 export function goalsForMonth(
   goals: ServerWorkerGoalTarget[],
   monthKey: string,
@@ -92,6 +96,19 @@ export function goalsForMonth(
       g.isActive &&
       g.monthlyTarget > 0 &&
       (!g.monthKey || g.monthKey === monthKey),
+  );
+}
+
+/** Includes explicit network+GEO overrides with target 0 (for breakdown / effective totals). */
+export function goalsForMonthBreakdown(
+  goals: ServerWorkerGoalTarget[],
+  monthKey: string,
+): ServerWorkerGoalTarget[] {
+  return goals.filter(
+    (g) =>
+      g.isActive &&
+      (!g.monthKey || g.monthKey === monthKey) &&
+      (g.monthlyTarget > 0 || isExplicitNetworkGeoGoal(g)),
   );
 }
 
