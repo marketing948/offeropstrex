@@ -46,10 +46,12 @@ export function PaceBadge({ status }: { status: PaceStatus }) {
 export function PaceDetailPanel({
   pace,
   actual,
+  monthlyTarget,
   format,
 }: {
   pace: PaceEvaluation;
   actual: number;
+  monthlyTarget: number;
   format: "currency" | "count";
 }) {
   const variance = formatPaceVariance(pace);
@@ -57,6 +59,10 @@ export function PaceDetailPanel({
     <div className="mt-4 rounded-xl border border-slate-200/80 bg-white/90 px-4 py-3 text-xs shadow-inner">
       <div className="grid grid-cols-2 gap-x-4 gap-y-2">
         <span className="font-medium text-slate-500">Goal</span>
+        <span className="text-right text-sm font-bold tabular-nums text-slate-800">
+          {fmtVal(monthlyTarget, format)}
+        </span>
+        <span className="font-medium text-slate-500">Expected today</span>
         <span className="text-right text-sm font-bold tabular-nums text-slate-800">
           {fmtVal(pace.expectedByToday, format)}
         </span>

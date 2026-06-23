@@ -18,7 +18,7 @@ import { wsQueryOpts } from "@/lib/ws-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { useAuth } from "@/lib/auth";
 import { authedJson } from "@/lib/api-fetch";
-import { useWorkerMonthlyGoals } from "@/lib/performance-engine/use-worker-monthly-goals";
+import { useMonthlyGoalsScope } from "@/lib/performance-engine/use-monthly-goals-scope";
 import { fetchBatchHealth, getBatchHealthQueryKey, type BatchHealthResponse } from "@/lib/batch-health-api";
 import {
   buildMissionControlRows,
@@ -377,34 +377,23 @@ function networkRowsForGoal(
 }
 
 export function buildGoalCards(
-  kpiTargets: KpiTarget[],
   mtdRevenue: number,
   campaigns: OpsCampaignRow[],
   batches: TestingBatch[],
   networkGroups: NetworkGroup[],
-  workerPe?: {
+  peGoals: {
     revenue: { current: number; target: number };
     testing: { current: number; target: number };
     working: { current: number; target: number };
-  } | null,
+  },
 ): GoalCardModel[] {
-  const revenueT = workerPe
-    ? { target: workerPe.revenue.target, usingFallback: workerPe.revenue.target <= 0 }
-    : resolveKpiTarget(kpiTargets, "revenue", OPS_V2_DEMO_FALLBACKS.revenue);
-  const testingT = workerPe
-    ? { target: workerPe.testing.target, usingFallback: workerPe.testing.target <= 0 }
-    : resolveKpiTarget(kpiTargets, "testingBatches", OPS_V2_DEMO_FALLBACKS.testingBatches);
-  const workingT = workerPe
-    ? { target: workerPe.working.target, usingFallback: workerPe.working.target <= 0 }
-    : resolveKpiTarget(kpiTargets, "workingCampaigns", OPS_V2_DEMO_FALLBACKS.workingCampaigns);
+  const revenueT = { target: peGoals.revenue.target, usingFallback: peGoals.revenue.target <= 0 };
+  const testingT = { target: peGoals.testing.target, usingFallback: peGoals.testing.target <= 0 };
+  const workingT = { target: peGoals.working.target, usingFallback: peGoals.working.target <= 0 };
 
-  const workingCount = workerPe
-    ? workerPe.working.current
-    : campaigns.filter(isWorkingLiveCampaign).length;
-  const testingCount = workerPe
-    ? workerPe.testing.current
-    : batches.filter((b) => (ACTIVE_TESTING_STATUSES as readonly string[]).includes(b.status)).length;
-  const revenueActual = workerPe ? workerPe.revenue.current : mtdRevenue;
+  const workingCount = peGoals.working.current;
+  const testingCount = peGoals.testing.current;
+  const revenueActual = peGoals.revenue.current;
 
   return [
     {
@@ -419,7 +408,7 @@ export function buildGoalCards(
       supportsGeoDrilldown: true,
       networkRows: networkRowsForGoal(
         networkGroups,
-        kpiTargets,
+        [],
         "revenue",
         (g) => g.totalRevenue,
         true,
@@ -437,7 +426,7 @@ export function buildGoalCards(
       supportsGeoDrilldown: false,
       networkRows: networkRowsForGoal(
         networkGroups,
-        kpiTargets,
+        [],
         "testingBatches",
         (g) => g.totalTesting,
         false,
@@ -455,7 +444,7 @@ export function buildGoalCards(
       supportsGeoDrilldown: false,
       networkRows: networkRowsForGoal(
         networkGroups,
-        kpiTargets,
+        [],
         "workingCampaigns",
         (g) => g.totalWorking,
         false,
@@ -511,9 +500,12 @@ function computeGoalBasedFocus(
   goalCards: GoalCardModel[],
   networkGroups: NetworkGroup[],
 ): FocusItem[] {
-  const revenueCard = goalCards.find((g) => g.kind === "revenue")!;
-  const testingCard = goalCards.find((g) => g.kind === "testing")!;
-  const workingCard = goalCards.find((g) => g.kind === "working")!;
+  const revenueCard = goalCards.find((g) => g.kind === "revenue");
+  const testingCard = goalCards.find((g) => g.kind === "testing");
+  const workingCard = goalCards.find((g) => g.kind === "working");
+  if (!revenueCard || !testingCard || !workingCard) {
+    return [];
+  }
 
   const scored: ScoredGeo[] = [];
   for (const group of networkGroups) {
@@ -900,6 +892,7 @@ export function useOpsDrilldownData(
   batches: TestingBatch[],
   campaigns: OpsCampaignRow[],
   tasks: TodoTask[] = [],
+  scopeEmployeeId?: number | "" | null,
 ) {
   const { activeWorkspaceId } = useWorkspace();
   const { currentEmployee } = useAuth();
@@ -907,7 +900,11 @@ export function useOpsDrilldownData(
   const { dateFrom, dateTo } = monthToDateRange();
   const { data: cfgRaw } = useGoalsConfig();
   const cfg = cfgRaw ?? DEFAULT_CONFIG;
-  const { isWorker, workerRow, isLoading: workerGoalsLoading } = useWorkerMonthlyGoals();
+  const {
+    isWorker,
+    peGoals,
+    isLoading: peGoalsLoading,
+  } = useMonthlyGoalsScope(scopeEmployeeId);
 
   const { data: assignedNetworks = [] } = useQuery({
     queryKey: ["my-affiliate-networks", wsId, currentEmployee?.id],
@@ -1005,26 +1002,18 @@ export function useOpsDrilldownData(
     return buildNetworkGroups(cells, cfg.kpiTargets, breakdowns?.byNetwork ?? [], allowedNetworkNames);
   }, [batches, enrichedCampaigns, normalizedPerf, cfg.kpiTargets, breakdowns?.byNetwork, allowedNetworkNames]);
 
-  const workerPe = workerRow
-    ? {
-        revenue: { current: workerRow.revenue.current, target: workerRow.revenue.target },
-        testing: { current: workerRow.testing.current, target: workerRow.testing.target },
-        working: { current: workerRow.working.current, target: workerRow.working.target },
-      }
-    : null;
+  const workerPe = peGoals;
 
-  const goalCards = useMemo(
-    () =>
-      buildGoalCards(
-        cfg.kpiTargets,
-        mtdRevenue,
-        enrichedCampaigns,
-        batches,
-        networkGroups,
-        isWorker ? workerPe : null,
-      ),
-    [cfg.kpiTargets, mtdRevenue, enrichedCampaigns, batches, networkGroups, isWorker, workerPe],
-  );
+  const goalCards = useMemo(() => {
+    const pe =
+      workerPe ??
+      ({
+        revenue: { current: 0, target: 0 },
+        testing: { current: 0, target: 0 },
+        working: { current: 0, target: 0 },
+      } as const);
+    return buildGoalCards(mtdRevenue, enrichedCampaigns, batches, networkGroups, pe);
+  }, [mtdRevenue, enrichedCampaigns, batches, networkGroups, workerPe]);
 
   const hasAnyActivity = networkGroups.some((g) => g.hasActivity) || mtdRevenue > 0;
 
@@ -1052,13 +1041,13 @@ export function useOpsDrilldownData(
     mtdRevenue,
     attributedRevenueMtd,
     unattributedRevenueMtd: Math.max(0, mtdRevenue - attributedRevenueMtd),
-    isLoading: perfLoading || breakdownsLoading || healthLoading || (isWorker && workerGoalsLoading),
+    isLoading: perfLoading || breakdownsLoading || healthLoading || peGoalsLoading,
     isError,
     error,
     refetch,
     isFetching,
     hasAnyActivity,
     isWorker,
-    workerRow,
+    peGoals: workerPe,
   };
 }

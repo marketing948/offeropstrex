@@ -18,6 +18,7 @@ export function OpsOperatorTop({
   loading: externalLoading,
   selectedMetric,
   onSelectMetric,
+  scopeEmployeeId,
 }: {
   batches: TestingBatch[];
   campaigns: OpsCampaignRow[];
@@ -25,8 +26,9 @@ export function OpsOperatorTop({
   loading?: boolean;
   selectedMetric: GoalKind;
   onSelectMetric: (kind: GoalKind) => void;
+  scopeEmployeeId?: number | "" | null;
 }) {
-  const data = useOpsDrilldownData(batches, campaigns, tasks);
+  const data = useOpsDrilldownData(batches, campaigns, tasks, scopeEmployeeId);
   const loading = externalLoading || data.isLoading;
 
   return (

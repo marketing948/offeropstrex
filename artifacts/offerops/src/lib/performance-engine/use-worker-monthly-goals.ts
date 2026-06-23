@@ -1,12 +1,6 @@
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useAuth } from "@/lib/auth";
-import { useWorkspace } from "@/lib/workspace-context";
-import {
-  currentMonthKey,
-  fetchMonthlyGoalsDashboard,
-  type MonthlyGoalsDashboard,
-  type WorkerMonthlyRow,
-} from "@/lib/performance-engine/api";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { currentMonthKey } from "@/lib/performance-engine/api";
+import { useMonthlyGoalsScope } from "@/lib/performance-engine/use-monthly-goals-scope";
 
 export function workerMonthlyGoalsQueryKey(
   workspaceId: number | null | undefined,
@@ -41,25 +35,11 @@ export async function refetchWorkerRankAndGoals(
 }
 
 export function useWorkerMonthlyGoals(enabled = true) {
-  const { currentEmployee } = useAuth();
-  const { activeWorkspaceId } = useWorkspace();
-  const isWorker = currentEmployee?.role !== "admin";
-  const monthKey = currentMonthKey();
-
-  const query = useQuery({
-    queryKey: workerMonthlyGoalsQueryKey(activeWorkspaceId, monthKey, currentEmployee?.id),
-    enabled: enabled && !!activeWorkspaceId && !!currentEmployee,
-    queryFn: () =>
-      isWorker
-        ? fetchMonthlyGoalsDashboard(activeWorkspaceId!, monthKey, currentEmployee!.id)
-        : fetchMonthlyGoalsDashboard(activeWorkspaceId!, monthKey),
-    staleTime: 30_000,
-    refetchOnWindowFocus: true,
-  });
-
-  const workerRow: WorkerMonthlyRow | undefined = query.data?.workers.find(
-    (w) => w.employeeId === currentEmployee?.id,
-  );
-
-  return { ...query, isWorker, workerRow, dashboard: query.data as MonthlyGoalsDashboard | undefined };
+  const scope = useMonthlyGoalsScope(undefined, enabled);
+  return {
+    ...scope,
+    isWorker: scope.isWorker,
+    workerRow: scope.workerRow,
+    dashboard: scope.dashboard,
+  };
 }

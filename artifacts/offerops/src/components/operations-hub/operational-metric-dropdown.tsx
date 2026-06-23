@@ -206,7 +206,7 @@ export function goalKindToTheme(kind: "revenue" | "testing" | "working"): Operat
 }
 
 export function goalKindToUnitLabel(kind: "revenue" | "testing" | "working"): string | undefined {
-  if (kind === "testing") return "Offers";
+  if (kind === "testing") return "Campaigns";
   if (kind === "working") return "Campaigns";
   return undefined;
 }

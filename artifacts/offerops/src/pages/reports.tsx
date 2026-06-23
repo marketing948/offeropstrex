@@ -48,7 +48,6 @@ import { useDateFilterState } from "@/hooks/use-date-filter-state";
 import { DATE_RANGE_PRESET_LABELS } from "@/lib/date-filter-presets";
 import { useAuth } from "@/lib/auth";
 import { authedJson } from "@/lib/api-fetch";
-import { DEFAULT_CONFIG, useGoalsConfig } from "@/lib/goals-config";
 import {
   buildAllReportEntities,
   buildMasterStringOptions,
@@ -59,11 +58,7 @@ import {
   type LiveCampaignsListResponse,
   type ReportEntityRow,
 } from "@/lib/reports/reports-data";
-import {
-  buildReportsGoalDashboard,
-  scopeEntitiesForDashboard,
-} from "@/lib/reports/reports-goal-dashboard";
-import { useWorkerMonthlyGoals } from "@/lib/performance-engine/use-worker-monthly-goals";
+import { useReportsPeGoalDashboard } from "@/lib/reports/use-reports-pe-goal-dashboard";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   AreaChart, Area, Cell,
@@ -498,27 +493,8 @@ export default function Reports() {
     filterCampaignType,
   ]);
 
-  const { data: goalsConfigRaw } = useGoalsConfig();
-  const kpiTargets = (goalsConfigRaw ?? DEFAULT_CONFIG).kpiTargets ?? [];
-  const { workerRow } = useWorkerMonthlyGoals();
-
-  const workerPe = workerRow
-    ? {
-        revenue: { current: workerRow.revenue.current, target: workerRow.revenue.target },
-        testing: { current: workerRow.testing.current, target: workerRow.testing.target },
-        working: { current: workerRow.working.current, target: workerRow.working.target },
-      }
-    : null;
-
-  const dashboardEntities = useMemo(
-    () => scopeEntitiesForDashboard(filteredReportEntities, isAdmin, currentEmployee?.id),
-    [filteredReportEntities, isAdmin, currentEmployee?.id],
-  );
-
-  const goalDashboard = useMemo(
-    () => buildReportsGoalDashboard(dashboardEntities, employees, isWorker ? [] : kpiTargets, workerPe),
-    [dashboardEntities, employees, isWorker, kpiTargets, workerPe],
-  );
+  const reportGoalsEmployeeScope = isAdmin ? filterEmployee : currentEmployee?.id ?? "";
+  const peGoalDashboard = useReportsPeGoalDashboard(reportGoalsEmployeeScope);
 
   // Master filter catalogs — worker sees only assigned networks in dropdown
   const networks = useMemo(() => {
@@ -718,13 +694,7 @@ export default function Reports() {
       {/* ══════════════════════════════════════
           DASHBOARD TAB
       ══════════════════════════════════════ */}
-      {tab === "ops" && (
-        <ReportsGoalDashboardTab
-          loading={reportsCoreLoading}
-          isAdmin={isAdmin}
-          model={goalDashboard}
-        />
-      )}
+      {tab === "ops" && <ReportsGoalDashboardTab dashboard={peGoalDashboard} />}
 
       {/* ══════════════════════════════════════
           BATCHES TAB
