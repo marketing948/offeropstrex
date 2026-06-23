@@ -25,10 +25,23 @@ function formatSummary(metric: MetricBreakdownKind, summary: MetricBreakdownResu
   return `${summary.current.toLocaleString()} / ${summary.target.toLocaleString()} campaigns`;
 }
 
-function formatValue(metric: MetricBreakdownKind, current: number, target?: number): string {
+function geoTargetConfigured(
+  target: number,
+  targetSource?: "inherited" | "custom" | "none",
+): boolean {
+  return targetSource === "inherited" || targetSource === "custom" || target > 0;
+}
+
+function formatValue(
+  metric: MetricBreakdownKind,
+  current: number,
+  target?: number,
+  targetSource?: "inherited" | "custom" | "none",
+): string {
+  const hasTarget = target != null && geoTargetConfigured(target, targetSource);
   const cur = metric === "revenue" ? `$${current.toLocaleString()}` : current.toLocaleString();
-  if (target == null || target <= 0) return cur;
-  const tgt = metric === "revenue" ? `$${target.toLocaleString()}` : target.toLocaleString();
+  if (!hasTarget) return cur;
+  const tgt = metric === "revenue" ? `$${target!.toLocaleString()}` : target!.toLocaleString();
   return `${cur} / ${tgt}`;
 }
 
@@ -171,15 +184,29 @@ export function KpiBreakdownPanel({
                   <p className="text-sm text-muted-foreground">No GEO breakdown for this network yet.</p>
                 ) : (
                   <ul className="space-y-2">
-                    {selectedNetwork.geos.map((geo) => (
+                    {selectedNetwork.geos.map((geo) => {
+                      const configured = geoTargetConfigured(geo.target, geo.targetSource);
+                      return (
                       <li key={geo.key} className="rounded-lg border bg-white px-3 py-2">
                         <div className="flex items-center justify-between gap-2 text-sm">
-                          <span className="font-medium">{geo.label}</span>
+                          <span className="font-medium">
+                            {geo.label}
+                            {geo.targetSource === "inherited" && (
+                              <span className="ml-1.5 text-[10px] font-semibold uppercase text-slate-500">
+                                Inherited
+                              </span>
+                            )}
+                            {geo.targetSource === "custom" && (
+                              <span className="ml-1.5 text-[10px] font-semibold uppercase text-blue-600">
+                                Custom
+                              </span>
+                            )}
+                          </span>
                           <span className="text-muted-foreground shrink-0">
-                            {formatValue(metric, geo.current, geo.target > 0 ? geo.target : undefined)}
+                            {formatValue(metric, geo.current, geo.target, geo.targetSource)}
                           </span>
                         </div>
-                        {geo.target > 0 && (
+                        {configured && (
                           <div className="mt-1.5 h-1.5 rounded-full bg-slate-100 overflow-hidden">
                             <div
                               className="h-full rounded-full bg-violet-500"
@@ -188,7 +215,8 @@ export function KpiBreakdownPanel({
                           </div>
                         )}
                       </li>
-                    ))}
+                      );
+                    })}
                   </ul>
                 )}
               </div>

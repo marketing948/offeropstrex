@@ -140,6 +140,31 @@ function formatActualTarget(
   );
 }
 
+function geoTargetConfigured(
+  target: number,
+  targetSource?: "inherited" | "custom" | "none",
+): boolean {
+  return targetSource === "inherited" || targetSource === "custom" || target > 0;
+}
+
+function GeoTargetBadge({ source }: { source?: "inherited" | "custom" | "none" }) {
+  if (source === "inherited") {
+    return (
+      <span className="ml-1.5 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+        Inherited
+      </span>
+    );
+  }
+  if (source === "custom") {
+    return (
+      <span className="ml-1.5 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-600">
+        Custom
+      </span>
+    );
+  }
+  return null;
+}
+
 function pctPillClass(pct: number | null, configured: boolean) {
   if (!configured || pct == null) {
     return "bg-slate-100 text-slate-500 border-slate-200";
@@ -228,6 +253,7 @@ function GeoMetricRow({
   configured,
   theme,
   format = "currency",
+  targetSource,
 }: {
   label: string;
   actual: number;
@@ -236,6 +262,7 @@ function GeoMetricRow({
   configured: boolean;
   theme: MetricTheme;
   format?: "currency" | "count";
+  targetSource?: "inherited" | "custom" | "none";
 }) {
   const pct = progressPctValue ?? 0;
   const barWidth = configured && progressPctValue != null ? Math.min(100, pct) : 0;
@@ -245,7 +272,10 @@ function GeoMetricRow({
       <div className="flex items-center gap-3 border-t border-slate-100 py-3 pl-6 pr-4">
         <div className={`ml-2 w-0.5 self-stretch rounded-full ${theme.geoGuide}`} aria-hidden />
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-        <span className="min-w-0 flex-1 text-sm font-semibold text-slate-700">{label}</span>
+        <span className="min-w-0 flex-1 text-sm font-semibold text-slate-700">
+          {label}
+          <GeoTargetBadge source={targetSource} />
+        </span>
         <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-600">
           {format === "currency" ? (
             <>
@@ -486,18 +516,22 @@ export function RevenueByNetworkSection({
                     onToggle={() => toggleNetwork(net.key)}
                   />
                   {isExpanded &&
-                    visibleGeos.map((geo) => (
+                    visibleGeos.map((geo) => {
+                      const configured = geoTargetConfigured(geo.target, geo.targetSource);
+                      return (
                       <GeoMetricRow
                         key={`${net.key}-${geo.key}`}
                         label={geo.label}
                         actual={geo.current}
-                        target={geo.target > 0 ? geo.target : null}
-                        progressPctValue={geo.target > 0 ? geo.percent : null}
-                        configured={geo.target > 0}
+                        target={configured ? geo.target : null}
+                        progressPctValue={configured ? geo.percent : null}
+                        configured={configured}
                         theme={theme}
                         format={format}
+                        targetSource={geo.targetSource}
                       />
-                    ))}
+                      );
+                    })}
                 </div>
               );
             })}

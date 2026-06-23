@@ -21,9 +21,16 @@ import {
 import {
   findDuplicateGoal,
   goalsForMonth,
+  goalsForMonthBreakdown,
   loadGoalsConfig,
   type ServerWorkerGoalTarget,
 } from "./goals-config-server.ts";
+import { computeEffectiveMetricTarget, type NetworkGeoMap } from "./goal-effective-targets.ts";
+import {
+  queryRevenueNetworkGeo,
+  queryTestingNetworkGeo,
+  queryWorkingNetworkGeo,
+} from "./metric-breakdown-service.ts";
 
 const ACTIVE_TESTING_STATUSES = [
   "NEW_BATCH",
@@ -91,6 +98,58 @@ function sumGoalsForMetric(
     target: filtered.reduce((s, g) => s + g.monthlyTarget, 0),
     xpAvailable: filtered.reduce((s, g) => s + (g.xpReward ?? 0), 0),
   };
+}
+
+type EmployeeActivityMaps = {
+  revenue: NetworkGeoMap;
+  testing: NetworkGeoMap;
+  working: NetworkGeoMap;
+};
+
+function metricKeyToActivityKey(
+  metricKey: ServerWorkerGoalTarget["metricKey"],
+): keyof EmployeeActivityMaps {
+  if (metricKey === "revenue") return "revenue";
+  if (metricKey === "testingBatches") return "testing";
+  return "working";
+}
+
+async function loadEmployeeActivityMaps(
+  workspaceId: number,
+  range: MetricsDateRange,
+  employeeIds: number[],
+): Promise<Map<number, EmployeeActivityMaps>> {
+  const entries = await Promise.all(
+    employeeIds.map(async (employeeId) => {
+      const [revenue, testing, working] = await Promise.all([
+        queryRevenueNetworkGeo(workspaceId, range, employeeId),
+        queryTestingNetworkGeo(workspaceId, employeeId),
+        queryWorkingNetworkGeo(workspaceId, employeeId),
+      ]);
+      return [employeeId, { revenue, testing, working }] as const;
+    }),
+  );
+  return new Map(entries);
+}
+
+function effectiveTargetForMetric(
+  breakdownGoals: ServerWorkerGoalTarget[],
+  metricKey: ServerWorkerGoalTarget["metricKey"],
+  activityMaps: Map<number, EmployeeActivityMaps>,
+  employeeId?: number,
+): number {
+  const activityKey = metricKeyToActivityKey(metricKey);
+  if (employeeId != null) {
+    const activity = activityMaps.get(employeeId)?.[activityKey] ?? new Map();
+    return computeEffectiveMetricTarget(breakdownGoals, metricKey, employeeId, activity);
+  }
+  const employeeIds = [
+    ...new Set(breakdownGoals.filter((g) => g.metricKey === metricKey).map((g) => g.employeeId)),
+  ];
+  return employeeIds.reduce((sum, eid) => {
+    const activity = activityMaps.get(eid)?.[activityKey] ?? new Map();
+    return sum + computeEffectiveMetricTarget(breakdownGoals, metricKey, eid, activity);
+  }, 0);
 }
 
 export function deriveWorkerStatus(
@@ -260,6 +319,7 @@ export async function buildMonthlyGoalsDashboard(
 
   const cfg = await loadGoalsConfig(workspaceId);
   const monthGoals = goalsForMonth(cfg.workerGoalTargets, monthKey);
+  const breakdownGoals = goalsForMonthBreakdown(cfg.workerGoalTargets, monthKey);
 
   const [employees, revenueProfit, testingCounts, workingCounts] = await Promise.all([
     db
@@ -292,10 +352,24 @@ export async function buildMonthlyGoalsDashboard(
   await syncGoalCompletionXp(workspaceId, monthKey, monthGoals, actuals);
 
   const xpByEmployee = await sumXpByEmployeeForMonth(workspaceId, monthKey);
+  const activityMaps = await loadEmployeeActivityMaps(
+    workspaceId,
+    range,
+    employees.map((emp) => emp.id),
+  );
 
-  const revGoals = sumGoalsForMetric(monthGoals, "revenue", scopeEmployeeId);
-  const testGoals = sumGoalsForMetric(monthGoals, "testingBatches", scopeEmployeeId);
-  const workGoals = sumGoalsForMetric(monthGoals, "workingCampaigns", scopeEmployeeId);
+  const revGoals = {
+    target: effectiveTargetForMetric(breakdownGoals, "revenue", activityMaps, scopeEmployeeId),
+    xpAvailable: sumGoalsForMetric(monthGoals, "revenue", scopeEmployeeId).xpAvailable,
+  };
+  const testGoals = {
+    target: effectiveTargetForMetric(breakdownGoals, "testingBatches", activityMaps, scopeEmployeeId),
+    xpAvailable: sumGoalsForMetric(monthGoals, "testingBatches", scopeEmployeeId).xpAvailable,
+  };
+  const workGoals = {
+    target: effectiveTargetForMetric(breakdownGoals, "workingCampaigns", activityMaps, scopeEmployeeId),
+    xpAvailable: sumGoalsForMetric(monthGoals, "workingCampaigns", scopeEmployeeId).xpAvailable,
+  };
 
   const teamRevenue = [...actuals.values()].reduce((s, a) => s + a.revenue, 0);
   const teamTesting = [...actuals.values()].reduce((s, a) => s + a.testing, 0);
@@ -339,9 +413,18 @@ export async function buildMonthlyGoalsDashboard(
 
   const workers: WorkerMonthlyRow[] = employees.map((emp) => {
     const a = actuals.get(emp.id) ?? { revenue: 0, testing: 0, working: 0 };
-    const rev = sumGoalsForMetric(monthGoals, "revenue", emp.id);
-    const tst = sumGoalsForMetric(monthGoals, "testingBatches", emp.id);
-    const wrk = sumGoalsForMetric(monthGoals, "workingCampaigns", emp.id);
+    const rev = {
+      target: effectiveTargetForMetric(breakdownGoals, "revenue", activityMaps, emp.id),
+      xpAvailable: sumGoalsForMetric(monthGoals, "revenue", emp.id).xpAvailable,
+    };
+    const tst = {
+      target: effectiveTargetForMetric(breakdownGoals, "testingBatches", activityMaps, emp.id),
+      xpAvailable: sumGoalsForMetric(monthGoals, "testingBatches", emp.id).xpAvailable,
+    };
+    const wrk = {
+      target: effectiveTargetForMetric(breakdownGoals, "workingCampaigns", activityMaps, emp.id),
+      xpAvailable: sumGoalsForMetric(monthGoals, "workingCampaigns", emp.id).xpAvailable,
+    };
     const metrics = {
       revenue: { current: a.revenue, target: rev.target },
       testing: { current: a.testing, target: tst.target },
