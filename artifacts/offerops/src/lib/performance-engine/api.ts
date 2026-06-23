@@ -230,6 +230,32 @@ export async function replaceWorkerGoalPlan(payload: ReplaceWorkerGoalPlanPayloa
   return (await res.json()) as { ok: boolean; goals: UpsertWorkerGoalPayload["goal"][] };
 }
 
+export type ResetWorkerGoalPlanNetworkPayload = {
+  workspaceId: number;
+  employeeId: number;
+  monthKey: string;
+  affiliateNetworkName: string;
+  confirmation: true;
+};
+
+export async function resetWorkerGoalPlanNetwork(payload: ResetWorkerGoalPlanNetworkPayload) {
+  const res = await authedFetch("/api/performance/worker-goals/plan/reset-network", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let detail = text;
+    try {
+      detail = (JSON.parse(text) as { error?: string }).error ?? text;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail || `${res.status} ${res.statusText}`);
+  }
+  return (await res.json()) as { ok: boolean; removedCount: number; removedGoalIds: string[] };
+}
+
 export function currentMonthKey(d = new Date()): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }

@@ -121,3 +121,24 @@ export function loadPlanFromGoals(
 
   return { selectedGeoCodes, metrics, overrides };
 }
+
+export function buildPlanHydrationKey(params: {
+  mode: "create" | "edit";
+  employeeId: number;
+  monthKey: string;
+  networkName?: string | null;
+}): string {
+  const net = (params.networkName ?? "").trim();
+  return `${params.mode}:${params.employeeId}:${params.monthKey}:${net}`;
+}
+
+export function shouldRehydratePlanForm(params: {
+  open: boolean;
+  hydrationKey: string | null;
+  lastHydratedKey: string | null;
+  isDirty: boolean;
+}): boolean {
+  if (!params.open || params.hydrationKey == null) return false;
+  if (params.isDirty) return false;
+  return params.lastHydratedKey !== params.hydrationKey;
+}
