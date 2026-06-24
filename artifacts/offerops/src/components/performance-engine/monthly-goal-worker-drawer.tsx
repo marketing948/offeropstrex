@@ -63,7 +63,14 @@ function MetricSummaryCard({
   );
 }
 
-function ScopeBadge({ kind }: { kind: "worker-wide" | "network" }) {
+function ScopeBadge({
+  kind,
+  inferredFromSummary,
+}: {
+  kind: "worker-wide" | "network";
+  inferredFromSummary?: boolean;
+}) {
+  const workerLabel = inferredFromSummary ? "Worker-wide · Existing goal" : "Worker-wide";
   return (
     <span
       className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
@@ -72,7 +79,7 @@ function ScopeBadge({ kind }: { kind: "worker-wide" | "network" }) {
           : "bg-indigo-50 text-indigo-700"
       }`}
     >
-      {kind === "worker-wide" ? "Worker-wide" : "Network goal"}
+      {kind === "worker-wide" ? workerLabel : "Network goal"}
     </span>
   );
 }
@@ -208,7 +215,10 @@ function NetworkRow({
             <p className="font-medium leading-snug break-words" title={label}>
               {label}
             </p>
-            <ScopeBadge kind={row.isWorkerWide ? "worker-wide" : "network"} />
+            <ScopeBadge
+              kind={row.isWorkerWide ? "worker-wide" : "network"}
+              inferredFromSummary={row.inferredFromSummary}
+            />
           </div>
         </div>
         <span>{formatNetworkCell("revenue", row.revenueTarget)}</span>
@@ -259,16 +269,15 @@ export function MonthlyGoalWorkerDrawer({
 
   if (!worker) return null;
 
-  const allocation = summarizeWorkerGoalAllocation(goals, worker.employeeId, monthKey);
+  const allocation = summarizeWorkerGoalAllocation(goals, worker.employeeId, monthKey, {
+    revenue: worker.revenue,
+    testing: worker.testing,
+    working: worker.working,
+    xpEarned: worker.xpEarned,
+  });
   const monthLabel = formatMonthLabel(monthKey);
 
   function networksEmptyMessage(): string {
-    if (!allocation.counts.hasAnyGoals) {
-      return `No monthly goals configured for ${worker!.name} in ${monthLabel}.`;
-    }
-    if (allocation.workerWideRow && allocation.networkRows.length === 0) {
-      return "Worker-wide goals are configured. No network-specific goals yet.";
-    }
     return `No monthly goals configured for ${worker!.name} in ${monthLabel}.`;
   }
 

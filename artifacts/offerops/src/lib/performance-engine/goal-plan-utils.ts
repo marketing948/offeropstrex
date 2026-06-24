@@ -2,6 +2,49 @@ import type { WorkerGoalTarget } from "@/lib/worker-goals";
 
 export type GoalMetric = "revenue" | "testingBatches" | "workingCampaigns";
 
+/** Same shape as Monthly Goals table row metric fields — drawer summary layer. */
+export type WorkerMonthlyGoalSummary = {
+  revenue: { current: number; target: number };
+  testing: { current: number; target: number };
+  working: { current: number; target: number };
+  xpEarned?: number;
+};
+
+const GOAL_METRICS: GoalMetric[] = ["revenue", "testingBatches", "workingCampaigns"];
+
+/** Normalize legacy / alias goal kind names to canonical metric keys. */
+export function normalizeGoalKind(goalKind: string): GoalMetric | null {
+  const key = goalKind.trim();
+  if (key === "revenue") return "revenue";
+  if (key === "testing" || key === "testingBatches") return "testingBatches";
+  if (key === "working" || key === "workingCampaigns") return "workingCampaigns";
+  return null;
+}
+
+function canonicalGoalMetric(key: string): GoalMetric | null {
+  return normalizeGoalKind(key);
+}
+
+export function monthlySummaryHasTargets(summary: WorkerMonthlyGoalSummary): boolean {
+  return summary.revenue.target > 0 || summary.testing.target > 0 || summary.working.target > 0;
+}
+
+export function buildWorkerWideAllocationFromMonthlySummary(
+  summary: WorkerMonthlyGoalSummary,
+): WorkerGoalNetworkRow {
+  return {
+    networkName: null,
+    isWorkerWide: true,
+    revenueTarget: summary.revenue.target > 0 ? summary.revenue.target : null,
+    testingTarget: summary.testing.target > 0 ? summary.testing.target : null,
+    workingTarget: summary.working.target > 0 ? summary.working.target : null,
+    selectedGeoCodes: [],
+    overrideCount: 0,
+    geoSplitRows: [],
+    inferredFromSummary: true,
+  };
+}
+
 export function previewInheritedShares(
   metric: GoalMetric,
   networkTarget: number,
@@ -50,11 +93,12 @@ export function goalsForWorkerMonth(
   employeeId: number,
   monthKey: string,
 ): WorkerGoalTarget[] {
+  const empId = Number(employeeId);
   return goals.filter(
     (g) =>
       g.isActive &&
-      g.employeeId === employeeId &&
-      (g.monthKey == null || g.monthKey === monthKey),
+      Number(g.employeeId) === empId &&
+      (!g.monthKey?.trim() || g.monthKey.trim() === monthKey),
   );
 }
 
@@ -92,11 +136,12 @@ export function loadPlanFromGoals(
   let selectedGeoCodes: string[] = [];
   for (const g of scoped) {
     if (g.geoCode?.trim()) continue;
-    if (g.metricKey === "revenue" || g.metricKey === "testingBatches" || g.metricKey === "workingCampaigns") {
-      metrics[g.metricKey] = {
+    const metric = canonicalGoalMetric(g.metricKey);
+    if (metric) {
+      metrics[metric] = {
         enabled: true,
         target: String(g.monthlyTarget),
-        xp: String(g.xpReward ?? metrics[g.metricKey].xp),
+        xp: String(g.xpReward ?? metrics[metric].xp),
       };
       if (g.selectedGeoCodes?.length) {
         selectedGeoCodes = g.selectedGeoCodes;
@@ -106,18 +151,17 @@ export function loadPlanFromGoals(
 
   const overrides = scoped
     .filter((g) => g.geoCode?.trim())
-    .filter(
-      (g): g is WorkerGoalTarget & { metricKey: GoalMetric; geoCode: string } =>
-        (g.metricKey === "revenue" ||
-          g.metricKey === "testingBatches" ||
-          g.metricKey === "workingCampaigns") &&
-        !!g.geoCode?.trim(),
-    )
-    .map((g) => ({
-      metricKey: g.metricKey,
-      geoCode: g.geoCode.trim(),
-      target: String(g.monthlyTarget),
-    }));
+    .filter((g): g is WorkerGoalTarget & { geoCode: string } => !!g.geoCode?.trim())
+    .map((g) => {
+      const metric = canonicalGoalMetric(g.metricKey);
+      if (!metric) return null;
+      return {
+        metricKey: metric,
+        geoCode: g.geoCode!.trim(),
+        target: String(g.monthlyTarget),
+      };
+    })
+    .filter((row): row is { metricKey: GoalMetric; geoCode: string; target: string } => row != null);
 
   return { selectedGeoCodes, metrics, overrides };
 }
@@ -156,12 +200,6 @@ export type NetworkPlanSummary = {
   overrides: { metricKey: GoalMetric; geoCode: string; target: number }[];
 };
 
-const GOAL_METRICS: GoalMetric[] = ["revenue", "testingBatches", "workingCampaigns"];
-
-function isGoalMetric(key: string): key is GoalMetric {
-  return GOAL_METRICS.includes(key as GoalMetric);
-}
-
 export function summarizeWorkerPlansByNetwork(
   goals: WorkerGoalTarget[],
   employeeId: number,
@@ -187,17 +225,18 @@ export function summarizeWorkerPlansByNetwork(
   for (const g of scoped) {
     const net = g.affiliateNetworkName?.trim() || null;
     const bucket = getBucket(net);
-    if (!isGoalMetric(g.metricKey)) continue;
+    const metric = canonicalGoalMetric(g.metricKey);
+    if (!metric) continue;
     if (g.geoCode?.trim()) {
       bucket.overrides.push({
-        metricKey: g.metricKey,
+        metricKey: metric,
         geoCode: g.geoCode.trim(),
         target: g.monthlyTarget,
       });
       continue;
     }
     bucket.metrics.push({
-      metricKey: g.metricKey,
+      metricKey: metric,
       target: g.monthlyTarget,
       xp: g.xpReward ?? 0,
     });
@@ -235,6 +274,8 @@ export type WorkerGoalNetworkRow = {
   selectedGeoCodes: string[];
   overrideCount: number;
   geoSplitRows: WorkerGoalGeoSplitRow[];
+  /** Populated when allocation rows are missing but Monthly Goals table targets exist. */
+  inferredFromSummary?: boolean;
 };
 
 export type WorkerGoalGeoAllocationRow = {
@@ -374,18 +415,44 @@ function geoRowsFromNetworks(networkRows: WorkerGoalNetworkRow[]): WorkerGoalGeo
   });
 }
 
+function workerWideMetricLabelsFromRow(row: WorkerGoalNetworkRow | null): string[] {
+  const labels: string[] = [];
+  if (!row) return labels;
+  if (row.revenueTarget != null && row.revenueTarget > 0) {
+    labels.push(METRIC_LABELS_SHORT.revenue);
+  }
+  if (row.testingTarget != null && row.testingTarget > 0) {
+    labels.push(METRIC_LABELS_SHORT.testingBatches);
+  }
+  if (row.workingTarget != null && row.workingTarget > 0) {
+    labels.push(METRIC_LABELS_SHORT.workingCampaigns);
+  }
+  return labels;
+}
+
 export function summarizeWorkerGoalAllocation(
   goals: WorkerGoalTarget[],
   employeeId: number,
   monthKey: string,
+  monthlySummary?: WorkerMonthlyGoalSummary | null,
 ): WorkerGoalAllocationSummary {
   const plans = summarizeWorkerPlansByNetwork(goals, employeeId, monthKey);
   const workerWidePlan = plans.find((p) => p.networkName == null) ?? null;
   const networkPlans = plans.filter((p) => p.networkName != null);
 
-  const workerWideRow = workerWidePlan ? planToNetworkRow(workerWidePlan) : null;
-  const networkRows = networkPlans.map(planToNetworkRow);
-  const geoRows = geoRowsFromNetworks(networkRows);
+  let workerWideRow = workerWidePlan ? planToNetworkRow(workerWidePlan) : null;
+  let networkRows = networkPlans.map(planToNetworkRow);
+  let geoRows = geoRowsFromNetworks(networkRows);
+
+  const hasAllocationGoals = plans.some((p) => p.metrics.length > 0 || p.overrides.length > 0);
+  const hasSummaryGoals = monthlySummary != null && monthlySummaryHasTargets(monthlySummary);
+  const hasAnyGoals = hasAllocationGoals || hasSummaryGoals;
+
+  if (!hasAllocationGoals && hasSummaryGoals && monthlySummary) {
+    workerWideRow = buildWorkerWideAllocationFromMonthlySummary(monthlySummary);
+    networkRows = [];
+    geoRows = [];
+  }
 
   const selectedGeoSet = new Set<string>();
   let overrideCount = 0;
@@ -394,20 +461,7 @@ export function summarizeWorkerGoalAllocation(
     overrideCount += row.overrideCount;
   }
 
-  const workerWideMetricLabels: string[] = [];
-  if (workerWideRow) {
-    if (workerWideRow.revenueTarget != null && workerWideRow.revenueTarget > 0) {
-      workerWideMetricLabels.push(METRIC_LABELS_SHORT.revenue);
-    }
-    if (workerWideRow.testingTarget != null && workerWideRow.testingTarget > 0) {
-      workerWideMetricLabels.push(METRIC_LABELS_SHORT.testingBatches);
-    }
-    if (workerWideRow.workingTarget != null && workerWideRow.workingTarget > 0) {
-      workerWideMetricLabels.push(METRIC_LABELS_SHORT.workingCampaigns);
-    }
-  }
-
-  const hasAnyGoals = plans.some((p) => p.metrics.length > 0 || p.overrides.length > 0);
+  const workerWideMetricLabels = workerWideMetricLabelsFromRow(workerWideRow);
 
   return {
     workerWideRow,
