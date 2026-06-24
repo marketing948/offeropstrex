@@ -1,17 +1,18 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { InitialsBadge } from "@/components/performance-engine/initials-badge";
-import { formatMonthLabel, type WorkerMonthlyRow } from "@/lib/performance-engine/api";
 import {
-  formatAllocationMetric,
-  summarizeWorkerGoalAllocation,
-  type GoalMetric,
-  type WorkerGoalGeoSplitRow,
-  type WorkerGoalNetworkRow,
-} from "@/lib/performance-engine/goal-plan-utils";
-import type { WorkerGoalTarget } from "@/lib/worker-goals";
+  fetchGoalAllocation,
+  formatMonthLabel,
+  type GoalAllocationGeoRow,
+  type GoalAllocationNetworkRow,
+  type NetworkAllocationSource,
+  type WorkerMonthlyRow,
+} from "@/lib/performance-engine/api";
+import { formatAllocationMetric, type GoalMetric } from "@/lib/performance-engine/goal-plan-utils";
 import { ChevronDown, Pencil, X } from "lucide-react";
 
 function MetricSummaryCard({
@@ -63,49 +64,49 @@ function MetricSummaryCard({
   );
 }
 
-function ScopeBadge({
-  kind,
-  inferredFromSummary,
-}: {
-  kind: "worker-wide" | "network";
-  inferredFromSummary?: boolean;
-}) {
-  const workerLabel = inferredFromSummary ? "Worker-wide · Existing goal" : "Worker-wide";
+function networkSourceLabel(source?: NetworkAllocationSource): string {
+  if (source === "auto-from-worker-wide") return "Auto from worker-wide";
+  if (source === "network-explicit") return "Network explicit";
+  if (source === "unallocated") return "Unallocated";
+  return "Network goal";
+}
+
+function NetworkSourceBadge({ source }: { source?: NetworkAllocationSource }) {
+  const label = networkSourceLabel(source);
+  const cls =
+    source === "auto-from-worker-wide"
+      ? "bg-violet-50 text-violet-700"
+      : source === "unallocated"
+        ? "bg-amber-50 text-amber-800"
+        : "bg-indigo-50 text-indigo-700";
   return (
-    <span
-      className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-        kind === "worker-wide"
-          ? "bg-slate-100 text-slate-700"
-          : "bg-indigo-50 text-indigo-700"
-      }`}
-    >
-      {kind === "worker-wide" ? workerLabel : "Network goal"}
-    </span>
+    <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${cls}`}>{label}</span>
   );
 }
 
-function SourceBadge({
+function GeoSourceBadge({
   source,
-  explicitZero,
 }: {
-  source?: "inherited" | "custom";
-  explicitZero?: boolean;
+  source?: GoalAllocationGeoRow["revenueSource"];
 }) {
-  if (!source) return <span className="text-muted-foreground">—</span>;
-  if (source === "custom" && explicitZero) {
+  if (!source || source === "none") return <span className="text-muted-foreground">—</span>;
+  if (source === "custom-zero") {
     return (
       <span className="rounded bg-amber-50 text-amber-800 px-1.5 py-0.5 text-[10px] font-medium">
         Custom · 0
       </span>
     );
   }
+  if (source === "custom") {
+    return (
+      <span className="rounded bg-blue-50 text-blue-700 px-1.5 py-0.5 text-[10px] font-medium">
+        Custom
+      </span>
+    );
+  }
   return (
-    <span
-      className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-        source === "custom" ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-600"
-      }`}
-    >
-      {source === "custom" ? "Custom" : "Inherited"}
+    <span className="rounded bg-slate-100 text-slate-600 px-1.5 py-0.5 text-[10px] font-medium">
+      Inherited
     </span>
   );
 }
@@ -115,15 +116,22 @@ function formatNetworkCell(metric: GoalMetric, value: number | null): string {
   return formatAllocationMetric(metric, value);
 }
 
-function geoSplitHasMetric(rows: WorkerGoalGeoSplitRow[], metric: GoalMetric): boolean {
+function primaryNetworkSource(row: GoalAllocationNetworkRow): NetworkAllocationSource | undefined {
+  const sources = [row.revenueSource, row.testingSource, row.workingSource].filter(Boolean);
+  if (sources.includes("network-explicit")) return "network-explicit";
+  if (sources.includes("auto-from-worker-wide")) return "auto-from-worker-wide";
+  return sources[0];
+}
+
+function geoSplitHasMetric(rows: GoalAllocationGeoRow[], metric: GoalMetric): boolean {
   const key =
     metric === "revenue" ? "revenueTarget" : metric === "testingBatches" ? "testingTarget" : "workingTarget";
   const sourceKey =
     metric === "revenue" ? "revenueSource" : metric === "testingBatches" ? "testingSource" : "workingSource";
-  return rows.some((r) => r[key] != null || r[sourceKey] != null);
+  return rows.some((r) => r[key] != null || (r[sourceKey] && r[sourceKey] !== "none"));
 }
 
-function GeoSplitTable({ rows }: { rows: WorkerGoalGeoSplitRow[] }) {
+function GeoSplitTable({ rows }: { rows: GoalAllocationGeoRow[] }) {
   if (rows.length === 0) return null;
   const showRevenue = geoSplitHasMetric(rows, "revenue");
   const showTesting = geoSplitHasMetric(rows, "testingBatches");
@@ -143,12 +151,13 @@ function GeoSplitTable({ rows }: { rows: WorkerGoalGeoSplitRow[] }) {
         </thead>
         <tbody>
           {rows.map((row) => {
-            const sources = [row.revenueSource, row.testingSource, row.workingSource].filter(Boolean);
-            const primarySource = sources.includes("custom") ? "custom" : sources[0];
-            const explicitZero =
-              (row.revenueSource === "custom" && row.revenueTarget === 0) ||
-              (row.testingSource === "custom" && row.testingTarget === 0) ||
-              (row.workingSource === "custom" && row.workingTarget === 0);
+            const sources = [row.revenueSource, row.testingSource, row.workingSource].filter(
+              (s) => s && s !== "none",
+            );
+            const primary =
+              sources.includes("custom") || sources.includes("custom-zero")
+                ? sources.find((s) => s === "custom-zero" || s === "custom")
+                : sources[0];
             return (
               <tr key={row.geoCode} className="border-t">
                 <td className="px-2 py-1.5 font-medium">{row.geoCode}</td>
@@ -166,7 +175,7 @@ function GeoSplitTable({ rows }: { rows: WorkerGoalGeoSplitRow[] }) {
                   </td>
                 )}
                 <td className="px-2 py-1.5">
-                  <SourceBadge source={primarySource} explicitZero={explicitZero} />
+                  <GeoSourceBadge source={primary} />
                 </td>
               </tr>
             );
@@ -182,18 +191,35 @@ function NetworkRow({
   expanded,
   onToggle,
   onEdit,
+  isWorkerWide,
 }: {
-  row: WorkerGoalNetworkRow;
+  row: GoalAllocationNetworkRow | {
+    affiliateNetworkName: string;
+    revenueTarget: number | null;
+    testingTarget: number | null;
+    workingTarget: number | null;
+    geoCount: number;
+    overrideCount: number;
+    geoSplitRows: GoalAllocationGeoRow[];
+    revenueSource?: NetworkAllocationSource;
+    testingSource?: NetworkAllocationSource;
+    workingSource?: NetworkAllocationSource;
+  };
   expanded: boolean;
   onToggle: () => void;
   onEdit: (networkName: string | null) => void;
+  isWorkerWide?: boolean;
 }) {
-  const label = row.isWorkerWide ? "Worker-wide" : row.networkName ?? "—";
-  const canExpand = !row.isWorkerWide && row.geoSplitRows.length > 0;
+  const label = isWorkerWide ? "Worker-wide / Unallocated" : row.affiliateNetworkName;
+  const canExpand = !isWorkerWide && row.geoSplitRows.length > 0;
   const noGeoScope =
-    !row.isWorkerWide &&
-    row.selectedGeoCodes.length === 0 &&
+    !isWorkerWide &&
+    row.geoCount === 0 &&
+    row.geoSplitRows.length === 0 &&
     (row.revenueTarget != null || row.testingTarget != null || row.workingTarget != null);
+  const source = isWorkerWide
+    ? ("unallocated" as const)
+    : primaryNetworkSource(row as GoalAllocationNetworkRow);
 
   return (
     <div className="border-b last:border-b-0">
@@ -215,17 +241,14 @@ function NetworkRow({
             <p className="font-medium leading-snug break-words" title={label}>
               {label}
             </p>
-            <ScopeBadge
-              kind={row.isWorkerWide ? "worker-wide" : "network"}
-              inferredFromSummary={row.inferredFromSummary}
-            />
+            <NetworkSourceBadge source={source} />
           </div>
         </div>
         <span>{formatNetworkCell("revenue", row.revenueTarget)}</span>
         <span>{formatNetworkCell("testingBatches", row.testingTarget)}</span>
         <span>{formatNetworkCell("workingCampaigns", row.workingTarget)}</span>
-        <span>{row.isWorkerWide ? "—" : row.selectedGeoCodes.length || "—"}</span>
-        <span>{row.isWorkerWide ? "—" : row.overrideCount || "—"}</span>
+        <span>{isWorkerWide ? "—" : row.geoCount || "—"}</span>
+        <span>{isWorkerWide ? "—" : row.overrideCount || "—"}</span>
         <Button
           type="button"
           variant="ghost"
@@ -233,14 +256,18 @@ function NetworkRow({
           className="h-7 px-2 shrink-0"
           onClick={(e) => {
             e.stopPropagation();
-            onEdit(row.isWorkerWide ? null : row.networkName);
+            onEdit(isWorkerWide ? null : row.affiliateNetworkName);
           }}
         >
           <Pencil size={12} className="mr-1" />
           Edit
         </Button>
       </div>
-      {expanded && canExpand && <div className="px-2 pb-2"><GeoSplitTable rows={row.geoSplitRows} /></div>}
+      {expanded && canExpand && (
+        <div className="px-2 pb-2">
+          <GeoSplitTable rows={row.geoSplitRows} />
+        </div>
+      )}
       {noGeoScope && (
         <p className="px-2 pb-2 text-[11px] text-muted-foreground">
           This network has goals, but no GEO scope selected.
@@ -252,33 +279,68 @@ function NetworkRow({
 
 export function MonthlyGoalWorkerDrawer({
   worker,
+  workspaceId,
   monthKey,
-  goals,
   open,
   onClose,
   onEditPlan,
 }: {
   worker: WorkerMonthlyRow | null;
+  workspaceId: number;
   monthKey: string;
-  goals: WorkerGoalTarget[];
   open: boolean;
   onClose: () => void;
   onEditPlan: (worker: WorkerMonthlyRow, networkName?: string | null) => void;
 }) {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
+  const allocationQ = useQuery({
+    queryKey: ["goal-allocation", workspaceId, monthKey, worker?.employeeId],
+    queryFn: () => fetchGoalAllocation(workspaceId, worker!.employeeId, monthKey),
+    enabled: open && worker != null && workspaceId > 0,
+  });
+
   if (!worker) return null;
 
-  const allocation = summarizeWorkerGoalAllocation(goals, worker.employeeId, monthKey, {
+  const allocation = allocationQ.data;
+  const monthLabel = formatMonthLabel(monthKey);
+  const overview = allocation?.overview ?? {
     revenue: worker.revenue,
     testing: worker.testing,
     working: worker.working,
     xpEarned: worker.xpEarned,
-  });
-  const monthLabel = formatMonthLabel(monthKey);
+  };
+  const hasAnyGoals =
+    allocation?.counts.hasAnyGoals ??
+    (worker.revenue.target > 0 || worker.testing.target > 0 || worker.working.target > 0);
+
+  const unallocatedRow = allocation?.workerWideUnallocated
+    ? {
+        affiliateNetworkName: "Worker-wide",
+        revenueTarget: allocation.workerWideUnallocated.revenueTarget,
+        testingTarget: allocation.workerWideUnallocated.testingTarget,
+        workingTarget: allocation.workerWideUnallocated.workingTarget,
+        geoCount: 0,
+        overrideCount: 0,
+        geoSplitRows: [] as GoalAllocationGeoRow[],
+      }
+    : null;
 
   function networksEmptyMessage(): string {
     return `No monthly goals configured for ${worker!.name} in ${monthLabel}.`;
+  }
+
+  function geosEmptyMessage(): string {
+    if (!hasAnyGoals) {
+      return `No GEO targets configured for this worker/month.`;
+    }
+    if ((allocation?.networks.length ?? 0) > 0 && (allocation?.geos.length ?? 0) === 0) {
+      return "Network goals exist, but no GEO scope is configured yet.";
+    }
+    if (unallocatedRow) {
+      return "No assigned networks/GEOs found for this worker/month.";
+    }
+    return "No GEO targets configured for this worker/month.";
   }
 
   return (
@@ -302,6 +364,15 @@ export function MonthlyGoalWorkerDrawer({
         </SheetHeader>
 
         <div className="p-4">
+          {allocationQ.isLoading && (
+            <p className="text-sm text-muted-foreground mb-3">Loading goal allocation…</p>
+          )}
+          {allocationQ.isError && (
+            <p className="text-sm text-amber-700 mb-3">
+              Could not load allocation details. Showing table totals only.
+            </p>
+          )}
+
           <Tabs defaultValue="networks">
             <TabsList className="grid w-full grid-cols-3 h-9 mb-4">
               <TabsTrigger value="overview" className="text-xs">Overview</TabsTrigger>
@@ -312,47 +383,45 @@ export function MonthlyGoalWorkerDrawer({
             <TabsContent value="overview" className="space-y-4 mt-0">
               <MetricSummaryCard
                 label="Revenue"
-                current={worker.revenue.current}
-                target={worker.revenue.target}
+                current={overview.revenue.current}
+                target={overview.revenue.target}
                 prefix="$"
               />
               <MetricSummaryCard
                 label="Testing"
-                current={worker.testing.current}
-                target={worker.testing.target}
+                current={overview.testing.current}
+                target={overview.testing.target}
               />
               <MetricSummaryCard
                 label="Working campaigns"
-                current={worker.working.current}
-                target={worker.working.target}
+                current={overview.working.current}
+                target={overview.working.target}
               />
               <div className="rounded-lg border bg-blue-50/60 border-blue-100 p-3 text-sm">
-                XP earned: <strong>{worker.xpEarned.toLocaleString()} XP</strong>
+                XP earned: <strong>{overview.xpEarned.toLocaleString()} XP</strong>
               </div>
 
               <div className="rounded-lg border p-3 space-y-2">
-                <p className="text-sm font-semibold">Configured allocation</p>
-                {!allocation.counts.hasAnyGoals ? (
+                <p className="text-sm font-semibold">Effective allocation</p>
+                {!hasAnyGoals ? (
                   <p className="text-sm text-muted-foreground">
                     No monthly goals configured for {worker.name} in {monthLabel}.
                   </p>
                 ) : (
                   <ul className="text-sm text-muted-foreground space-y-1">
-                    {allocation.counts.workerWideMetricLabels.length > 0 && (
-                      <li>
-                        Worker-wide goals: {allocation.counts.workerWideMetricLabels.join(", ")}
-                      </li>
+                    <li>Networks: {allocation?.counts.networkCount ?? 0}</li>
+                    <li>GEO targets: {allocation?.counts.selectedGeoCount ?? 0}</li>
+                    <li>Custom overrides: {allocation?.counts.overrideCount ?? 0}</li>
+                    {unallocatedRow && (
+                      <li className="text-amber-800">{allocation!.workerWideUnallocated!.message}</li>
                     )}
-                    <li>Networks: {allocation.counts.networkCount}</li>
-                    <li>GEO targets: {allocation.counts.selectedGeoCount}</li>
-                    <li>Custom overrides: {allocation.counts.overrideCount}</li>
                   </ul>
                 )}
               </div>
             </TabsContent>
 
             <TabsContent value="networks" className="mt-0 space-y-3">
-              {!allocation.counts.hasAnyGoals ? (
+              {!hasAnyGoals ? (
                 <p className="text-sm text-muted-foreground">{networksEmptyMessage()}</p>
               ) : (
                 <>
@@ -367,16 +436,8 @@ export function MonthlyGoalWorkerDrawer({
                       <span>Actions</span>
                     </div>
                     <div className="min-w-[560px]">
-                      {allocation.workerWideRow && (
-                        <NetworkRow
-                          row={allocation.workerWideRow}
-                          expanded={false}
-                          onToggle={() => {}}
-                          onEdit={(net) => onEditPlan(worker, net)}
-                        />
-                      )}
-                      {allocation.networkRows.map((row) => {
-                        const key = row.networkName ?? "";
+                      {(allocation?.networks ?? []).map((row) => {
+                        const key = row.affiliateNetworkName;
                         return (
                           <NetworkRow
                             key={key}
@@ -387,22 +448,27 @@ export function MonthlyGoalWorkerDrawer({
                           />
                         );
                       })}
+                      {unallocatedRow && (
+                        <NetworkRow
+                          row={unallocatedRow}
+                          expanded={false}
+                          onToggle={() => {}}
+                          onEdit={(net) => onEditPlan(worker, net)}
+                          isWorkerWide
+                        />
+                      )}
                     </div>
                   </div>
-                  {allocation.workerWideRow && allocation.networkRows.length === 0 && (
-                    <p className="text-sm text-muted-foreground">
-                      Worker-wide goals are configured. No network-specific goals yet.
-                    </p>
+                  {unallocatedRow && (
+                    <p className="text-sm text-muted-foreground">{allocation!.workerWideUnallocated!.message}</p>
                   )}
                 </>
               )}
             </TabsContent>
 
             <TabsContent value="geos" className="mt-0">
-              {allocation.geoRows.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  No GEO targets configured for this worker/month.
-                </p>
+              {(allocation?.geos.length ?? 0) === 0 ? (
+                <p className="text-sm text-muted-foreground">{geosEmptyMessage()}</p>
               ) : (
                 <div className="overflow-x-auto rounded-lg border">
                   <table className="w-full text-xs min-w-[520px]">
@@ -417,18 +483,19 @@ export function MonthlyGoalWorkerDrawer({
                       </tr>
                     </thead>
                     <tbody>
-                      {allocation.geoRows.map((row) => {
-                        const sources = [row.revenueSource, row.testingSource, row.workingSource].filter(Boolean);
-                        const primarySource = sources.includes("custom") ? "custom" : sources[0];
-                        const explicitZero =
-                          (row.revenueSource === "custom" && row.revenueTarget === 0) ||
-                          (row.testingSource === "custom" && row.testingTarget === 0) ||
-                          (row.workingSource === "custom" && row.workingTarget === 0);
+                      {(allocation?.geos ?? []).map((row) => {
+                        const sources = [row.revenueSource, row.testingSource, row.workingSource].filter(
+                          (s) => s && s !== "none",
+                        );
+                        const primary =
+                          sources.includes("custom") || sources.includes("custom-zero")
+                            ? sources.find((s) => s === "custom-zero" || s === "custom")
+                            : sources[0];
                         return (
-                          <tr key={`${row.geoCode}-${row.networkName}`} className="border-t">
+                          <tr key={`${row.geoCode}-${row.affiliateNetworkName}`} className="border-t">
                             <td className="px-2 py-2 font-medium">{row.geoCode}</td>
-                            <td className="px-2 py-2 break-words max-w-[140px]" title={row.networkName}>
-                              {row.networkName}
+                            <td className="px-2 py-2 break-words max-w-[140px]" title={row.affiliateNetworkName}>
+                              {row.affiliateNetworkName}
                             </td>
                             <td className="px-2 py-2">{formatAllocationMetric("revenue", row.revenueTarget)}</td>
                             <td className="px-2 py-2">
@@ -438,7 +505,7 @@ export function MonthlyGoalWorkerDrawer({
                               {formatAllocationMetric("workingCampaigns", row.workingTarget)}
                             </td>
                             <td className="px-2 py-2">
-                              <SourceBadge source={primarySource} explicitZero={explicitZero} />
+                              <GeoSourceBadge source={primary} />
                             </td>
                           </tr>
                         );

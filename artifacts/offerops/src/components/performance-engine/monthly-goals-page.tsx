@@ -157,6 +157,7 @@ export function MonthlyGoalsPage() {
   function refresh() {
     void qc.invalidateQueries({ queryKey: ["monthly-goals", wsId, monthKey] });
     void qc.invalidateQueries({ queryKey: ["metric-breakdown", wsId, monthKey] });
+    void qc.invalidateQueries({ queryKey: ["goal-allocation", wsId, monthKey] });
     void qc.invalidateQueries({ queryKey: ["goals-config"] });
   }
 
@@ -435,8 +436,8 @@ export function MonthlyGoalsPage() {
 
       <MonthlyGoalWorkerDrawer
         worker={drawerWorker}
+        workspaceId={wsId}
         monthKey={monthKey}
-        goals={goalsCfg.workerGoalTargets}
         open={drawerWorker != null}
         onClose={() => setDrawerWorker(null)}
         onEditPlan={(w, networkName) => {

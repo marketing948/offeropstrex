@@ -25,6 +25,42 @@ export function sortEligibleGeos(geos: Iterable<string>): string[] {
   return unique.sort((a, b) => a.toUpperCase().localeCompare(b.toUpperCase()));
 }
 
+export function sortEligibleNetworks(networks: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const raw of networks) {
+    const net = raw.trim();
+    if (!net || seen.has(net)) continue;
+    seen.add(net);
+    unique.push(net);
+  }
+  return unique.sort((a, b) => a.toUpperCase().localeCompare(b.toUpperCase()));
+}
+
+/** Deterministic equal split across sorted keys (revenue = decimal share, count = integer). */
+export function distributeTargetAcrossKeys(
+  metricKind: MetricTargetKind,
+  total: number,
+  keys: string[],
+): Map<string, number> {
+  const sorted = sortEligibleNetworks(keys);
+  const result = new Map<string, number>();
+  if (sorted.length === 0 || total <= 0) return result;
+
+  if (metricKind === "revenue") {
+    const share = total / sorted.length;
+    for (const key of sorted) result.set(key, share);
+    return result;
+  }
+
+  const base = Math.floor(total / sorted.length);
+  const remainder = total % sorted.length;
+  sorted.forEach((key, index) => {
+    result.set(key, base + (index < remainder ? 1 : 0));
+  });
+  return result;
+}
+
 export function isExplicitNetworkGeoGoal(g: ServerWorkerGoalTarget): boolean {
   return !!(g.affiliateNetworkName?.trim() && g.geoCode?.trim());
 }
