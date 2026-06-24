@@ -42,6 +42,72 @@ export function fetchMonthlyGoalsDashboard(
   );
 }
 
+export type NetworkAllocationSource =
+  | "auto-from-worker-wide"
+  | "network-explicit"
+  | "unallocated";
+
+export type GeoAllocationSource = "inherited" | "custom" | "custom-zero" | "none";
+
+export type GoalAllocationGeoRow = {
+  affiliateNetworkName: string;
+  geoCode: string;
+  revenueTarget: number | null;
+  testingTarget: number | null;
+  workingTarget: number | null;
+  revenueSource?: GeoAllocationSource;
+  testingSource?: GeoAllocationSource;
+  workingSource?: GeoAllocationSource;
+};
+
+export type GoalAllocationNetworkRow = {
+  affiliateNetworkName: string;
+  revenueTarget: number | null;
+  testingTarget: number | null;
+  workingTarget: number | null;
+  revenueSource?: NetworkAllocationSource;
+  testingSource?: NetworkAllocationSource;
+  workingSource?: NetworkAllocationSource;
+  geoCount: number;
+  overrideCount: number;
+  geoSplitRows: GoalAllocationGeoRow[];
+};
+
+export type GoalAllocationResult = {
+  employeeId: number;
+  monthKey: string;
+  overview: {
+    revenue: { current: number; target: number };
+    testing: { current: number; target: number };
+    working: { current: number; target: number };
+    xpEarned: number;
+  };
+  workerWideUnallocated: {
+    revenueTarget: number | null;
+    testingTarget: number | null;
+    workingTarget: number | null;
+    message: string;
+  } | null;
+  networks: GoalAllocationNetworkRow[];
+  geos: GoalAllocationGeoRow[];
+  counts: {
+    hasAnyGoals: boolean;
+    networkCount: number;
+    selectedGeoCount: number;
+    overrideCount: number;
+  };
+};
+
+export function fetchGoalAllocation(
+  workspaceId: number,
+  employeeId: number,
+  monthKey: string,
+): Promise<GoalAllocationResult> {
+  return authedJson(
+    `/api/performance/goal-allocation?workspace_id=${workspaceId}&employee_id=${employeeId}&month=${encodeURIComponent(monthKey)}`,
+  );
+}
+
 export type MetricBreakdownKind = "revenue" | "testing" | "working";
 
 export type MetricBreakdownGeoRow = {

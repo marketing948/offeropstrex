@@ -21,6 +21,7 @@ import {
 import {
   buildMonthlyGoalsDashboard,
 } from "../lib/monthly-goals-service.ts";
+import { buildGoalAllocation } from "../lib/goal-allocation-service.ts";
 import { buildMetricBreakdown } from "../lib/metric-breakdown-service.ts";
 import { currentMonthKey, monthKeyToRange } from "../lib/xp-award-service.ts";
 import {
@@ -145,6 +146,38 @@ router.get("/performance/monthly-goals", async (req, res): Promise<void> => {
 
   const dashboard = await buildMonthlyGoalsDashboard(workspaceId, monthKey, scopeEmployeeId);
   res.json(dashboard);
+});
+
+router.get("/performance/goal-allocation", async (req, res): Promise<void> => {
+  const workspaceId = await requireWorkspaceFromQuery(req, res);
+  if (workspaceId === null) return;
+
+  const scoped = await requireWorkspaceWithNetworkScope(req, res, workspaceId);
+  if (scoped === null) return;
+
+  const monthKey =
+    typeof req.query.month === "string" && monthKeySchema.safeParse(req.query.month).success
+      ? req.query.month
+      : currentMonthKey();
+
+  const employeeIdRaw = req.query.employee_id;
+  if (employeeIdRaw == null || employeeIdRaw === "") {
+    res.status(400).json({ error: "employee_id is required" });
+    return;
+  }
+  const employeeId = Number(employeeIdRaw);
+  if (!Number.isInteger(employeeId) || employeeId <= 0) {
+    res.status(400).json({ error: "employee_id must be a positive integer" });
+    return;
+  }
+  if (!enforceEmployeeIdAccess(res, scoped.scope, employeeId)) return;
+
+  const allocation = await buildGoalAllocation(workspaceId, employeeId, monthKey);
+  if (!allocation) {
+    res.status(404).json({ error: "Employee not found in workspace" });
+    return;
+  }
+  res.json(allocation);
 });
 
 router.get("/performance/metric-breakdown", async (req, res): Promise<void> => {
