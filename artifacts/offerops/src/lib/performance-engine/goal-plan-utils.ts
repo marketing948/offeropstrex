@@ -142,3 +142,73 @@ export function shouldRehydratePlanForm(params: {
   if (params.isDirty) return false;
   return params.lastHydratedKey !== params.hydrationKey;
 }
+
+export const PLAN_CONFIRM_YES = "YES";
+
+export function isPlanConfirmYes(text: string): boolean {
+  return text.trim() === PLAN_CONFIRM_YES;
+}
+
+export type NetworkPlanSummary = {
+  networkName: string | null;
+  metrics: { metricKey: GoalMetric; target: number; xp: number }[];
+  selectedGeoCodes: string[];
+  overrides: { metricKey: GoalMetric; geoCode: string; target: number }[];
+};
+
+const GOAL_METRICS: GoalMetric[] = ["revenue", "testingBatches", "workingCampaigns"];
+
+function isGoalMetric(key: string): key is GoalMetric {
+  return GOAL_METRICS.includes(key as GoalMetric);
+}
+
+export function summarizeWorkerPlansByNetwork(
+  goals: WorkerGoalTarget[],
+  employeeId: number,
+  monthKey: string,
+): NetworkPlanSummary[] {
+  const scoped = goalsForWorkerMonth(goals, employeeId, monthKey);
+  const byNet = new Map<string, NetworkPlanSummary>();
+
+  function bucketKey(net: string | null): string {
+    return net ?? "__worker_wide__";
+  }
+
+  function getBucket(net: string | null): NetworkPlanSummary {
+    const key = bucketKey(net);
+    let entry = byNet.get(key);
+    if (!entry) {
+      entry = { networkName: net, metrics: [], selectedGeoCodes: [], overrides: [] };
+      byNet.set(key, entry);
+    }
+    return entry;
+  }
+
+  for (const g of scoped) {
+    const net = g.affiliateNetworkName?.trim() || null;
+    const bucket = getBucket(net);
+    if (!isGoalMetric(g.metricKey)) continue;
+    if (g.geoCode?.trim()) {
+      bucket.overrides.push({
+        metricKey: g.metricKey,
+        geoCode: g.geoCode.trim(),
+        target: g.monthlyTarget,
+      });
+      continue;
+    }
+    bucket.metrics.push({
+      metricKey: g.metricKey,
+      target: g.monthlyTarget,
+      xp: g.xpReward ?? 0,
+    });
+    if (g.selectedGeoCodes?.length) {
+      bucket.selectedGeoCodes = g.selectedGeoCodes;
+    }
+  }
+
+  return [...byNet.values()].sort((a, b) => {
+    if (a.networkName == null) return -1;
+    if (b.networkName == null) return 1;
+    return a.networkName.localeCompare(b.networkName);
+  });
+}

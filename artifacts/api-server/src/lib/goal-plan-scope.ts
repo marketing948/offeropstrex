@@ -43,3 +43,31 @@ export function removeNetworkGoalsFromTargets<T extends GoalPlanScopeRow>(
   }
   return { kept, removed };
 }
+
+/** True when a goal row belongs to a worker/month plan (any network or worker-wide). */
+export function goalMatchesWorkerMonthPlanScope(
+  g: Pick<GoalPlanScopeRow, "employeeId" | "monthKey" | "metricKey">,
+  employeeId: number,
+  monthKey: string,
+): boolean {
+  if (g.employeeId !== employeeId) return false;
+  if (!g.monthKey || g.monthKey !== monthKey) return false;
+  return GOAL_PLAN_METRICS.has(g.metricKey);
+}
+
+export function removeAllGoalsForWorkerMonth<T extends GoalPlanScopeRow>(
+  goals: T[],
+  employeeId: number,
+  monthKey: string,
+): { kept: T[]; removed: T[] } {
+  const kept: T[] = [];
+  const removed: T[] = [];
+  for (const g of goals) {
+    if (goalMatchesWorkerMonthPlanScope(g, employeeId, monthKey)) {
+      removed.push(g);
+    } else {
+      kept.push(g);
+    }
+  }
+  return { kept, removed };
+}

@@ -256,6 +256,31 @@ export async function resetWorkerGoalPlanNetwork(payload: ResetWorkerGoalPlanNet
   return (await res.json()) as { ok: boolean; removedCount: number; removedGoalIds: string[] };
 }
 
+export type ResetAllWorkerGoalPlanPayload = {
+  workspaceId: number;
+  employeeId: number;
+  monthKey: string;
+  confirmation: true;
+};
+
+export async function resetAllWorkerGoalPlan(payload: ResetAllWorkerGoalPlanPayload) {
+  const res = await authedFetch("/api/performance/worker-goals/plan/reset-all", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let detail = text;
+    try {
+      detail = (JSON.parse(text) as { error?: string }).error ?? text;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail || `${res.status} ${res.statusText}`);
+  }
+  return (await res.json()) as { ok: boolean; removedCount: number; removedGoalIds: string[] };
+}
+
 export function currentMonthKey(d = new Date()): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }

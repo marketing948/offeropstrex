@@ -35,6 +35,7 @@ import { KpiBreakdownPanel } from "@/components/performance-engine/kpi-breakdown
 import { InitialsBadge } from "@/components/performance-engine/initials-badge";
 import { SegmentedProgress } from "@/components/performance-engine/segmented-progress";
 import { CreateGoalPlanModal, type GoalPlanEditContext } from "@/components/performance-engine/create-goal-plan-modal";
+import { MonthlyGoalWorkerDrawer } from "@/components/performance-engine/monthly-goal-worker-drawer";
 import { ensureGoalsConfig, useGoalsConfig } from "@/lib/goals-config";
 import {
   currentMonthKey,
@@ -98,6 +99,7 @@ export function MonthlyGoalsPage() {
   const [selectedBreakdown, setSelectedBreakdown] = useState<MetricBreakdownKind | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [editContext, setEditContext] = useState<GoalPlanEditContext | null>(null);
+  const [drawerWorker, setDrawerWorker] = useState<WorkerMonthlyRow | null>(null);
   const [howOpen, setHowOpen] = useState(false);
 
   const { data: goalsCfgRaw } = useGoalsConfig();
@@ -320,7 +322,11 @@ export function MonthlyGoalsPage() {
                 </tr>
               ) : (
                 filteredWorkers.map((w) => (
-                  <tr key={w.employeeId} className="border-t hover:bg-slate-50/80">
+                  <tr
+                    key={w.employeeId}
+                    className="border-t hover:bg-slate-50/80 cursor-pointer"
+                    onClick={() => setDrawerWorker(w)}
+                  >
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2.5">
                         <InitialsBadge initials={w.initials} size="sm" />
@@ -351,7 +357,7 @@ export function MonthlyGoalsPage() {
                     <td className="px-4 py-3">
                       <SegmentedProgress filled={w.progressSegments} status={w.status} />
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -426,6 +432,18 @@ export function MonthlyGoalsPage() {
         </div>
       </div>
       )}
+
+      <MonthlyGoalWorkerDrawer
+        worker={drawerWorker}
+        monthKey={monthKey}
+        goals={goalsCfg.workerGoalTargets}
+        open={drawerWorker != null}
+        onClose={() => setDrawerWorker(null)}
+        onEditPlan={(w) => {
+          setDrawerWorker(null);
+          openEdit(w);
+        }}
+      />
 
       <CreateGoalPlanModal
         open={createOpen}
