@@ -21,6 +21,11 @@ import {
   geoHasConfiguredTarget,
   type NetworkGeoMap,
 } from "./goal-effective-targets.ts";
+import {
+  resolveGeoTargetsForNetworkMetric,
+  resolveNetworkTargetsForMetric,
+} from "./goal-network-resolution.ts";
+import { loadAssignedNetworksForEmployee } from "./worker-network-access.ts";
 
 const ACTIVE_TESTING_STATUSES = [
   "NEW_BATCH",
@@ -238,12 +243,115 @@ export async function queryWorkingNetworkGeo(
   return map;
 }
 
+function geoTargetSourceFromAllocation(
+  source: "inherited" | "custom" | "custom-zero" | "none",
+): BreakdownGeoRow["targetSource"] {
+  if (source === "custom" || source === "custom-zero") return "custom";
+  if (source === "inherited") return "inherited";
+  return "none";
+}
+
 function buildNetworkBreakdown(
   networkGeoCurrent: NetworkGeoMap,
   goals: ServerWorkerGoalTarget[],
   metricKey: ServerWorkerGoalTarget["metricKey"],
   employeeId: number | null,
+  assignedNetworks: string[] = [],
 ): NetworkBreakdownRow[] {
+  if (employeeId != null) {
+    const resolutions = resolveNetworkTargetsForMetric(
+      goals,
+      metricKey,
+      employeeId,
+      assignedNetworks,
+      [...networkGeoCurrent.keys()],
+    );
+    const networkKeys = new Set<string>([...networkGeoCurrent.keys(), ...resolutions.keys()]);
+
+    return [...networkKeys]
+      .filter((k) => k !== "(unset)" || networkGeoCurrent.has(k))
+      .map((networkKey) => {
+        const geoCurrent = networkGeoCurrent.get(networkKey) ?? new Map<string, number>();
+        const resolution = resolutions.get(networkKey);
+
+        let effectiveNetworkTarget = 0;
+        let geos: BreakdownGeoRow[] = [];
+
+        if (resolution && resolution.target > 0) {
+          const resolved = resolveGeoTargetsForNetworkMetric({
+            goals,
+            metricKey,
+            employeeId,
+            networkName: networkKey,
+            networkResolution: resolution,
+            activityGeos: geoCurrent.keys(),
+          });
+          effectiveNetworkTarget = resolved.effectiveTarget;
+          geos = resolved.geos
+            .map(({ geoCode, target, source }) => {
+              const current = geoCurrent.get(geoCode) ?? 0;
+              const targetSource = geoTargetSourceFromAllocation(source);
+              return {
+                key: geoCode,
+                label: geoCode,
+                current,
+                target,
+                percent: progressPct(current, target),
+                targetSource,
+              };
+            })
+            .sort(
+              (a, b) =>
+                b.target - a.target || b.current - a.current || a.label.localeCompare(b.label),
+            );
+        } else {
+          const legacy = computeNetworkEffectiveTarget(
+            networkKey,
+            goals,
+            metricKey,
+            employeeId,
+            geoCurrent.keys(),
+          );
+          effectiveNetworkTarget = legacy.effectiveNetworkTarget;
+          geos = legacy.geos
+            .map(({ geo, target, source }) => {
+              const current = geoCurrent.get(geo) ?? 0;
+              return {
+                key: geo,
+                label: geo,
+                current,
+                target,
+                percent: progressPct(current, target),
+                targetSource: source,
+              };
+            })
+            .sort(
+              (a, b) =>
+                b.target - a.target || b.current - a.current || a.label.localeCompare(b.label),
+            );
+        }
+
+        const current = [...geoCurrent.values()].reduce((s, v) => s + v, 0);
+        const hasConfiguredTarget =
+          effectiveNetworkTarget > 0 ||
+          geos.some((g) => geoHasConfiguredTarget(g.target, g.targetSource));
+
+        return {
+          key: networkKey,
+          label: networkKey,
+          networkId: networkKey,
+          current,
+          target: effectiveNetworkTarget,
+          percent: progressPct(current, effectiveNetworkTarget),
+          geos,
+          hasConfiguredTarget,
+        };
+      })
+      .filter((n) => n.hasConfiguredTarget || n.current > 0)
+      .map(({ hasConfiguredTarget: _drop, ...row }) => row)
+      .sort((a, b) => b.target - a.target || b.current - a.current || a.label.localeCompare(b.label));
+  }
+
   const networkKeys = new Set<string>();
   for (const net of networkGeoCurrent.keys()) networkKeys.add(net);
   for (const g of goals) {
@@ -363,7 +471,15 @@ export async function buildMetricBreakdown(
     })
     .reduce((s, g) => s + (g.xpReward ?? 0), 0);
 
-  const networksBuilt = buildNetworkBreakdown(networkGeo, monthGoals, metricKey, employeeId);
+  const networksBuilt = buildNetworkBreakdown(
+    networkGeo,
+    monthGoals,
+    metricKey,
+    employeeId,
+    employeeId != null
+      ? (await loadAssignedNetworksForEmployee(workspaceId, employeeId)).names
+      : [],
+  );
   const networks =
     allowedNetworkNames != null
       ? networksBuilt.filter((n) => {

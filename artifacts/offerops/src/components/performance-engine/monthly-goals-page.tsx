@@ -47,6 +47,7 @@ import {
   type WorkerMonthlyRow,
 } from "@/lib/performance-engine/api";
 import { goalsForWorkerMonth, networkNamesInPlan } from "@/lib/performance-engine/goal-plan-utils";
+import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal-surfaces";
 import { Link } from "wouter";
 
 function StatusPill({ status }: { status: WorkerMonthlyRow["status"] }) {
@@ -155,9 +156,7 @@ export function MonthlyGoalsPage() {
   }
 
   function refresh() {
-    void qc.invalidateQueries({ queryKey: ["monthly-goals", wsId, monthKey] });
-    void qc.invalidateQueries({ queryKey: ["metric-breakdown", wsId, monthKey] });
-    void qc.invalidateQueries({ queryKey: ["goal-allocation", wsId, monthKey] });
+    invalidateGoalSurfaces(qc, wsId, monthKey);
     void qc.invalidateQueries({ queryKey: ["goals-config"] });
   }
 

@@ -227,7 +227,6 @@ export default function OperationsHub() {
           <RevenueByNetworkSection
             selectedMetric={selectedMetric}
             goalCards={drilldown.goalCards}
-            networkGroups={drilldown.networkGroups}
             mtdRevenue={drilldown.mtdRevenue}
             attributedRevenueMtd={drilldown.attributedRevenueMtd}
             unattributedRevenueMtd={drilldown.unattributedRevenueMtd}

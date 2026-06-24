@@ -1,5 +1,6 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { currentMonthKey } from "@/lib/performance-engine/api";
+import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal-surfaces";
 import { useMonthlyGoalsScope } from "@/lib/performance-engine/use-monthly-goals-scope";
 
 export function workerMonthlyGoalsQueryKey(
@@ -19,7 +20,7 @@ export function invalidateWorkerRankAndGoals(
   const monthKey = currentMonthKey();
   void qc.invalidateQueries({ queryKey: workerMonthlyGoalsQueryKey(workspaceId, monthKey, employeeId) });
   void qc.invalidateQueries({ queryKey: ["pe-rank-xp", workspaceId, employeeId] });
-  void qc.invalidateQueries({ queryKey: ["monthly-goals", workspaceId, monthKey] });
+  if (workspaceId) invalidateGoalSurfaces(qc, workspaceId, monthKey);
 }
 
 /** Await refetch so rank cards see xp_ledger changes immediately after task completion. */

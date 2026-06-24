@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal-surfaces";
 import {
   Plus, ChevronRight, Radio, Zap, CheckCircle2, RefreshCw,
   TrendingUp, Circle, Target, Link2, Clock, AlertCircle,
@@ -195,6 +196,9 @@ function CreateBatchModal({ open, onClose }: { open: boolean; onClose: () => voi
     mutation: {
       onSuccess: () => {
         qc.invalidateQueries({ queryKey: getListTestingBatchesQueryKey({ workspace_id: activeWorkspaceId ?? 0 }) });
+        if (activeWorkspaceId) {
+          invalidateGoalSurfaces(qc, activeWorkspaceId);
+        }
         toast({ title: "Batch created", description: "It's now visible in the Batches list." });
         onClose();
         setForm(makeEmptyForm(currentEmployee?.id));

@@ -9,6 +9,7 @@ import {
   getListWorkspaceTrafficSourcesQueryKey,
 } from "@workspace/api-client-react";
 import { authedJson } from "@/lib/api-fetch";
+import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal-surfaces";
 import { useToast } from "@/hooks/use-toast";
 import { useWorkspace } from "@/lib/workspace-context";
 import { wsQueryOpts } from "@/lib/ws-query";
@@ -120,6 +121,7 @@ export function ProductionLiveCampaignForm({
       toast({ title: "Manual campaign added" });
       void queryClient.invalidateQueries({ queryKey: ["live-campaigns"] });
       void queryClient.invalidateQueries({ queryKey: ["live-campaign-filter-options"] });
+      invalidateGoalSurfaces(queryClient, activeWorkspaceId);
       onCreated();
     } catch (e: unknown) {
       toast({
