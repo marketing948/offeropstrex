@@ -143,13 +143,13 @@ export function MonthlyGoalsPage() {
     setCreateOpen(true);
   }
 
-  function openEdit(worker: WorkerMonthlyRow) {
+  function openEdit(worker: WorkerMonthlyRow, networkName?: string | null) {
     const workerGoals = goalsForWorkerMonth(goalsCfg.workerGoalTargets, worker.employeeId, monthKey);
     const networks = networkNamesInPlan(workerGoals);
     setEditContext({
       employeeId: worker.employeeId,
       monthKey,
-      networkName: networks[0] ?? null,
+      networkName: networkName !== undefined ? networkName : networks[0] ?? null,
     });
     setCreateOpen(true);
   }
@@ -439,9 +439,9 @@ export function MonthlyGoalsPage() {
         goals={goalsCfg.workerGoalTargets}
         open={drawerWorker != null}
         onClose={() => setDrawerWorker(null)}
-        onEditPlan={(w) => {
+        onEditPlan={(w, networkName) => {
           setDrawerWorker(null);
-          openEdit(w);
+          openEdit(w, networkName);
         }}
       />
 

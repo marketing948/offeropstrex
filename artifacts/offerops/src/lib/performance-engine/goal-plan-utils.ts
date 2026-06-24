@@ -212,3 +212,222 @@ export function summarizeWorkerPlansByNetwork(
     return a.networkName.localeCompare(b.networkName);
   });
 }
+
+export type GeoTargetSource = "inherited" | "custom";
+
+export type WorkerGoalGeoSplitRow = {
+  geoCode: string;
+  revenueTarget: number | null;
+  testingTarget: number | null;
+  workingTarget: number | null;
+  revenueSource?: GeoTargetSource;
+  testingSource?: GeoTargetSource;
+  workingSource?: GeoTargetSource;
+  hasExplicitZero: boolean;
+};
+
+export type WorkerGoalNetworkRow = {
+  networkName: string | null;
+  isWorkerWide: boolean;
+  revenueTarget: number | null;
+  testingTarget: number | null;
+  workingTarget: number | null;
+  selectedGeoCodes: string[];
+  overrideCount: number;
+  geoSplitRows: WorkerGoalGeoSplitRow[];
+};
+
+export type WorkerGoalGeoAllocationRow = {
+  geoCode: string;
+  networkName: string;
+  revenueTarget: number | null;
+  testingTarget: number | null;
+  workingTarget: number | null;
+  revenueSource?: GeoTargetSource;
+  testingSource?: GeoTargetSource;
+  workingSource?: GeoTargetSource;
+  hasExplicitZero: boolean;
+};
+
+export type WorkerGoalAllocationSummary = {
+  workerWideRow: WorkerGoalNetworkRow | null;
+  networkRows: WorkerGoalNetworkRow[];
+  geoRows: WorkerGoalGeoAllocationRow[];
+  counts: {
+    workerWideMetricLabels: string[];
+    networkCount: number;
+    selectedGeoCount: number;
+    overrideCount: number;
+    hasAnyGoals: boolean;
+  };
+};
+
+const METRIC_LABELS_SHORT: Record<GoalMetric, string> = {
+  revenue: "Revenue",
+  testingBatches: "Testing",
+  workingCampaigns: "Working",
+};
+
+function metricTargetFromPlan(plan: NetworkPlanSummary, key: GoalMetric): number | null {
+  const row = plan.metrics.find((m) => m.metricKey === key);
+  if (!row) return null;
+  return row.target;
+}
+
+function buildGeoSplitRows(plan: NetworkPlanSummary): WorkerGoalGeoSplitRow[] {
+  if (!plan.networkName || plan.selectedGeoCodes.length === 0) return [];
+
+  const geos = [...plan.selectedGeoCodes].sort((a, b) =>
+    a.toUpperCase().localeCompare(b.toUpperCase()),
+  );
+  const overrideByGeo = new Map<string, Partial<Record<GoalMetric, number>>>();
+  for (const o of plan.overrides) {
+    const key = o.geoCode.toUpperCase();
+    const bucket = overrideByGeo.get(key) ?? {};
+    bucket[o.metricKey] = o.target;
+    overrideByGeo.set(key, bucket);
+  }
+
+  const networkTargets: Record<GoalMetric, number> = {
+    revenue: metricTargetFromPlan(plan, "revenue") ?? 0,
+    testingBatches: metricTargetFromPlan(plan, "testingBatches") ?? 0,
+    workingCampaigns: metricTargetFromPlan(plan, "workingCampaigns") ?? 0,
+  };
+
+  const inheritedShares: Record<GoalMetric, Map<string, number>> = {
+    revenue: previewInheritedShares("revenue", networkTargets.revenue, geos),
+    testingBatches: previewInheritedShares("testingBatches", networkTargets.testingBatches, geos),
+    workingCampaigns: previewInheritedShares("workingCampaigns", networkTargets.workingCampaigns, geos),
+  };
+
+  return geos.map((geo) => {
+    const overrides = overrideByGeo.get(geo.toUpperCase()) ?? {};
+    let hasExplicitZero = false;
+
+    function resolve(metric: GoalMetric): { value: number | null; source?: GeoTargetSource } {
+      if (metric in overrides) {
+        const v = overrides[metric]!;
+        if (v === 0) hasExplicitZero = true;
+        return { value: v, source: "custom" };
+      }
+      const netTarget = networkTargets[metric];
+      if (netTarget <= 0) return { value: null, source: undefined };
+      const inherited = inheritedShares[metric].get(geo);
+      if (inherited == null) return { value: null, source: undefined };
+      return { value: inherited, source: "inherited" };
+    }
+
+    const rev = resolve("revenue");
+    const testing = resolve("testingBatches");
+    const working = resolve("workingCampaigns");
+
+    return {
+      geoCode: geo,
+      revenueTarget: rev.value,
+      testingTarget: testing.value,
+      workingTarget: working.value,
+      revenueSource: rev.source,
+      testingSource: testing.source,
+      workingSource: working.source,
+      hasExplicitZero,
+    };
+  });
+}
+
+function planToNetworkRow(plan: NetworkPlanSummary): WorkerGoalNetworkRow {
+  const isWorkerWide = plan.networkName == null;
+  return {
+    networkName: plan.networkName,
+    isWorkerWide,
+    revenueTarget: metricTargetFromPlan(plan, "revenue"),
+    testingTarget: metricTargetFromPlan(plan, "testingBatches"),
+    workingTarget: metricTargetFromPlan(plan, "workingCampaigns"),
+    selectedGeoCodes: plan.selectedGeoCodes,
+    overrideCount: plan.overrides.length,
+    geoSplitRows: buildGeoSplitRows(plan),
+  };
+}
+
+function geoRowsFromNetworks(networkRows: WorkerGoalNetworkRow[]): WorkerGoalGeoAllocationRow[] {
+  const rows: WorkerGoalGeoAllocationRow[] = [];
+  for (const net of networkRows) {
+    if (!net.networkName) continue;
+    for (const geo of net.geoSplitRows) {
+      rows.push({
+        geoCode: geo.geoCode,
+        networkName: net.networkName,
+        revenueTarget: geo.revenueTarget,
+        testingTarget: geo.testingTarget,
+        workingTarget: geo.workingTarget,
+        revenueSource: geo.revenueSource,
+        testingSource: geo.testingSource,
+        workingSource: geo.workingSource,
+        hasExplicitZero: geo.hasExplicitZero,
+      });
+    }
+  }
+  return rows.sort((a, b) => {
+    const geoCmp = a.geoCode.toUpperCase().localeCompare(b.geoCode.toUpperCase());
+    if (geoCmp !== 0) return geoCmp;
+    if (a.hasExplicitZero !== b.hasExplicitZero) return a.hasExplicitZero ? -1 : 1;
+    return a.networkName.localeCompare(b.networkName);
+  });
+}
+
+export function summarizeWorkerGoalAllocation(
+  goals: WorkerGoalTarget[],
+  employeeId: number,
+  monthKey: string,
+): WorkerGoalAllocationSummary {
+  const plans = summarizeWorkerPlansByNetwork(goals, employeeId, monthKey);
+  const workerWidePlan = plans.find((p) => p.networkName == null) ?? null;
+  const networkPlans = plans.filter((p) => p.networkName != null);
+
+  const workerWideRow = workerWidePlan ? planToNetworkRow(workerWidePlan) : null;
+  const networkRows = networkPlans.map(planToNetworkRow);
+  const geoRows = geoRowsFromNetworks(networkRows);
+
+  const selectedGeoSet = new Set<string>();
+  let overrideCount = 0;
+  for (const row of networkRows) {
+    for (const code of row.selectedGeoCodes) selectedGeoSet.add(code);
+    overrideCount += row.overrideCount;
+  }
+
+  const workerWideMetricLabels: string[] = [];
+  if (workerWideRow) {
+    if (workerWideRow.revenueTarget != null && workerWideRow.revenueTarget > 0) {
+      workerWideMetricLabels.push(METRIC_LABELS_SHORT.revenue);
+    }
+    if (workerWideRow.testingTarget != null && workerWideRow.testingTarget > 0) {
+      workerWideMetricLabels.push(METRIC_LABELS_SHORT.testingBatches);
+    }
+    if (workerWideRow.workingTarget != null && workerWideRow.workingTarget > 0) {
+      workerWideMetricLabels.push(METRIC_LABELS_SHORT.workingCampaigns);
+    }
+  }
+
+  const hasAnyGoals = plans.some((p) => p.metrics.length > 0 || p.overrides.length > 0);
+
+  return {
+    workerWideRow,
+    networkRows,
+    geoRows,
+    counts: {
+      workerWideMetricLabels,
+      networkCount: networkRows.length,
+      selectedGeoCount: selectedGeoSet.size,
+      overrideCount,
+      hasAnyGoals,
+    },
+  };
+}
+
+export function formatAllocationMetric(
+  metric: GoalMetric,
+  value: number | null | undefined,
+): string {
+  if (value == null) return "—";
+  if (metric === "revenue") return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  return String(value);
+}
