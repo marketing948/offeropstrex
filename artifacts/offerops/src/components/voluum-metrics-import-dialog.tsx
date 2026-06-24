@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Upload } from "lucide-react";
 import { authedJson } from "@/lib/api-fetch";
+import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal-surfaces";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -175,6 +176,7 @@ export function VoluumMetricsImportDialog({
       void queryClient.invalidateQueries({
         queryKey: ["campaign-daily-metrics", workspaceId, metricsDate, statusFilter],
       });
+      invalidateGoalSurfaces(queryClient, workspaceId);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Import failed");
     } finally {

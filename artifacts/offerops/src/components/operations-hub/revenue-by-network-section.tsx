@@ -2,25 +2,19 @@
  * Operations Hub — metric network breakdown (revenue / testing / working).
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type {
   GoalCardModel,
   GoalKind,
-  NetworkGroup,
 } from "@/components/operations-hub/ops-hub-drilldown-data";
-import {
-  resolveNetworkTarget,
-  progressPct,
-  listConfiguredNetworkTargets,
-} from "@/components/operations-hub/ops-v2-metrics";
+import { progressPct } from "@/components/operations-hub/ops-v2-metrics";
 import {
   goalKindToEmptyMessage,
   goalKindToSectionTitle,
   goalKindToUnitLabel,
   goalKindToViewButtonLabel,
 } from "@/components/operations-hub/operational-metric-dropdown";
-import { useGoalsConfig, DEFAULT_CONFIG } from "@/lib/goals-config";
 import { useAuth } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace-context";
 import {
@@ -312,7 +306,6 @@ function GeoMetricRow({
 export function RevenueByNetworkSection({
   selectedMetric,
   goalCards,
-  networkGroups,
   mtdRevenue,
   attributedRevenueMtd,
   unattributedRevenueMtd,
@@ -321,7 +314,6 @@ export function RevenueByNetworkSection({
 }: {
   selectedMetric: GoalKind;
   goalCards: GoalCardModel[];
-  networkGroups: NetworkGroup[];
   mtdRevenue: number;
   attributedRevenueMtd: number;
   unattributedRevenueMtd: number;
@@ -331,8 +323,6 @@ export function RevenueByNetworkSection({
   const { currentEmployee } = useAuth();
   const { activeWorkspaceId } = useWorkspace();
   const isWorker = currentEmployee?.role !== "admin";
-  const { data: cfgRaw } = useGoalsConfig();
-  const kpiTargets = (cfgRaw ?? DEFAULT_CONFIG).kpiTargets;
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [viewOpen, setViewOpen] = useState(true);
 
@@ -357,12 +347,9 @@ export function RevenueByNetworkSection({
   });
 
   const breakdown = breakdownQ.data;
-  const usePeBreakdown = !!breakdown;
+  const usePeBreakdown = breakdownQ.isSuccess && !!breakdown;
 
-  const activeCard = useMemo(
-    () => goalCards.find((c) => c.kind === selectedMetric),
-    [goalCards, selectedMetric],
-  );
+  const activeCard = goalCards.find((c) => c.kind === selectedMetric);
 
   const theme = METRIC_THEMES[selectedMetric];
   const SectionIcon = theme.Icon;
@@ -376,25 +363,8 @@ export function RevenueByNetworkSection({
     setExpanded(new Set());
   }, [selectedMetric]);
 
-  const revenueGroups = useMemo(() => {
-    if (selectedMetric !== "revenue") return [];
-    const configuredNetworks = listConfiguredNetworkTargets(kpiTargets, "revenue");
-    return networkGroups
-      .filter(
-        (g) =>
-          g.hasActivity ||
-          configuredNetworks.includes(g.network) ||
-          g.geos.some((geo) => geo.configured),
-      )
-      .sort((a, b) => b.totalRevenue - a.totalRevenue);
-  }, [selectedMetric, networkGroups, kpiTargets]);
-
-  const countRows = activeCard?.networkRows ?? [];
-
   const breakdownNetworks = breakdown?.networks ?? [];
-  const breakdownHasRows = usePeBreakdown
-    ? breakdownNetworks.length > 0 || (breakdown?.summary.target ?? 0) > 0
-    : false;
+  const breakdownHasRows = breakdownNetworks.length > 0 || (breakdown?.summary.target ?? 0) > 0;
 
   function toggleNetwork(network: string) {
     setExpanded((prev) => {
@@ -405,22 +375,14 @@ export function RevenueByNetworkSection({
     });
   }
 
-  const hasRows = usePeBreakdown
-    ? breakdownHasRows
-    : selectedMetric === "revenue"
-      ? revenueGroups.length > 0
-      : countRows.length > 0;
+  const hasRows = usePeBreakdown && breakdownHasRows;
 
-  const summaryTarget = usePeBreakdown ? breakdown!.summary.target : activeCard?.target ?? null;
-  const summaryCurrent = usePeBreakdown ? breakdown!.summary.current : activeCard?.actual ?? 0;
-  const summaryConfigured = usePeBreakdown
-    ? (summaryTarget ?? 0) > 0
-    : (activeCard?.target ?? 0) > 0;
-  const summaryPct = usePeBreakdown
-    ? breakdown!.summary.percent
-    : summaryConfigured && summaryTarget
-      ? progressPct(summaryCurrent, summaryTarget)
-      : null;
+  const summaryTarget = breakdown?.summary.target ?? activeCard?.target ?? null;
+  const summaryCurrent = breakdown?.summary.current ?? activeCard?.actual ?? 0;
+  const summaryConfigured = (summaryTarget ?? 0) > 0;
+  const summaryPct =
+    breakdown?.summary.percent ??
+    (summaryConfigured && summaryTarget ? progressPct(summaryCurrent, summaryTarget) : null);
 
   return (
     <section
@@ -463,9 +425,20 @@ export function RevenueByNetworkSection({
           <Skeleton className="h-16 w-full rounded-xl" />
           <Skeleton className="h-16 w-full rounded-xl" />
         </div>
-      ) : !viewOpen ? null : !hasRows ? (
+      ) : !viewOpen ? null : breakdownQ.isError ? (
+        <p className="mt-5 text-sm text-red-600">
+          Could not load goal breakdown.{" "}
+          <button
+            type="button"
+            className="font-semibold underline"
+            onClick={() => void breakdownQ.refetch()}
+          >
+            Retry
+          </button>
+        </p>
+      ) : !hasRows ? (
         <p className="mt-5 text-sm text-slate-500">{emptyMessage}</p>
-      ) : usePeBreakdown ? (
+      ) : (
         <div className="mt-5 space-y-3">
           <div className={`rounded-xl border px-4 py-4 ${theme.rowBg}`}>
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -537,77 +510,6 @@ export function RevenueByNetworkSection({
             })}
           </div>
         </div>
-      ) : selectedMetric === "revenue" ? (
-        <div className="mt-5 space-y-2">
-          {revenueGroups.map((group) => {
-            const { target, configured } = resolveNetworkTarget(
-              kpiTargets,
-              "revenue",
-              group.network,
-            );
-            const networkPct =
-              configured && target != null ? progressPct(group.totalRevenue, target) : null;
-            const isExpanded = expanded.has(group.network);
-            const visibleGeos = group.geos.filter((g) => g.hasActivity || g.configured);
-
-            return (
-              <div
-                key={group.network}
-                className="overflow-hidden rounded-xl border border-slate-200/60 bg-white shadow-sm"
-              >
-                <NetworkMetricRow
-                  label={group.network}
-                  actual={group.totalRevenue}
-                  target={configured ? target : null}
-                  progressPctValue={networkPct}
-                  configured={configured}
-                  format="currency"
-                  theme={theme}
-                  expandable={visibleGeos.length > 0}
-                  expanded={isExpanded}
-                  onToggle={() => toggleNetwork(group.network)}
-                />
-                {isExpanded &&
-                  visibleGeos.map((geo) => (
-                    <GeoMetricRow
-                      key={`${group.network}-${geo.geo}`}
-                      label={geo.geo}
-                      actual={geo.actual}
-                      target={geo.configured ? geo.target : null}
-                      progressPctValue={geo.progressPct}
-                      configured={geo.configured}
-                      theme={theme}
-                    />
-                  ))}
-                {isExpanded && visibleGeos.length === 0 && (
-                  <p className="border-t border-slate-100 px-6 py-3 text-xs text-slate-500">
-                    No GEO-level target configured
-                  </p>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="mt-5 space-y-2">
-          {countRows.map((row) => (
-            <div
-              key={row.network}
-              className="overflow-hidden rounded-xl border border-slate-200/60 bg-white shadow-sm"
-            >
-              <NetworkMetricRow
-                label={row.network}
-                actual={row.actual}
-                target={row.configured ? row.target : null}
-                progressPctValue={row.progressPct}
-                configured={row.configured}
-                format="count"
-                unitLabel={unitLabel}
-                theme={theme}
-              />
-            </div>
-          ))}
-        </div>
       )}
 
       {!loading && selectedMetric === "revenue" && (
@@ -633,8 +535,7 @@ export function RevenueByNetworkSection({
         <p className="mt-5 flex items-start gap-2 rounded-lg bg-blue-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-slate-600">
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-500" />
           <span>
-            Targets are monthly. {sectionTitle} goals are configured per network in Settings →
-            Goal Engine.
+            Targets are monthly. {sectionTitle} goals use Performance Engine monthly goal plans.
           </span>
         </p>
       )}
