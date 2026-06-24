@@ -2,7 +2,9 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   goalMatchesNetworkPlanScope,
+  goalMatchesWorkerMonthPlanScope,
   removeNetworkGoalsFromTargets,
+  removeAllGoalsForWorkerMonth,
   type GoalPlanScopeRow,
 } from "./goal-plan-scope.ts";
 
@@ -75,5 +77,40 @@ describe("removeNetworkGoalsFromTargets", () => {
     assert.equal(kept.length, 2);
     assert.ok(kept.some((g) => g.id === "other-net"));
     assert.ok(kept.some((g) => g.id === "other-worker"));
+  });
+});
+
+describe("goalMatchesWorkerMonthPlanScope", () => {
+  it("matches all plan metrics for worker/month regardless of network", () => {
+    const row = goal({ id: "1", employeeId: 78, metricKey: "revenue", affiliateNetworkName: null });
+    assert.equal(goalMatchesWorkerMonthPlanScope(row, 78, "2026-06"), true);
+    const netRow = goal({ id: "2", employeeId: 78, metricKey: "testingBatches" });
+    assert.equal(goalMatchesWorkerMonthPlanScope(netRow, 78, "2026-06"), true);
+  });
+
+  it("does not match other workers or months", () => {
+    const row = goal({ id: "1", employeeId: 78, metricKey: "testingBatches" });
+    assert.equal(goalMatchesWorkerMonthPlanScope(row, 43, "2026-06"), false);
+    assert.equal(goalMatchesWorkerMonthPlanScope(row, 78, "2026-07"), false);
+  });
+});
+
+describe("removeAllGoalsForWorkerMonth", () => {
+  const goals: GoalPlanScopeRow[] = [
+    goal({ id: "a", employeeId: 78, metricKey: "revenue", affiliateNetworkName: null }),
+    goal({ id: "b", employeeId: 78, metricKey: "testingBatches" }),
+    goal({ id: "c", employeeId: 78, metricKey: "testingBatches", geoCode: "GB", monthlyTarget: 0 }),
+    goal({ id: "d", employeeId: 78, metricKey: "testingBatches", affiliateNetworkName: "Tradetracker CBV" }),
+    goal({ id: "e", employeeId: 43, metricKey: "testingBatches" }),
+    goal({ id: "f", employeeId: 78, metricKey: "testingBatches", monthKey: "2026-07" }),
+  ];
+
+  it("removes only selected worker/month goals", () => {
+    const { kept, removed } = removeAllGoalsForWorkerMonth(goals, 78, "2026-06");
+    assert.equal(removed.length, 4);
+    assert.deepEqual(removed.map((g) => g.id).sort(), ["a", "b", "c", "d"]);
+    assert.equal(kept.length, 2);
+    assert.ok(kept.some((g) => g.id === "e"));
+    assert.ok(kept.some((g) => g.id === "f"));
   });
 });

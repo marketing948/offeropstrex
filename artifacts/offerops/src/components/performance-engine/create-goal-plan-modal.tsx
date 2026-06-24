@@ -35,14 +35,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { ChevronDown, AlertTriangle, Pencil, Trash2 } from "lucide-react";
+import { ChevronDown, Pencil, Trash2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { authedJson } from "@/lib/api-fetch";
-import { replaceWorkerGoalPlan, resetWorkerGoalPlanNetwork } from "@/lib/performance-engine/api";
+import { replaceWorkerGoalPlan, resetWorkerGoalPlanNetwork, resetAllWorkerGoalPlan } from "@/lib/performance-engine/api";
 import type { GoalMetric } from "@/lib/performance-engine/goal-plan-utils";
 import {
   buildPlanHydrationKey,
   formatSharePreview,
+  isPlanConfirmYes,
   loadPlanFromGoals,
   networkNamesInPlan,
   previewInheritedShares,
@@ -144,14 +145,16 @@ export function CreateGoalPlanModal({
   const isEdit = editContext != null;
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [deletingAll, setDeletingAll] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [scopedToNetwork, setScopedToNetwork] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [deleteAllConfirmOpen, setDeleteAllConfirmOpen] = useState(false);
   const [resetZoneOpen, setResetZoneOpen] = useState(false);
   const [resetNetworkName, setResetNetworkName] = useState("");
-  const [resetSafetyChecked, setResetSafetyChecked] = useState(false);
+  const [resetNetworkYesText, setResetNetworkYesText] = useState("");
+  const [deleteAllYesText, setDeleteAllYesText] = useState("");
 
   const [employeeId, setEmployeeId] = useState<number>(employees[0]?.id ?? 0);
   const [month, setMonth] = useState(monthKey);
@@ -162,9 +165,14 @@ export function CreateGoalPlanModal({
   const [overrides, setOverrides] = useState<GeoOverrideRow[]>([]);
 
   const lastHydratedKeyRef = useRef<string | null>(null);
+  const createInitializedRef = useRef(false);
   const allGoalsRef = useRef(allGoals);
   const pendingScopeChangeRef = useRef<PendingScopeChange | null>(null);
   allGoalsRef.current = allGoals;
+
+  const hasNetworkSelected = Boolean(networkName.trim());
+  const resetNetworkYesOk = isPlanConfirmYes(resetNetworkYesText);
+  const deleteAllYesOk = isPlanConfirmYes(deleteAllYesText);
 
   const workerNetworksQ = useQuery({
     queryKey: ["worker-affiliate-networks", workspaceId, employeeId],
@@ -213,11 +221,7 @@ export function CreateGoalPlanModal({
     [selectedGeoCodes],
   );
 
-  const networkForHydrationKey = isEdit
-    ? networkName || editContext?.networkName || ""
-    : scopedToNetwork
-      ? networkName
-      : "";
+  const networkForHydrationKey = networkName || editContext?.networkName || "";
 
   const hydrationKey = useMemo(() => {
     if (!open) return null;
@@ -258,26 +262,42 @@ export function CreateGoalPlanModal({
         setOverrides(loaded.overrides);
         setSelectedGeoCodes(new Set(loaded.selectedGeoCodes));
         setNetworkName(net ?? "");
-        setScopedToNetwork(!!net);
-        setAdvancedOpen(!!net);
-      } else {
-        setRows(emptyRows());
-        setNetworkName("");
-        setSelectedGeoCodes(new Set());
-        setOverrides([]);
-        setScopedToNetwork(false);
-        setAdvancedOpen(false);
-        setMonth(monthKey);
-        setEmployeeId(employees[0]?.id ?? 0);
+        setAdvancedOpen(true);
       }
       setGeoSearch("");
       setIsDirty(false);
       lastHydratedKeyRef.current = key;
     },
-    [isEdit, editContext, networkForHydrationKey, monthKey, employees],
+    [isEdit, editContext, networkForHydrationKey],
   );
 
+  const initializeCreateForm = useCallback(() => {
+    setRows(emptyRows());
+    setNetworkName("");
+    setSelectedGeoCodes(new Set());
+    setOverrides([]);
+    setAdvancedOpen(false);
+    setMonth(monthKey);
+    setEmployeeId(employees[0]?.id ?? 0);
+    setGeoSearch("");
+    setIsDirty(false);
+    createInitializedRef.current = true;
+    lastHydratedKeyRef.current = buildPlanHydrationKey({
+      mode: "create",
+      employeeId: employees[0]?.id ?? 0,
+      monthKey,
+      networkName: "",
+    });
+  }, [monthKey, employees]);
+
   useEffect(() => {
+    if (!open) return;
+    if (!isEdit) {
+      if (!createInitializedRef.current) {
+        initializeCreateForm();
+      }
+      return;
+    }
     if (
       !shouldRehydratePlanForm({
         open,
@@ -291,17 +311,20 @@ export function CreateGoalPlanModal({
     if (hydrationKey != null) {
       applyHydration(hydrationKey);
     }
-  }, [open, hydrationKey, isDirty, applyHydration]);
+  }, [open, isEdit, hydrationKey, isDirty, applyHydration, initializeCreateForm]);
 
   useEffect(() => {
     if (!open) {
       lastHydratedKeyRef.current = null;
+      createInitializedRef.current = false;
       setIsDirty(false);
       setDiscardConfirmOpen(false);
       setResetConfirmOpen(false);
+      setDeleteAllConfirmOpen(false);
       setResetZoneOpen(false);
       setResetNetworkName("");
-      setResetSafetyChecked(false);
+      setResetNetworkYesText("");
+      setDeleteAllYesText("");
       pendingScopeChangeRef.current = null;
     }
   }, [open]);
@@ -325,32 +348,46 @@ export function CreateGoalPlanModal({
     setNetworkName("");
     setSelectedGeoCodes(new Set());
     setOverrides([]);
-    setScopedToNetwork(false);
     setAdvancedOpen(false);
     setGeoSearch("");
     setMonth(monthKey);
     setEmployeeId(employees[0]?.id ?? 0);
     setIsDirty(false);
     setResetNetworkName("");
-    setResetSafetyChecked(false);
+    setResetNetworkYesText("");
+    setDeleteAllYesText("");
     lastHydratedKeyRef.current = null;
+    createInitializedRef.current = false;
   }
 
   function applyScopeChange(change: PendingScopeChange) {
     pendingScopeChangeRef.current = null;
     setDiscardConfirmOpen(false);
     setIsDirty(false);
-    lastHydratedKeyRef.current = null;
+    if (isEdit && change.type === "network") {
+      lastHydratedKeyRef.current = null;
+    }
     switch (change.type) {
       case "month":
         setMonth(change.value);
+        setNetworkName("");
+        setSelectedGeoCodes(new Set());
+        setOverrides([]);
         break;
       case "employee":
         setEmployeeId(change.value);
         setNetworkName("");
+        setSelectedGeoCodes(new Set());
+        setOverrides([]);
         break;
       case "network":
         setNetworkName(change.value);
+        if (isEdit) {
+          lastHydratedKeyRef.current = null;
+        } else if (!change.value) {
+          setSelectedGeoCodes(new Set());
+          setOverrides([]);
+        }
         break;
     }
   }
@@ -413,12 +450,7 @@ export function CreateGoalPlanModal({
       return;
     }
 
-    if (scopedToNetwork) {
-      if (!networkName) {
-        toast({ title: "Select an affiliate network", variant: "destructive" });
-        setSaving(false);
-        return;
-      }
+    if (hasNetworkSelected) {
       if (selectedGeoList.length === 0) {
         toast({ title: "Select at least one GEO for distribution", variant: "destructive" });
         setSaving(false);
@@ -432,18 +464,18 @@ export function CreateGoalPlanModal({
         employeeId,
         employeeName: emp?.name,
         monthKey: month,
-        affiliateNetworkName: scopedToNetwork ? networkName : null,
-        affiliateNetworkId: scopedToNetwork
+        affiliateNetworkName: hasNetworkSelected ? networkName : null,
+        affiliateNetworkId: hasNetworkSelected
           ? (workerNetworks.find((n) => n.name === networkName)?.id ?? null)
           : null,
-        selectedGeoCodes: scopedToNetwork ? selectedGeoList : undefined,
+        selectedGeoCodes: hasNetworkSelected ? selectedGeoList : undefined,
         metrics: METRIC_ROWS.map((def) => ({
           metricKey: def.key,
           monthlyTarget: Number(rows[def.key].target) || 0,
           xpReward: Number(rows[def.key].xp) || 0,
           enabled: rows[def.key].enabled && Number(rows[def.key].target) > 0,
         })),
-        geoOverrides: scopedToNetwork
+        geoOverrides: hasNetworkSelected
           ? overrides
               .filter((o) => o.geoCode && o.target !== "")
               .map((o) => ({
@@ -467,7 +499,7 @@ export function CreateGoalPlanModal({
   }
 
   async function confirmResetNetwork() {
-    if (!resetNetworkName || !resetSafetyChecked) return;
+    if (!resetNetworkName || !resetNetworkYesOk) return;
     const resetName = resetNetworkName;
     setResetting(true);
     try {
@@ -483,11 +515,10 @@ export function CreateGoalPlanModal({
         setSelectedGeoCodes(new Set());
         setOverrides([]);
         setNetworkName("");
-        setScopedToNetwork(false);
         lastHydratedKeyRef.current = null;
       }
       setResetNetworkName("");
-      setResetSafetyChecked(false);
+      setResetNetworkYesText("");
       setResetConfirmOpen(false);
       setIsDirty(false);
       toast({
@@ -500,6 +531,37 @@ export function CreateGoalPlanModal({
       toast({ title: "Reset failed", description: msg, variant: "destructive" });
     } finally {
       setResetting(false);
+    }
+  }
+
+  async function confirmDeleteAllGoals() {
+    if (!deleteAllYesOk) return;
+    setDeletingAll(true);
+    try {
+      await resetAllWorkerGoalPlan({
+        workspaceId,
+        employeeId,
+        monthKey: month,
+        confirmation: true,
+      });
+      setRows(emptyRows());
+      setNetworkName("");
+      setSelectedGeoCodes(new Set());
+      setOverrides([]);
+      setDeleteAllYesText("");
+      setDeleteAllConfirmOpen(false);
+      setIsDirty(false);
+      lastHydratedKeyRef.current = null;
+      toast({
+        title: "All goals deleted",
+        description: `Removed all goal plans for ${workerLabel} in ${month}.`,
+      });
+      onSaved();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Delete failed";
+      toast({ title: "Delete failed", description: msg, variant: "destructive" });
+    } finally {
+      setDeletingAll(false);
     }
   }
 
@@ -555,7 +617,7 @@ export function CreateGoalPlanModal({
             {METRIC_ROWS.map((def) => {
               const row = rows[def.key];
               const preview =
-                scopedToNetwork && networkName && selectedGeoList.length > 0 && row.enabled && Number(row.target) > 0
+                hasNetworkSelected && selectedGeoList.length > 0 && row.enabled && Number(row.target) > 0
                   ? formatSharePreview(def.key, Number(row.target), selectedGeoList.length)
                   : null;
               return (
@@ -624,58 +686,46 @@ export function CreateGoalPlanModal({
               </button>
             </CollapsibleTrigger>
             <CollapsibleContent className="pt-3 space-y-4">
-              <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/20 px-3 py-2">
-                <div>
-                  <p className="text-sm font-medium">Scope goals to affiliate network</p>
-                  <p className="text-xs text-muted-foreground">
-                    Required to choose GEOs for inherited breakdown before activity exists.
+              <div>
+                <Label>Affiliate Network</Label>
+                {employeeId <= 0 ? (
+                  <p className="mt-1 text-xs text-muted-foreground">Select a worker first.</p>
+                ) : workerNetworksQ.isLoading ? (
+                  <p className="mt-1 text-xs text-muted-foreground">Loading networks…</p>
+                ) : workerNetworks.length === 0 && existingNetworks.length === 0 ? (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Choose an affiliate network to distribute goals by GEO, or save worker-wide goals without a network.
                   </p>
-                </div>
-                <Switch
-                  checked={scopedToNetwork}
-                  onCheckedChange={(v) => {
-                    markDirty();
-                    setScopedToNetwork(v);
-                    if (!v) setNetworkName("");
-                  }}
-                />
+                ) : (
+                  <Select
+                    value={networkName || "none"}
+                    onValueChange={(v) =>
+                      requestScopeChange({ type: "network", value: v === "none" ? "" : v })
+                    }
+                  >
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select network" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No network (worker-wide)</SelectItem>
+                      {workerNetworks.map((n) => (
+                        <SelectItem key={n.id} value={n.name}>{n.name}</SelectItem>
+                      ))}
+                      {existingNetworks
+                        .filter((name) => !workerNetworks.some((n) => n.name === name))
+                        .map((name) => (
+                          <SelectItem key={name} value={name}>{name}</SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {!hasNetworkSelected && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Choose an affiliate network to distribute goals by GEO.
+                  </p>
+                )}
               </div>
 
-              {scopedToNetwork && (
+              {hasNetworkSelected && (
                 <>
-                  <div>
-                    <Label>Affiliate Network</Label>
-                    {employeeId <= 0 ? (
-                      <p className="mt-1 text-xs text-muted-foreground">Select a worker first.</p>
-                    ) : workerNetworksQ.isLoading ? (
-                      <p className="mt-1 text-xs text-muted-foreground">Loading networks…</p>
-                    ) : workerNetworks.length === 0 && existingNetworks.length === 0 ? (
-                      <div className="mt-1 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                        <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-                        No affiliate networks assigned to this worker. Assign networks before saving network goals.
-                      </div>
-                    ) : (
-                      <Select
-                        value={networkName || "none"}
-                        onValueChange={(v) =>
-                          requestScopeChange({ type: "network", value: v === "none" ? "" : v })
-                        }
-                      >
-                        <SelectTrigger className="mt-1"><SelectValue placeholder="Select network" /></SelectTrigger>
-                        <SelectContent>
-                          {workerNetworks.map((n) => (
-                            <SelectItem key={n.id} value={n.name}>{n.name}</SelectItem>
-                          ))}
-                          {existingNetworks
-                            .filter((name) => !workerNetworks.some((n) => n.name === name))
-                            .map((name) => (
-                              <SelectItem key={name} value={name}>{name}</SelectItem>
-                            ))}
-                        </SelectContent>
-                      </Select>
-                    )}
-                  </div>
-
                   <div className="rounded-lg border p-3 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
@@ -856,54 +906,80 @@ export function CreateGoalPlanModal({
                   type="button"
                   className="flex w-full items-center justify-between rounded-lg border border-red-200 bg-red-50/50 px-3 py-2 text-sm font-medium text-red-800 hover:bg-red-50"
                 >
-                  Danger Zone — Reset Network Scope
+                  Danger Zone
                   <ChevronDown size={16} className={`transition-transform ${resetZoneOpen ? "rotate-180" : ""}`} />
                 </button>
               </CollapsibleTrigger>
-              <CollapsibleContent className="pt-3 space-y-4 rounded-lg border border-red-200 bg-red-50/30 p-3">
-                <p className="text-xs text-red-800">
-                  Remove goal scope and GEO overrides for one affiliate network. Other networks and workers are not affected.
-                </p>
-                <div>
-                  <Label>Affiliate network to reset</Label>
-                  <Select value={resetNetworkName || "none"} onValueChange={(v) => setResetNetworkName(v === "none" ? "" : v)}>
-                    <SelectTrigger className="mt-1"><SelectValue placeholder="Choose network to reset" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none" disabled>Choose network to reset</SelectItem>
-                      {resetNetworkOptions.map((name) => (
-                        <SelectItem key={name} value={name}>{name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+              <CollapsibleContent className="pt-3 space-y-6 rounded-lg border border-red-200 bg-red-50/30 p-3">
+                <div className="space-y-3">
+                  <p className="text-sm font-medium text-red-900">Reset selected network</p>
+                  <p className="text-xs text-red-800">
+                    Remove goal scope and GEO overrides for one affiliate network. Other networks are not affected.
+                  </p>
+                  <div>
+                    <Label>Affiliate network</Label>
+                    <Select value={resetNetworkName || "none"} onValueChange={(v) => setResetNetworkName(v === "none" ? "" : v)}>
+                      <SelectTrigger className="mt-1"><SelectValue placeholder="Choose network to reset" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none" disabled>Choose network to reset</SelectItem>
+                        {resetNetworkOptions.map((name) => (
+                          <SelectItem key={name} value={name}>{name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Type YES to confirm</Label>
+                    <Input
+                      className="mt-1"
+                      placeholder="YES"
+                      value={resetNetworkYesText}
+                      onChange={(e) => setResetNetworkYesText(e.target.value)}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    disabled={!resetNetworkName || !resetNetworkYesOk || resetting || deletingAll}
+                    onClick={() => setResetConfirmOpen(true)}
+                  >
+                    {resetting ? "Resetting…" : "Reset selected network"}
+                  </Button>
                 </div>
-                <label className="flex items-start gap-2 text-sm cursor-pointer">
-                  <Checkbox
-                    checked={resetSafetyChecked}
-                    onCheckedChange={(v) => setResetSafetyChecked(v === true)}
-                    className="mt-0.5"
-                  />
-                  <span>
-                    I understand this will remove this network&apos;s goal scope and GEO overrides for this worker/month.
-                  </span>
-                </label>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  disabled={!resetNetworkName || !resetSafetyChecked || resetting}
-                  onClick={() => setResetConfirmOpen(true)}
-                >
-                  {resetting ? "Resetting…" : "Reset network goals"}
-                </Button>
+
+                <div className="border-t border-red-200 pt-4 space-y-3">
+                  <p className="text-sm font-medium text-red-900">Delete all goals for this worker/month</p>
+                  <p className="text-xs text-red-800">
+                    Removes every Performance Engine goal for {workerLabel} in {month}, including all networks and GEO overrides.
+                  </p>
+                  <div>
+                    <Label>Type YES to confirm</Label>
+                    <Input
+                      className="mt-1"
+                      placeholder="YES"
+                      value={deleteAllYesText}
+                      onChange={(e) => setDeleteAllYesText(e.target.value)}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    disabled={!deleteAllYesOk || resetting || deletingAll}
+                    onClick={() => setDeleteAllConfirmOpen(true)}
+                  >
+                    {deletingAll ? "Deleting…" : "Delete all goals for this worker/month"}
+                  </Button>
+                </div>
               </CollapsibleContent>
             </Collapsible>
           )}
 
           <DialogFooter className="gap-2 flex-wrap sm:justify-end">
-            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving || resetting}>
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving || resetting || deletingAll}>
               Cancel
             </Button>
             <Button
-              disabled={saving || resetting || (scopedToNetwork && workerNetworks.length === 0 && existingNetworks.length === 0)}
+              disabled={saving || resetting || deletingAll}
               onClick={() => void savePlan()}
             >
               {saving ? "Saving…" : isEdit ? "Save Changes" : "Save Goal Plan"}
@@ -959,6 +1035,30 @@ export function CreateGoalPlanModal({
               }}
             >
               Reset
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={deleteAllConfirmOpen} onOpenChange={setDeleteAllConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete all goals?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Delete all goals for {workerLabel} in {month}? This removes every network and GEO goal for this month and cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingAll}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deletingAll}
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmDeleteAllGoals();
+              }}
+            >
+              Delete all
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
