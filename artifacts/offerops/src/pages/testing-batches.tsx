@@ -38,8 +38,9 @@ import { useToast } from "@/hooks/use-toast";
 import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal-surfaces";
 import {
   Plus, ChevronRight, Radio, Zap, CheckCircle2, RefreshCw,
-  TrendingUp, Circle, Target, Link2, Clock, AlertCircle,
+  TrendingUp, Circle, Target, Link2, Clock, AlertCircle, Trash2,
 } from "lucide-react";
+import { AdminDeleteBatchDialog } from "@/components/testing-batches/admin-delete-batch-dialog";
 
 // Phase 9d: status config + ordering moved to shared helper so badges
 // stay consistent across testing-batches, testing-batch-detail,
@@ -434,9 +435,12 @@ export default function TestingBatches() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  const [deleteBatch, setDeleteBatch] = useState<{ id: number; batchName: string } | null>(null);
   const [, navigate] = useLocation();
   const { currentEmployee } = useAuth();
   const { activeWorkspaceId: wsId } = useWorkspace();
+  const qc = useQueryClient();
+  const isAdmin = currentEmployee?.role === "admin";
 
   const batchListParams = currentEmployee?.role === "admin"
     ? (statusFilter !== "all" ? { status: statusFilter, workspace_id: wsId ?? 0 } : { workspace_id: wsId ?? 0 })
@@ -703,8 +707,22 @@ export default function TestingBatches() {
                     })()}
                   </div>
 
-                  {/* Arrow */}
-                  <div className="flex justify-end">
+                  {/* Admin delete + arrow */}
+                  <div className="flex justify-end items-center gap-1">
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        title="Delete batch (admin)"
+                        aria-label="Delete batch"
+                        className="rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteBatch({ id: batch.id, batchName: batch.batchName });
+                        }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                     <ChevronRight size={15} className="text-muted-foreground" />
                   </div>
                 </div>
@@ -722,6 +740,29 @@ export default function TestingBatches() {
       )}
 
       <CreateBatchModal open={showCreate} onClose={() => setShowCreate(false)} />
+
+      {isAdmin && (
+        <AdminDeleteBatchDialog
+          open={deleteBatch !== null}
+          onOpenChange={(o) => { if (!o) setDeleteBatch(null); }}
+          workspaceId={wsId ?? 0}
+          batch={deleteBatch}
+          onDeleted={() => {
+            // Destructive admin action — refresh every surface that could
+            // show this batch's campaigns/offers/metrics/tasks/goals.
+            qc.invalidateQueries({
+              predicate: (query) => {
+                const key = query.queryKey?.[0];
+                return (
+                  typeof key === "string" &&
+                  /batch|campaign|offer|performance|todo|goal|live|reports/i.test(key)
+                );
+              },
+            });
+            if (wsId) invalidateGoalSurfaces(qc, wsId);
+          }}
+        />
+      )}
     </div>
   );
 }

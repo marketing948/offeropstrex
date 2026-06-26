@@ -537,11 +537,12 @@ export default function Reports() {
     [allReportEntities],
   );
 
-  // ── Sort states
-  const batchSort  = useSortState("profit");
-  const srcSort    = useSortState("profit");
-  const netSort    = useSortState("profit");
-  const empSort    = useSortState("profit");
+  // ── Sort states. Default to Visits DESC ("clicks" is the visits field)
+  // across every metric table per the cross-surface sorting requirement.
+  const batchSort  = useSortState("clicks");
+  const srcSort    = useSortState("clicks");
+  const netSort    = useSortState("clicks");
+  const empSort    = useSortState("clicks");
 
   const sortedBatches = useMemo<BatchRow[]>(() => sortRows(batchRows as any, batchSort.col, batchSort.dir) as unknown as BatchRow[], [batchRows, batchSort.col, batchSort.dir]);
   const sortedSrc     = useMemo<SourceRow[]>(() => sortRows(sourceRows as any, srcSort.col, srcSort.dir) as unknown as SourceRow[], [sourceRows, srcSort.col, srcSort.dir]);

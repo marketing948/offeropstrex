@@ -16,6 +16,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { sortRows, useTableSort } from "@/lib/use-table-sort";
 import { CompactKpi } from "@/components/operations-hub/compact-kpi";
 import {
   filterByActionChip,
@@ -131,6 +133,8 @@ function RevenueBreakdownTable({
   rows: RevenueBreakdownRow[];
   nameHeader: string;
 }) {
+  const sort = useTableSort("visits");
+  const sorted = useMemo(() => sortRows(rows, sort.col, sort.dir), [rows, sort.col, sort.dir]);
   return (
     <div className="rounded-xl border border-border bg-card">
       <div className="border-b border-border px-4 py-3">
@@ -143,17 +147,17 @@ function RevenueBreakdownTable({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>{nameHeader}</TableHead>
-                <TableHead className="text-right">Revenue</TableHead>
-                <TableHead className="text-right">Cost</TableHead>
-                <TableHead className="text-right">Profit</TableHead>
-                <TableHead className="text-right">ROI</TableHead>
-                <TableHead className="text-right">Conv.</TableHead>
-                <TableHead className="text-right">Visits</TableHead>
+                <SortableTableHead label={nameHeader} col="label" sort={sort} />
+                <SortableTableHead label="Revenue" col="revenue" sort={sort} align="right" />
+                <SortableTableHead label="Cost" col="cost" sort={sort} align="right" />
+                <SortableTableHead label="Profit" col="profit" sort={sort} align="right" />
+                <SortableTableHead label="ROI" col="roi" sort={sort} align="right" />
+                <SortableTableHead label="Conv." col="conversions" sort={sort} align="right" />
+                <SortableTableHead label="Visits" col="visits" sort={sort} align="right" />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((row) => (
+              {sorted.map((row) => (
                 <TableRow key={row.id}>
                   <TableCell className="font-medium">{row.label}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmt$(row.revenue)}</TableCell>
@@ -173,6 +177,8 @@ function RevenueBreakdownTable({
 }
 
 function TestingTable({ rows }: { rows: TestingOfferRow[] }) {
+  const sort = useTableSort("visits");
+  const sorted = useMemo(() => sortRows(rows, sort.col, sort.dir), [rows, sort.col, sort.dir]);
   if (rows.length === 0) {
     return (
       <p className="rounded-xl border border-border bg-card px-4 py-8 text-center text-sm text-muted-foreground">
@@ -188,16 +194,16 @@ function TestingTable({ rows }: { rows: TestingOfferRow[] }) {
             <TableHead>Offer</TableHead>
             <TableHead>GEO</TableHead>
             <TableHead>Traffic Source</TableHead>
-            <TableHead className="text-right">Visits</TableHead>
-            <TableHead className="text-right">Conv.</TableHead>
-            <TableHead className="text-right">Revenue</TableHead>
-            <TableHead className="text-right">Cost</TableHead>
-            <TableHead className="text-right">ROI</TableHead>
+            <SortableTableHead label="Visits" col="visits" sort={sort} align="right" />
+            <SortableTableHead label="Conv." col="conversions" sort={sort} align="right" />
+            <SortableTableHead label="Revenue" col="revenue" sort={sort} align="right" />
+            <SortableTableHead label="Cost" col="cost" sort={sort} align="right" />
+            <SortableTableHead label="ROI" col="roi" sort={sort} align="right" />
             <TableHead className="text-right">Days Active</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((row) => (
+          {sorted.map((row) => (
             <TableRow key={row.id}>
               <TableCell>
                 <div className="font-medium">{row.offer}</div>
@@ -220,6 +226,10 @@ function TestingTable({ rows }: { rows: TestingOfferRow[] }) {
 }
 
 function WorkingTable({ rows }: { rows: WorkingCampaignRow[] }) {
+  // No visits column here, so default to Profit DESC; all numeric columns
+  // are still click-sortable.
+  const sort = useTableSort("profit");
+  const sorted = useMemo(() => sortRows(rows, sort.col, sort.dir), [rows, sort.col, sort.dir]);
   if (rows.length === 0) {
     return (
       <p className="rounded-xl border border-border bg-card px-4 py-8 text-center text-sm text-muted-foreground">
@@ -233,16 +243,16 @@ function WorkingTable({ rows }: { rows: WorkingCampaignRow[] }) {
         <TableHeader>
           <TableRow>
             <TableHead>Campaign</TableHead>
-            <TableHead className="text-right">ROI</TableHead>
-            <TableHead className="text-right">Revenue</TableHead>
-            <TableHead className="text-right">Profit</TableHead>
-            <TableHead className="text-right">Conv.</TableHead>
+            <SortableTableHead label="ROI" col="roi" sort={sort} align="right" />
+            <SortableTableHead label="Revenue" col="revenue" sort={sort} align="right" />
+            <SortableTableHead label="Profit" col="profit" sort={sort} align="right" />
+            <SortableTableHead label="Conv." col="conversions" sort={sort} align="right" />
             <TableHead className="text-right">Last Conversion</TableHead>
             <TableHead className="text-right">Days Running</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((row) => (
+          {sorted.map((row) => (
             <TableRow key={row.id}>
               <TableCell>
                 <div className="font-medium">{row.campaign}</div>

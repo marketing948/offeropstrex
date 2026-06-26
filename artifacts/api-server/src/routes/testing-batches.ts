@@ -1,5 +1,7 @@
 import { Router, type IRouter } from "express";
-import { asc, eq, and, inArray } from "drizzle-orm";
+import { asc, eq, and, count, inArray, type SQL } from "drizzle-orm";
+import type { PgTable } from "drizzle-orm/pg-core";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
   db,
   batchTrafficSourceRunsTable,
@@ -10,7 +12,20 @@ import {
   geosTable,
   workspaceTrafficSourcesTable,
   workerAffiliateNetworksTable,
+  offersTable,
+  campaignsTable,
+  campaignDailyMetricsTable,
+  campaignWinnersTable,
+  performanceTable,
+  batchResultsTable,
+  trackerCampaignsTable,
+  voluumCampaignMappingsTable,
+  todoTasksTable,
+  notificationsTable,
+  importedOffersTable,
+  voluumOffersTable,
 } from "@workspace/db";
+import { z } from "zod/v4";
 import {
   CreateTestingBatchBody,
   UpdateTestingBatchBody,
@@ -19,7 +34,8 @@ import {
   DeleteTestingBatchParams,
   ListTestingBatchesQueryParams,
 } from "@workspace/api-zod";
-import { requireWorkspaceFromQuery, requireWorkspaceAccess } from "../lib/workspace-access";
+import { requireWorkspaceFromQuery, requireWorkspaceAccess, requireAdmin } from "../lib/workspace-access";
+import { recordOperationalEvent } from "../lib/operational-events.ts";
 import {
   enforceEmployeeIdAccess,
   networkNameAllowed,
@@ -881,5 +897,283 @@ function legacyLifecycle410(_req: import("express").Request, res: import("expres
 router.post("/testing-batches/:id/mark-ready", legacyLifecycle410);
 router.post("/testing-batches/:id/start-optimization", legacyLifecycle410);
 router.post("/testing-batches/:id/complete-optimization", legacyLifecycle410);
+
+// ── Admin: hard-delete a testing batch + its dependent data ────────────
+//
+// SAFETY MODEL:
+//  * Admin-only (role enforced server-side via requireAdmin) AND the admin
+//    must have access to the batch's workspace.
+//  * Scope is always a single (workspaceId, batchId). Nothing else is
+//    touched: employees, workspaces, affiliate networks, geos, traffic
+//    sources, and global settings are never deleted.
+//  * Destructive + irreversible, so it is gated by a separate preview
+//    endpoint, an explicit confirmationText, a transaction, and an audit
+//    event.
+//
+// CASCADE MAP (verified against lib/db/src/schema):
+//   Deleted with the batch (ON DELETE CASCADE):
+//     offers, performance, batch_results, tracker_campaigns,
+//     voluum_campaign_mappings, batch_traffic_source_runs, campaigns
+//       → campaign_daily_metrics (via campaign), campaign_winners (via campaign)
+//   Preserved but unlinked (ON DELETE SET NULL):
+//     todo_tasks.related_batch_id, notifications.batch_id,
+//     imported_offers.batch_id
+//   No FK (cleaned explicitly here): voluum_offers.batch_id
+//   Audit (preserved): operational_events / operational_activity_feed
+
+const DELETE_BATCH_CONFIRMATION_TEXT = "DELETE BATCH";
+
+const adminBatchDeleteSchema = z.object({
+  workspaceId: z.number().int().positive(),
+  batchId: z.number().int().positive(),
+});
+
+const adminBatchDeleteConfirmSchema = adminBatchDeleteSchema.extend({
+  confirmationText: z.string(),
+});
+
+type SelectClient = Pick<NodePgDatabase, "select">;
+
+async function countWhere(
+  client: SelectClient,
+  table: PgTable,
+  whereClause: SQL | null | undefined,
+): Promise<number> {
+  // A null/undefined clause means "nothing to match" here (e.g. no campaigns
+  // in the batch), so report 0 rather than counting the whole table.
+  if (!whereClause) return 0;
+  const rows = await client.select({ value: count() }).from(table).where(whereClause);
+  return Number(rows[0]?.value ?? 0);
+}
+
+type BatchDeletionScope = {
+  batch: typeof testingBatchesTable.$inferSelect;
+  campaignIds: number[];
+  counts: {
+    campaigns: number;
+    offers: number;
+    campaignDailyMetrics: number;
+    campaignWinners: number;
+    performance: number;
+    batchResults: number;
+    trackerCampaigns: number;
+    voluumCampaignMappings: number;
+    trafficSourceRuns: number;
+    voluumOffers: number;
+    // Preserved-but-unlinked:
+    todoTasksUnlinked: number;
+    notificationsUnlinked: number;
+    importedOffersUnlinked: number;
+  };
+};
+
+/**
+ * Gather the batch row, its campaign ids, and counts of every dependent
+ * record. Used by both the preview and the delete (inside its transaction)
+ * so the reported numbers exactly match what the delete will affect.
+ * Returns null when the batch is not in the workspace.
+ */
+async function loadBatchDeletionScope(
+  client: SelectClient,
+  workspaceId: number,
+  batchId: number,
+): Promise<BatchDeletionScope | null> {
+  const [batch] = await client
+    .select()
+    .from(testingBatchesTable)
+    .where(and(eq(testingBatchesTable.id, batchId), eq(testingBatchesTable.workspaceId, workspaceId)));
+  if (!batch) return null;
+
+  const campaignRows = await client
+    .select({ id: campaignsTable.id })
+    .from(campaignsTable)
+    .where(and(eq(campaignsTable.batchId, batchId), eq(campaignsTable.workspaceId, workspaceId)));
+  const campaignIds = campaignRows.map((c) => c.id);
+
+  const metricsWhere = campaignIds.length
+    ? and(
+        eq(campaignDailyMetricsTable.workspaceId, workspaceId),
+        inArray(campaignDailyMetricsTable.campaignId, campaignIds),
+      )
+    : null;
+  const winnersWhere = campaignIds.length
+    ? inArray(campaignWinnersTable.campaignId, campaignIds)
+    : null;
+
+  const [
+    offers,
+    campaignDailyMetrics,
+    campaignWinners,
+    performance,
+    batchResults,
+    trackerCampaigns,
+    voluumCampaignMappings,
+    trafficSourceRuns,
+    voluumOffers,
+    todoTasksUnlinked,
+    notificationsUnlinked,
+    importedOffersUnlinked,
+  ] = await Promise.all([
+    countWhere(client, offersTable, eq(offersTable.batchId, batchId)),
+    metricsWhere ? countWhere(client, campaignDailyMetricsTable, metricsWhere) : Promise.resolve(0),
+    winnersWhere ? countWhere(client, campaignWinnersTable, winnersWhere) : Promise.resolve(0),
+    countWhere(client, performanceTable, eq(performanceTable.batchId, batchId)),
+    countWhere(client, batchResultsTable, eq(batchResultsTable.batchId, batchId)),
+    countWhere(client, trackerCampaignsTable, eq(trackerCampaignsTable.batchId, batchId)),
+    countWhere(client, voluumCampaignMappingsTable, eq(voluumCampaignMappingsTable.batchId, batchId)),
+    countWhere(client, batchTrafficSourceRunsTable, eq(batchTrafficSourceRunsTable.batchId, batchId)),
+    countWhere(
+      client,
+      voluumOffersTable,
+      and(eq(voluumOffersTable.workspaceId, workspaceId), eq(voluumOffersTable.batchId, batchId)),
+    ),
+    countWhere(client, todoTasksTable, eq(todoTasksTable.relatedBatchId, batchId)),
+    countWhere(client, notificationsTable, eq(notificationsTable.batchId, batchId)),
+    countWhere(client, importedOffersTable, eq(importedOffersTable.batchId, batchId)),
+  ]);
+
+  return {
+    batch,
+    campaignIds,
+    counts: {
+      campaigns: campaignIds.length,
+      offers,
+      campaignDailyMetrics,
+      campaignWinners,
+      performance,
+      batchResults,
+      trackerCampaigns,
+      voluumCampaignMappings,
+      trafficSourceRuns,
+      voluumOffers,
+      todoTasksUnlinked,
+      notificationsUnlinked,
+      importedOffersUnlinked,
+    },
+  };
+}
+
+function serializeDeletionScope(scope: BatchDeletionScope) {
+  const { batch, counts } = scope;
+  return {
+    batch: {
+      id: batch.id,
+      batchName: batch.batchName,
+      batchTag: batch.batchTag,
+      status: batch.status,
+      workspaceId: batch.workspaceId,
+    },
+    counts,
+    deletes: {
+      campaigns: counts.campaigns,
+      offers: counts.offers,
+      campaignDailyMetrics: counts.campaignDailyMetrics,
+      campaignWinners: counts.campaignWinners,
+      performance: counts.performance,
+      batchResults: counts.batchResults,
+      trackerCampaigns: counts.trackerCampaigns,
+      voluumCampaignMappings: counts.voluumCampaignMappings,
+      trafficSourceRuns: counts.trafficSourceRuns,
+      voluumOffers: counts.voluumOffers,
+    },
+    unlinks: {
+      todoTasks: counts.todoTasksUnlinked,
+      notifications: counts.notificationsUnlinked,
+      importedOffers: counts.importedOffersUnlinked,
+    },
+    warning:
+      "This permanently deletes the batch and all dependent campaigns, offers, " +
+      "performance, results, tracker campaigns, traffic-source runs, and daily " +
+      "metrics. Related to-do tasks, notifications, and imported offers are kept " +
+      "but unlinked. This cannot be undone.",
+    confirmationRequired: DELETE_BATCH_CONFIRMATION_TEXT,
+  };
+}
+
+router.post("/testing-batches/admin/delete-preview", async (req, res): Promise<void> => {
+  const parsed = adminBatchDeleteSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const { workspaceId, batchId } = parsed.data;
+
+  if ((await requireAdmin(req, res)) === null) return;
+  if ((await requireWorkspaceAccess(req, res, workspaceId)) === null) return;
+
+  const scope = await loadBatchDeletionScope(db, workspaceId, batchId);
+  if (!scope) {
+    res.status(404).json({ error: "Testing batch not found in this workspace" });
+    return;
+  }
+
+  res.json(serializeDeletionScope(scope));
+});
+
+router.post("/testing-batches/admin/delete", async (req, res): Promise<void> => {
+  const parsed = adminBatchDeleteConfirmSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const { workspaceId, batchId, confirmationText } = parsed.data;
+
+  if (confirmationText !== DELETE_BATCH_CONFIRMATION_TEXT) {
+    res.status(400).json({
+      error: `confirmationText must be exactly "${DELETE_BATCH_CONFIRMATION_TEXT}" to confirm deletion`,
+    });
+    return;
+  }
+
+  const admin = await requireAdmin(req, res);
+  if (admin === null) return;
+  if ((await requireWorkspaceAccess(req, res, workspaceId)) === null) return;
+
+  let serialized: ReturnType<typeof serializeDeletionScope> | null = null;
+  const ok = await db.transaction(async (tx) => {
+    const scope = await loadBatchDeletionScope(tx, workspaceId, batchId);
+    if (!scope) return false;
+    serialized = serializeDeletionScope(scope);
+
+    // voluum_offers has no FK to testing_batches, so cascade won't remove
+    // these batch-scoped rows — delete them explicitly within the same tx.
+    await tx
+      .delete(voluumOffersTable)
+      .where(and(eq(voluumOffersTable.workspaceId, workspaceId), eq(voluumOffersTable.batchId, batchId)));
+
+    // Deleting the batch cascades to campaigns/offers/performance/results/
+    // tracker_campaigns/traffic-source runs/voluum mappings, and through
+    // campaigns to campaign_daily_metrics + campaign_winners.
+    await tx
+      .delete(testingBatchesTable)
+      .where(and(eq(testingBatchesTable.id, batchId), eq(testingBatchesTable.workspaceId, workspaceId)));
+    return true;
+  });
+
+  if (!ok || serialized === null) {
+    res.status(404).json({ error: "Testing batch not found in this workspace" });
+    return;
+  }
+
+  const summary: ReturnType<typeof serializeDeletionScope> = serialized;
+  await recordOperationalEvent({
+    workspaceId,
+    entityType: "batch",
+    entityId: batchId,
+    eventType: "TESTING_BATCH_DELETED",
+    actorType: "employee",
+    actorId: admin.id,
+    source: "routes.testing-batches",
+    payloadJson: {
+      batchName: summary.batch.batchName,
+      batchTag: summary.batch.batchTag,
+      status: summary.batch.status,
+      deletes: summary.deletes,
+      unlinks: summary.unlinks,
+    },
+  });
+
+  res.json({ deleted: true, ...summary });
+});
 
 export default router;
