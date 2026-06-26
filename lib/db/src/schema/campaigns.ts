@@ -82,6 +82,12 @@ export const campaignsTable = pgTable("campaigns", {
   manualClosedByEmployeeId: integer("manual_closed_by_employee_id").references(() => employeesTable.id, {
     onDelete: "set null",
   }),
+  // Owner of manually-created production/live campaigns. Set from the
+  // authenticated employee at creation (never from request body). NULLABLE:
+  // existing rows and CampaignOps-generated campaigns may be null (no backfill).
+  createdByEmployeeId: integer("created_by_employee_id").references(() => employeesTable.id, {
+    onDelete: "set null",
+  }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (_t) => ({

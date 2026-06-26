@@ -34,6 +34,8 @@ export type VoluumImportSummary = {
   importable: number;
   updating: number;
   skipped: number;
+  /** Rows that match an existing (campaign, date) row and are skipped because override is off. */
+  skippedExisting: number;
   duplicateCampaignIdsInCsv: number;
 };
 
@@ -45,9 +47,12 @@ export type VoluumImportPreviewResult = {
 
 export type VoluumImportConfirmResult = {
   date: string;
+  override: boolean;
   imported: number;
   updated: number;
   skipped: number;
+  /** Existing rows preserved because override was off (includes confirm-time conflict races). */
+  skippedExisting: number;
   skippedBreakdown: Partial<Record<VoluumMetricsSkipReason, number>>;
   duplicateCampaignIdsInCsv: number;
 };
@@ -146,6 +151,8 @@ type BuildPlanInput = {
   date: string;
   csvParse: Extract<VoluumCsvParseResult, { ok: true }>;
   access: AccessResult;
+  /** When false, rows matching an existing (campaign, date) row are skipped instead of updated. */
+  override: boolean;
 };
 
 async function buildImportPlan(input: BuildPlanInput): Promise<{
@@ -161,7 +168,7 @@ async function buildImportPlan(input: BuildPlanInput): Promise<{
     isUpdate: boolean;
   }>;
 }> {
-  const { workspaceId, date, csvParse, access } = input;
+  const { workspaceId, date, csvParse, access, override } = input;
   const campaignByVoluum = await loadCampaignsByVoluumId(workspaceId);
 
   const previewRows: VoluumImportPreviewRow[] = [];
@@ -251,12 +258,35 @@ async function buildImportPlan(input: BuildPlanInput): Promise<{
     c.isUpdate = existingIds.has(c.campaignId);
   }
 
+  // Only rows that will actually be written. When override is off, rows that
+  // match an existing (campaign, date) row are removed here and surfaced as
+  // skips so existing data is never overwritten.
+  const writeCandidates: typeof upsertCandidates = [];
   for (const c of upsertCandidates) {
+    const lineNumber =
+      dedupedValid.find((r) => r.voluumCampaignId?.trim() === c.voluumCampaignId)?.lineNumber ?? 0;
+    const campaignName = campaignByVoluum.get(c.voluumCampaignId)?.campaignName ?? null;
+    if (c.isUpdate && !override) {
+      previewRows.push({
+        lineNumber,
+        voluumCampaignId: c.voluumCampaignId,
+        campaignId: c.campaignId,
+        campaignName,
+        visits: c.visits,
+        conversions: c.conversions,
+        cost: c.cost,
+        revenue: c.revenue,
+        action: "skip",
+        skipReason: "existing_no_override",
+      });
+      continue;
+    }
+    writeCandidates.push(c);
     previewRows.push({
-      lineNumber: dedupedValid.find((r) => r.voluumCampaignId?.trim() === c.voluumCampaignId)?.lineNumber ?? 0,
+      lineNumber,
       voluumCampaignId: c.voluumCampaignId,
       campaignId: c.campaignId,
-      campaignName: campaignByVoluum.get(c.voluumCampaignId)?.campaignName ?? null,
+      campaignName,
       visits: c.visits,
       conversions: c.conversions,
       cost: c.cost,
@@ -270,10 +300,14 @@ async function buildImportPlan(input: BuildPlanInput): Promise<{
   let importable = 0;
   let updating = 0;
   let skipped = 0;
+  let skippedExisting = 0;
   for (const r of previewRows) {
     if (r.action === "import") importable++;
     else if (r.action === "update") updating++;
-    else skipped++;
+    else {
+      skipped++;
+      if (r.skipReason === "existing_no_override") skippedExisting++;
+    }
   }
 
   const summary: VoluumImportSummary = {
@@ -281,10 +315,11 @@ async function buildImportPlan(input: BuildPlanInput): Promise<{
     importable,
     updating,
     skipped,
+    skippedExisting,
     duplicateCampaignIdsInCsv,
   };
 
-  return { previewRows, summary, upsertCandidates };
+  return { previewRows, summary, upsertCandidates: writeCandidates };
 }
 
 export async function previewVoluumMetricsImport(params: {
@@ -292,6 +327,7 @@ export async function previewVoluumMetricsImport(params: {
   date: string;
   csvText: string;
   access: AccessResult;
+  override?: boolean;
 }): Promise<VoluumImportPreviewResult | { error: string; status: number }> {
   const parsed = parseImportBody(params.workspaceId, params.date, params.csvText);
   if ("error" in parsed) {
@@ -308,6 +344,7 @@ export async function previewVoluumMetricsImport(params: {
     date: parsed.date,
     csvParse,
     access: params.access,
+    override: params.override ?? false,
   });
 
   return {
@@ -322,7 +359,9 @@ export async function confirmVoluumMetricsImport(params: {
   date: string;
   csvText: string;
   access: AccessResult;
+  override?: boolean;
 }): Promise<VoluumImportConfirmResult | { error: string; status: number }> {
+  const override = params.override ?? false;
   const parsed = parseImportBody(params.workspaceId, params.date, params.csvText);
   if ("error" in parsed) {
     return { error: parsed.error, status: 400 };
@@ -338,6 +377,7 @@ export async function confirmVoluumMetricsImport(params: {
     date: parsed.date,
     csvParse,
     access: params.access,
+    override,
   });
 
   const skippedBreakdown: Partial<Record<VoluumMetricsSkipReason, number>> = {};
@@ -350,9 +390,11 @@ export async function confirmVoluumMetricsImport(params: {
   if (upsertCandidates.length === 0) {
     return {
       date: parsed.date,
+      override,
       imported: 0,
       updated: 0,
       skipped: summary.skipped,
+      skippedExisting: summary.skippedExisting,
       skippedBreakdown,
       duplicateCampaignIdsInCsv: summary.duplicateCampaignIdsInCsv,
     };
@@ -361,45 +403,80 @@ export async function confirmVoluumMetricsImport(params: {
   const now = new Date();
   let imported = 0;
   let updated = 0;
+  // Existing rows preserved at confirm time due to a race (row created between
+  // preview and confirm) when override is off.
+  let skippedExistingRace = 0;
 
   await db.transaction(async (tx) => {
     for (const row of upsertCandidates) {
-      await tx
-        .insert(campaignDailyMetricsTable)
-        .values({
-          workspaceId: parsed.workspaceId,
-          campaignId: row.campaignId,
-          date: parsed.date,
-          employeeId: params.access.employee.id,
-          cost: row.cost,
-          revenue: row.revenue,
-          conversions: row.conversions,
-          visits: row.visits,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [campaignDailyMetricsTable.campaignId, campaignDailyMetricsTable.date],
-          set: {
+      if (override) {
+        await tx
+          .insert(campaignDailyMetricsTable)
+          .values({
+            workspaceId: parsed.workspaceId,
+            campaignId: row.campaignId,
+            date: parsed.date,
             employeeId: params.access.employee.id,
             cost: row.cost,
             revenue: row.revenue,
             conversions: row.conversions,
             visits: row.visits,
-            workspaceId: parsed.workspaceId,
             updatedAt: now,
-          },
-        });
-      if (row.isUpdate) updated++;
-      else imported++;
+          })
+          .onConflictDoUpdate({
+            target: [campaignDailyMetricsTable.campaignId, campaignDailyMetricsTable.date],
+            set: {
+              employeeId: params.access.employee.id,
+              cost: row.cost,
+              revenue: row.revenue,
+              conversions: row.conversions,
+              visits: row.visits,
+              workspaceId: parsed.workspaceId,
+              updatedAt: now,
+            },
+          });
+        if (row.isUpdate) updated++;
+        else imported++;
+      } else {
+        // Insert-only: never overwrite an existing (campaign, date) row.
+        const inserted = await tx
+          .insert(campaignDailyMetricsTable)
+          .values({
+            workspaceId: parsed.workspaceId,
+            campaignId: row.campaignId,
+            date: parsed.date,
+            employeeId: params.access.employee.id,
+            cost: row.cost,
+            revenue: row.revenue,
+            conversions: row.conversions,
+            visits: row.visits,
+            updatedAt: now,
+          })
+          .onConflictDoNothing({
+            target: [campaignDailyMetricsTable.campaignId, campaignDailyMetricsTable.date],
+          })
+          .returning({ id: campaignDailyMetricsTable.id });
+        if (inserted.length > 0) imported++;
+        else skippedExistingRace++;
+      }
     }
   });
 
   return {
     date: parsed.date,
+    override,
     imported,
     updated,
-    skipped: summary.skipped,
-    skippedBreakdown,
+    skipped: summary.skipped + skippedExistingRace,
+    skippedExisting: summary.skippedExisting + skippedExistingRace,
+    skippedBreakdown:
+      skippedExistingRace > 0
+        ? {
+            ...skippedBreakdown,
+            existing_no_override:
+              (skippedBreakdown.existing_no_override ?? 0) + skippedExistingRace,
+          }
+        : skippedBreakdown,
     duplicateCampaignIdsInCsv: summary.duplicateCampaignIdsInCsv,
   };
 }

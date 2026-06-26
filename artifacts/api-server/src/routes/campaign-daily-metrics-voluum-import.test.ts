@@ -261,7 +261,9 @@ describe("campaign-daily-metrics voluum import", { concurrency: false }, () => {
       "POST",
       "/campaign-daily-metrics/voluum-import/preview",
       seed.adminId,
-      { workspaceId: seed.workspaceId, date: METRIC_DATE, csvText },
+      // override:true so an existing (campaign, date) row is classified as
+      // "update". With the default (override:false) it would be skipped.
+      { workspaceId: seed.workspaceId, date: METRIC_DATE, csvText, override: true },
     );
     assert.equal(response.status, 200);
     const summary = json?.summary as Record<string, number>;
@@ -283,7 +285,7 @@ describe("campaign-daily-metrics voluum import", { concurrency: false }, () => {
       "POST",
       "/campaign-daily-metrics/voluum-import/confirm",
       seed.workerAId,
-      { workspaceId: seed.workspaceId, date: METRIC_DATE, csvText },
+      { workspaceId: seed.workspaceId, date: METRIC_DATE, csvText, override: true },
     );
     assert.equal(confirm.response.status, 200);
     assert.equal(confirm.json?.imported, 1);
@@ -306,7 +308,8 @@ describe("campaign-daily-metrics voluum import", { concurrency: false }, () => {
       "POST",
       "/campaign-daily-metrics/voluum-import/confirm",
       seed.workerAId,
-      { workspaceId: seed.workspaceId, date: METRIC_DATE, csvText },
+      // Re-import the same row with override:true to exercise the update path.
+      { workspaceId: seed.workspaceId, date: METRIC_DATE, csvText, override: true },
     );
     assert.equal(confirm2.json?.imported, 0);
     assert.equal(confirm2.json?.updated, 1);

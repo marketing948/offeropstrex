@@ -465,13 +465,55 @@ describe("POST /production-live-campaigns", { concurrency: false }, () => {
     assert.equal(response.status, 403);
   });
 
-  test("non-admin cannot create production live campaigns", async () => {
+  // Feature 1 — Employee Add Manual Campaign. Production campaign creation is
+  // no longer admin-only; any assigned workspace member may create one, and
+  // ownership is recorded from the authenticated employee.
+  test("workspace employee can create their own production live campaign", async () => {
     const seed = await seedWorkspaceWithSource();
-    const { response } = await request(
+    const voluumId = `vc-worker-${Date.now()}`;
+    const { response, json } = await request(
       "POST",
       "/production-live-campaigns",
       seed.workerId,
-      workingBody(seed, `vc-worker-${Date.now()}`),
+      workingBody(seed, voluumId),
+    );
+    assert.equal(response.status, 201);
+    assert.equal(json?.status, "live");
+
+    const [row] = await db
+      .select()
+      .from(campaignsTable)
+      .where(eq(campaignsTable.id, json?.id as number));
+    assert.equal(row.createdByEmployeeId, seed.workerId);
+  });
+
+  test("ownership is taken from the auth token, not the request body", async () => {
+    const seed = await seedWorkspaceWithSource();
+    const voluumId = `vc-owner-forced-${Date.now()}`;
+    // Worker tries to attribute the campaign to the admin via body fields.
+    const { response, json } = await request("POST", "/production-live-campaigns", seed.workerId, {
+      ...workingBody(seed, voluumId),
+      createdByEmployeeId: seed.adminId,
+      employeeId: seed.adminId,
+    });
+    assert.equal(response.status, 201);
+
+    const [row] = await db
+      .select()
+      .from(campaignsTable)
+      .where(eq(campaignsTable.id, json?.id as number));
+    // Server ignores body-supplied ownership and uses the authenticated worker.
+    assert.equal(row.createdByEmployeeId, seed.workerId);
+  });
+
+  test("a non-member cannot create production live campaigns", async () => {
+    const seed = await seedWorkspaceWithSource();
+    const outsider = await createEmployee("employee"); // intentionally not assigned
+    const { response } = await request(
+      "POST",
+      "/production-live-campaigns",
+      outsider,
+      workingBody(seed, `vc-outsider-${Date.now()}`),
     );
     assert.equal(response.status, 403);
   });

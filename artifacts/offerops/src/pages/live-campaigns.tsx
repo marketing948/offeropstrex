@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Upload } from "lucide-react";
+import { Plus, Trash2, Upload } from "lucide-react";
 import { VoluumMetricsImportDialog } from "@/components/voluum-metrics-import-dialog";
 import { useAuth } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -30,6 +30,7 @@ import { LiveCampaignsSummaryTable } from "@/components/live-campaigns/live-camp
 import { LiveCampaignDrawer } from "@/components/live-campaigns/live-campaign-drawer";
 import { PerformanceRangePicker } from "@/components/live-campaigns/performance-range-picker";
 import { formatPerformanceRangeLabel } from "@/components/live-campaigns/live-campaign-labels";
+import { LiveCampaignsAdminDeleteDialog } from "@/components/live-campaigns/live-campaigns-admin-delete-dialog";
 import { RefreshingHint } from "@/components/operational-state/refreshing-hint";
 import { operationalErrorMessage } from "@/lib/operational-feedback";
 
@@ -78,6 +79,7 @@ export default function LiveCampaigns() {
   const isAdmin = currentEmployee?.role === "admin";
   const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [closeTarget, setCloseTarget] = useState<{ id: number; name: string } | null>(null);
   const [selectedCampaign, setSelectedCampaign] = useState<MonitoringCampaign | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("live");
@@ -300,11 +302,17 @@ export default function LiveCampaigns() {
             Import Voluum CSV
           </Button>
           {isAdmin && (
-            <Button size="sm" onClick={() => setAddOpen(true)}>
-              <Plus className="mr-1.5 h-4 w-4" />
-              Add manual campaign
+            <Button size="sm" variant="outline" onClick={() => setDeleteOpen(true)}>
+              <Trash2 className="mr-1.5 h-4 w-4" />
+              Delete metrics data
             </Button>
           )}
+          {/* Manual production campaign: available to all workspace members.
+              Ownership is enforced server-side from the auth token. */}
+          <Button size="sm" onClick={() => setAddOpen(true)}>
+            <Plus className="mr-1.5 h-4 w-4" />
+            Add manual campaign
+          </Button>
         </div>
       </div>
 
@@ -489,19 +497,28 @@ export default function LiveCampaigns() {
         statusFilter={statusFilter}
       />
 
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Add manual campaign</DialogTitle>
+          </DialogHeader>
+          <ProductionLiveCampaignForm
+            workingParents={workingParentCampaigns}
+            onCreated={() => setAddOpen(false)}
+            onCancel={() => setAddOpen(false)}
+          />
+        </DialogContent>
+      </Dialog>
+
       {isAdmin && (
-        <Dialog open={addOpen} onOpenChange={setAddOpen}>
-          <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Add manual live campaign</DialogTitle>
-            </DialogHeader>
-            <ProductionLiveCampaignForm
-              workingParents={workingParentCampaigns}
-              onCreated={() => setAddOpen(false)}
-              onCancel={() => setAddOpen(false)}
-            />
-          </DialogContent>
-        </Dialog>
+        <LiveCampaignsAdminDeleteDialog
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          workspaceId={activeWorkspaceId ?? 0}
+          onDeleted={() => {
+            void queryClient.invalidateQueries({ queryKey: ["campaign-daily-metrics"] });
+          }}
+        />
       )}
     </div>
   );

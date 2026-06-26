@@ -1,8 +1,16 @@
 import { Router, type IRouter, type Response } from "express";
-import { and, eq, inArray } from "drizzle-orm";
-import { campaignDailyMetricsTable, campaignsTable, db, testingBatchesTable } from "@workspace/db";
+import { and, count, eq, gte, inArray, lte } from "drizzle-orm";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import {
+  campaignDailyMetricsTable,
+  campaignsTable,
+  db,
+  employeesTable,
+  testingBatchesTable,
+} from "@workspace/db";
 import { z } from "zod/v4";
 import { checkWorkspaceAccess } from "../lib/workspace-access.ts";
+import { recordOperationalEvent } from "../lib/operational-events.ts";
 import {
   assertCanUpsertCampaignDailyMetrics,
   CampaignDailyMetricsError,
@@ -99,6 +107,9 @@ const voluumImportBodySchema = z.object({
   workspaceId: z.number().int().positive(),
   date: z.string().regex(METRIC_DATE_RE, "date must be YYYY-MM-DD"),
   csvText: z.string().min(1),
+  // When true, overwrite existing rows for matching (campaign, date). Default
+  // false: existing rows are preserved and matching CSV rows are skipped.
+  override: z.boolean().optional().default(false),
 });
 
 router.get("/campaign-daily-metrics", async (req, res): Promise<void> => {
@@ -326,6 +337,7 @@ router.post("/campaign-daily-metrics/voluum-import/preview", async (req, res): P
     date: parsed.data.date,
     csvText: parsed.data.csvText,
     access,
+    override: parsed.data.override,
   });
 
   if ("error" in result) {
@@ -354,6 +366,7 @@ router.post("/campaign-daily-metrics/voluum-import/confirm", async (req, res): P
     date: parsed.data.date,
     csvText: parsed.data.csvText,
     access,
+    override: parsed.data.override,
   });
 
   if ("error" in result) {
@@ -371,15 +384,197 @@ router.post("/campaign-daily-metrics/voluum-import/confirm", async (req, res): P
       title: voluumMetricsImportedTitle(parsed.data.date, result.imported, result.updated),
       metadata: {
         date: parsed.data.date,
+        override: result.override,
         imported: result.imported,
         updated: result.updated,
         skipped: result.skipped,
+        skippedExisting: result.skippedExisting,
         duplicateCampaignIdsInCsv: result.duplicateCampaignIdsInCsv,
       },
     });
   }
 
   res.json(result);
+});
+
+// ── Admin: bulk delete daily metrics by employee + date range ──────────────
+//
+// SAFETY MODEL:
+//  * Admin-only (role enforced server-side, plus workspace membership).
+//  * Scope is always workspace + employee_id (the actor recorded on the metric
+//    row) + [dateFrom, dateTo]. It only ever touches campaign_daily_metrics.
+//  * No soft-delete column exists, so delete is hard. It is gated by a separate
+//    preview endpoint, an explicit confirmationText, and an audit event.
+//  * Campaign definitions, goals, XP, users, and workspaces are never touched.
+
+const DELETE_CONFIRMATION_TEXT = "DELETE DATA";
+const DELETE_SAMPLE_LIMIT = 25;
+
+const adminDeleteFilterSchema = z.object({
+  workspaceId: z.number().int().positive(),
+  employeeId: z.number().int().positive(),
+  dateFrom: z.string().regex(METRIC_DATE_RE, "dateFrom must be YYYY-MM-DD"),
+  dateTo: z.string().regex(METRIC_DATE_RE, "dateTo must be YYYY-MM-DD"),
+});
+
+const adminDeleteConfirmSchema = adminDeleteFilterSchema.extend({
+  confirmationText: z.string(),
+});
+
+function metricsDeleteWhere(workspaceId: number, employeeId: number, dateFrom: string, dateTo: string) {
+  return and(
+    eq(campaignDailyMetricsTable.workspaceId, workspaceId),
+    eq(campaignDailyMetricsTable.employeeId, employeeId),
+    gte(campaignDailyMetricsTable.date, dateFrom),
+    lte(campaignDailyMetricsTable.date, dateTo),
+  );
+}
+
+/** Returns the admin access result, or null after sending an error response. */
+async function requireWorkspaceAdmin(
+  req: Parameters<typeof checkWorkspaceAccess>[0],
+  res: Response,
+  workspaceId: number,
+): Promise<Extract<Awaited<ReturnType<typeof checkWorkspaceAccess>>, { allowed: true }> | null> {
+  const access = await checkWorkspaceAccess(req, workspaceId);
+  if (!access.allowed) {
+    res.status(access.status).json({ error: access.reason });
+    return null;
+  }
+  if (access.employee.role !== "admin") {
+    res.status(403).json({ error: "Admin access required" });
+    return null;
+  }
+  return access;
+}
+
+async function loadAffectedCampaigns(
+  client: Pick<NodePgDatabase, "selectDistinct">,
+  whereClause: ReturnType<typeof metricsDeleteWhere>,
+): Promise<Array<{ id: number; name: string }>> {
+  const rows = await client
+    .selectDistinct({
+      campaignId: campaignDailyMetricsTable.campaignId,
+      campaignName: campaignsTable.campaignName,
+    })
+    .from(campaignDailyMetricsTable)
+    .innerJoin(campaignsTable, eq(campaignsTable.id, campaignDailyMetricsTable.campaignId))
+    .where(whereClause)
+    .orderBy(campaignsTable.campaignName);
+  return rows.map((r) => ({ id: r.campaignId, name: r.campaignName }));
+}
+
+router.post("/campaign-daily-metrics/admin/delete-preview", async (req, res): Promise<void> => {
+  const parsed = adminDeleteFilterSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const { workspaceId, employeeId, dateFrom, dateTo } = parsed.data;
+  if (dateFrom > dateTo) {
+    res.status(400).json({ error: "dateFrom must be on or before dateTo" });
+    return;
+  }
+
+  const access = await requireWorkspaceAdmin(req, res, workspaceId);
+  if (access === null) return;
+
+  const [employee] = await db
+    .select({ id: employeesTable.id, name: employeesTable.name })
+    .from(employeesTable)
+    .where(eq(employeesTable.id, employeeId))
+    .limit(1);
+
+  const whereClause = metricsDeleteWhere(workspaceId, employeeId, dateFrom, dateTo);
+  const [{ value: matchingRows }] = await db
+    .select({ value: count() })
+    .from(campaignDailyMetricsTable)
+    .where(whereClause);
+
+  const affected = await loadAffectedCampaigns(db, whereClause);
+
+  res.json({
+    workspaceId,
+    employeeId,
+    employeeName: employee?.name ?? null,
+    dateFrom,
+    dateTo,
+    matchingRows: Number(matchingRows ?? 0),
+    affectedCampaignsCount: affected.length,
+    sampleCampaigns: affected.slice(0, DELETE_SAMPLE_LIMIT),
+    confirmationRequired: DELETE_CONFIRMATION_TEXT,
+  });
+});
+
+router.post("/campaign-daily-metrics/admin/delete", async (req, res): Promise<void> => {
+  const parsed = adminDeleteConfirmSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const { workspaceId, employeeId, dateFrom, dateTo, confirmationText } = parsed.data;
+  if (dateFrom > dateTo) {
+    res.status(400).json({ error: "dateFrom must be on or before dateTo" });
+    return;
+  }
+  if (confirmationText !== DELETE_CONFIRMATION_TEXT) {
+    res.status(400).json({
+      error: `confirmationText must be exactly "${DELETE_CONFIRMATION_TEXT}" to confirm deletion`,
+    });
+    return;
+  }
+
+  const access = await requireWorkspaceAdmin(req, res, workspaceId);
+  if (access === null) return;
+
+  const [employee] = await db
+    .select({ id: employeesTable.id, name: employeesTable.name })
+    .from(employeesTable)
+    .where(eq(employeesTable.id, employeeId))
+    .limit(1);
+
+  const whereClause = metricsDeleteWhere(workspaceId, employeeId, dateFrom, dateTo);
+
+  let deletedCount = 0;
+  let affected: Array<{ id: number; name: string }> = [];
+  await db.transaction(async (tx) => {
+    // Capture affected scope before deleting (cascade-safe: metrics only).
+    affected = await loadAffectedCampaigns(tx, whereClause);
+    const deleted = await tx
+      .delete(campaignDailyMetricsTable)
+      .where(whereClause)
+      .returning({ id: campaignDailyMetricsTable.id });
+    deletedCount = deleted.length;
+  });
+
+  await recordOperationalEvent({
+    workspaceId,
+    entityType: "workspace",
+    entityId: workspaceId,
+    eventType: "LIVE_CAMPAIGN_METRICS_BULK_DELETED",
+    actorType: "employee",
+    actorId: access.employee.id,
+    source: "routes.campaign-daily-metrics",
+    payloadJson: {
+      targetEmployeeId: employeeId,
+      targetEmployeeName: employee?.name ?? null,
+      dateFrom,
+      dateTo,
+      deletedCount,
+      affectedCampaignsCount: affected.length,
+    },
+  });
+
+  res.json({
+    deleted: deletedCount,
+    workspaceId,
+    employeeId,
+    employeeName: employee?.name ?? null,
+    dateFrom,
+    dateTo,
+    affectedCampaignsCount: affected.length,
+    sampleCampaigns: affected.slice(0, DELETE_SAMPLE_LIMIT),
+  });
 });
 
 export default router;

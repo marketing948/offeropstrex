@@ -83,6 +83,12 @@ async function runEnsureOnce(): Promise<void> {
       ADD COLUMN IF NOT EXISTS manual_closed_by_employee_id integer REFERENCES employees(id) ON DELETE SET NULL
   `);
 
+  // Migration 0022 — manual production campaign ownership (idempotent for tests).
+  await db.execute(sql`
+    ALTER TABLE campaigns
+      ADD COLUMN IF NOT EXISTS created_by_employee_id integer REFERENCES employees(id) ON DELETE SET NULL
+  `);
+
   // ── Beta metrics + winners (migration 0018) — idempotent for route tests ──
   await db.execute(sql`
     DO $$

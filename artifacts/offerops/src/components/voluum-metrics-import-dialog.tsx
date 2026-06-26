@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -27,6 +28,7 @@ type PreviewSummary = {
   importable: number;
   updating: number;
   skipped: number;
+  skippedExisting: number;
   duplicateCampaignIdsInCsv: number;
 };
 
@@ -51,9 +53,11 @@ type PreviewResponse = {
 
 type ConfirmResponse = {
   date: string;
+  override: boolean;
   imported: number;
   updated: number;
   skipped: number;
+  skippedExisting: number;
   skippedBreakdown: Record<string, number>;
   duplicateCampaignIdsInCsv: number;
 };
@@ -65,6 +69,7 @@ const SKIP_LABELS: Record<string, string> = {
   invalid_number: "Invalid number",
   not_allowed: "Not allowed",
   duplicate_in_csv: "Duplicate in CSV",
+  existing_no_override: "Exists (override off)",
 };
 
 type Step = "pick" | "preview" | "done";
@@ -93,6 +98,7 @@ export function VoluumMetricsImportDialog({
   const [fileName, setFileName] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [confirmResult, setConfirmResult] = useState<ConfirmResponse | null>(null);
+  const [override, setOverride] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -102,6 +108,7 @@ export function VoluumMetricsImportDialog({
     setFileName(null);
     setPreview(null);
     setConfirmResult(null);
+    setOverride(false);
     setLoading(false);
     setError(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -127,7 +134,7 @@ export function VoluumMetricsImportDialog({
     setStep("pick");
   }
 
-  async function runPreview() {
+  async function runPreview(overrideValue = override) {
     if (!csvText.trim()) {
       setError("Choose a CSV file first.");
       return;
@@ -143,6 +150,7 @@ export function VoluumMetricsImportDialog({
             workspaceId,
             date: metricsDate,
             csvText,
+            override: overrideValue,
           }),
         },
       );
@@ -152,6 +160,14 @@ export function VoluumMetricsImportDialog({
       setError(e instanceof Error ? e.message : "Preview failed");
     } finally {
       setLoading(false);
+    }
+  }
+
+  function handleOverrideChange(next: boolean) {
+    setOverride(next);
+    // Keep the preview honest: re-run with the new mode if one is showing.
+    if (step === "preview" && csvText.trim()) {
+      void runPreview(next);
     }
   }
 
@@ -168,6 +184,7 @@ export function VoluumMetricsImportDialog({
             workspaceId,
             date: metricsDate,
             csvText,
+            override,
           }),
         },
       );
@@ -236,6 +253,25 @@ export function VoluumMetricsImportDialog({
             </div>
           )}
 
+          {step !== "done" && (
+            <div className="flex items-start gap-2 rounded-md border bg-muted/20 px-3 py-2">
+              <Checkbox
+                id="voluum-override"
+                checked={override}
+                onCheckedChange={(v) => handleOverrideChange(v === true)}
+                disabled={loading}
+                className="mt-0.5"
+              />
+              <label htmlFor="voluum-override" className="text-sm leading-snug cursor-pointer">
+                <span className="font-medium">Override existing data for matching campaigns and dates</span>
+                <span className="block text-xs text-muted-foreground">
+                  Off (default): existing rows for this date are kept and matching CSV rows are skipped.
+                  On: matching rows are replaced with the uploaded values.
+                </span>
+              </label>
+            </div>
+          )}
+
           {error && (
             <p className="text-sm text-destructive rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
               {error}
@@ -252,8 +288,13 @@ export function VoluumMetricsImportDialog({
                   {preview.summary.importable} to import
                 </span>
                 <span className="rounded-full bg-blue-100 text-blue-800 px-2.5 py-1 font-medium">
-                  {preview.summary.updating} updating
+                  {preview.summary.updating} {override ? "to override" : "updating"}
                 </span>
+                {preview.summary.skippedExisting > 0 && (
+                  <span className="rounded-full bg-slate-200 text-slate-800 px-2.5 py-1 font-medium">
+                    {preview.summary.skippedExisting} existing kept
+                  </span>
+                )}
                 <span className="rounded-full bg-amber-100 text-amber-800 px-2.5 py-1 font-medium">
                   {preview.summary.skipped} skipped
                 </span>
@@ -307,8 +348,14 @@ export function VoluumMetricsImportDialog({
 
           {confirmResult && step === "done" && (
             <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm space-y-1">
-              <p className="font-semibold">Import complete for {confirmResult.date}</p>
-              <p>{confirmResult.imported} imported · {confirmResult.updated} updated · {confirmResult.skipped} skipped</p>
+              <p className="font-semibold">
+                Import complete for {confirmResult.date}
+                {confirmResult.override ? " (override on)" : ""}
+              </p>
+              <p>
+                {confirmResult.imported} inserted · {confirmResult.updated} updated ·{" "}
+                {confirmResult.skippedExisting} existing kept · {confirmResult.skipped} skipped
+              </p>
               {confirmResult.duplicateCampaignIdsInCsv > 0 && (
                 <p className="text-muted-foreground text-xs">
                   {confirmResult.duplicateCampaignIdsInCsv} duplicate Campaign IDs in CSV (last row used)

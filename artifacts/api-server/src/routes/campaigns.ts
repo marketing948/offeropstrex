@@ -25,7 +25,6 @@ import {
 import { z } from "zod/v4";
 import {
   checkWorkspaceAccess,
-  requireAdmin,
   requireWorkspaceAccess,
 } from "../lib/workspace-access";
 import {
@@ -707,9 +706,6 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
 });
 
 router.post("/production-live-campaigns", async (req, res): Promise<void> => {
-  const admin = await requireAdmin(req, res);
-  if (admin === null) return;
-
   const parsed = productionLiveBodySchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -717,11 +713,19 @@ router.post("/production-live-campaigns", async (req, res): Promise<void> => {
   }
 
   const body = parsed.data;
-  if ((await requireWorkspaceAccess(req, res, body.workspaceId)) === null) return;
+  // Any assigned workspace member (admin or employee) may create a production
+  // campaign. Ownership is the authenticated employee — never taken from the
+  // body — so an employee can only ever create their own campaign.
+  const access = await checkWorkspaceAccess(req, body.workspaceId);
+  if (!access.allowed) {
+    res.status(access.status).json({ error: access.reason });
+    return;
+  }
+  const creatorEmployeeId = access.employee.id;
 
   try {
     const resolved = await assertProductionLiveCampaignPrerequisites(body);
-    const row = await insertProductionLiveCampaign(resolved);
+    const row = await insertProductionLiveCampaign(resolved, creatorEmployeeId);
 
     await recordOperationalEvent({
       workspaceId: body.workspaceId,
@@ -729,7 +733,7 @@ router.post("/production-live-campaigns", async (req, res): Promise<void> => {
       entityId: row.id,
       eventType: "PRODUCTION_LIVE_CAMPAIGN_CREATED",
       actorType: "employee",
-      actorId: admin.id,
+      actorId: creatorEmployeeId,
       source: "routes.campaigns",
       payloadJson: {
         campaignPurpose: resolved.campaignPurpose,
@@ -739,6 +743,8 @@ router.post("/production-live-campaigns", async (req, res): Promise<void> => {
         geoId: resolved.geoId,
         voluumCampaignId: row.voluumCampaignId,
         parentCampaignId: resolved.parentCampaignId,
+        createdByEmployeeId: creatorEmployeeId,
+        creatorRole: access.employee.role,
       },
     });
 
@@ -747,7 +753,7 @@ router.post("/production-live-campaigns", async (req, res): Promise<void> => {
       eventType: "campaign_created",
       entityType: "campaign",
       entityId: row.id,
-      actorEmployeeId: admin.id,
+      actorEmployeeId: creatorEmployeeId,
       title: campaignCreatedTitle(
         resolveCampaignDisplayName({
           campaignName: row.campaignName,

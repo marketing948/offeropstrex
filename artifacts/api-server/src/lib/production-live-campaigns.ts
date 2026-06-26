@@ -280,6 +280,11 @@ export async function assertProductionLiveCampaignPrerequisites(
 
 export async function insertProductionLiveCampaign(
   resolved: ResolvedProductionLiveCampaign,
+  /**
+   * Owner of the campaign. Pass the authenticated employee id only. NULL is
+   * allowed for system/legacy callers; never derive this from request body.
+   */
+  createdByEmployeeId: number | null,
   client: Db = db,
 ): Promise<typeof campaignsTable.$inferSelect> {
   const now = new Date();
@@ -302,6 +307,7 @@ export async function insertProductionLiveCampaign(
       geoId: resolved.geoId,
       geo: resolved.geo,
       notes: resolved.notes,
+      createdByEmployeeId,
       liveStartedAt: now,
     })
     .returning();

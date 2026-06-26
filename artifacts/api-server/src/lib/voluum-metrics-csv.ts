@@ -14,7 +14,10 @@ export type VoluumMetricsSkipReason =
   | "missing_metrics"
   | "invalid_number"
   | "not_allowed"
-  | "duplicate_in_csv";
+  | "duplicate_in_csv"
+  // Row matches an existing (campaign, date) metric but override is off, so the
+  // existing data is preserved and the CSV row is skipped.
+  | "existing_no_override";
 
 export type VoluumCsvParsedMetricRow = {
   lineNumber: number;
