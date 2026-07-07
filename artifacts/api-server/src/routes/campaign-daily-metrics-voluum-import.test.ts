@@ -6,15 +6,18 @@ import { and, eq, sql } from "drizzle-orm";
 import app from "../app.ts";
 import { ensureProductionLiveCampaignSchema } from "../test-utils/ensure-production-live-campaign-schema.ts";
 import {
+  affiliateNetworksTable,
   campaignDailyMetricsTable,
   campaignsTable,
   db,
   employeeWorkspaceAssignmentsTable,
   employeesTable,
+  geosTable,
   testingBatchesTable,
   workspacesTable,
   workspaceTrafficSourcesTable,
 } from "@workspace/db";
+import { queryCanonicalEmployeeRevenue } from "../lib/canonical-campaign-actuals.ts";
 import { testAuthToken as authToken } from "../lib/test-auth-token.ts";
 
 let server: Server;
@@ -330,6 +333,79 @@ describe("campaign-daily-metrics voluum import", { concurrency: false }, () => {
     assert.equal(json?.skipped, 1);
     const breakdown = json?.skippedBreakdown as Record<string, number>;
     assert.equal(breakdown.not_allowed, 1);
+  });
+
+  test("admin import attributes metrics to canonical campaign owner, not importer", async () => {
+    const seed = await seedBundle();
+    const manualVoluum = `voluum-worker-owned-${Date.now()}`;
+    const networkId = (
+      await db
+        .insert(affiliateNetworksTable)
+        .values({ workspaceId: seed.workspaceId, name: "Worker Net" })
+        .returning({ id: affiliateNetworksTable.id })
+    )[0]!.id;
+    const geoId = (
+      await db
+        .insert(geosTable)
+        .values({ workspaceId: seed.workspaceId, code: "DE", name: "Germany" })
+        .returning({ id: geosTable.id })
+    )[0]!.id;
+    const sourceId = (
+      await db
+        .insert(workspaceTrafficSourcesTable)
+        .values({
+          workspaceId: seed.workspaceId,
+          name: `Worker Source ${Date.now()}`,
+          position: 2,
+          isActive: true,
+        })
+        .returning({ id: workspaceTrafficSourcesTable.id })
+    )[0]!.id;
+
+    await db.insert(campaignsTable).values({
+      workspaceId: seed.workspaceId,
+      batchId: null,
+      platform: "android",
+      campaignName: "Worker Manual",
+      trafficSourceId: sourceId,
+      status: "live",
+      campaignPurpose: "working",
+      voluumCampaignId: manualVoluum,
+      affiliateNetworkId: networkId,
+      geoId,
+      geo: "DE",
+      createdByEmployeeId: seed.workerAId,
+      liveStartedAt: new Date(),
+    });
+
+    const csvText = buildCsv([`Worker,,${manualVoluum},2020-01-01,400,8,40,120,0`]);
+    const confirm = await request(
+      "POST",
+      "/campaign-daily-metrics/voluum-import/confirm",
+      seed.adminId,
+      { workspaceId: seed.workspaceId, date: METRIC_DATE, csvText, override: true },
+    );
+    assert.equal(confirm.response.status, 200);
+    assert.equal(confirm.json?.imported, 1);
+
+    const [metric] = await db
+      .select()
+      .from(campaignDailyMetricsTable)
+      .where(
+        and(
+          eq(campaignDailyMetricsTable.workspaceId, seed.workspaceId),
+          eq(campaignDailyMetricsTable.date, METRIC_DATE),
+        ),
+      );
+    assert.ok(metric);
+    assert.equal(metric.employeeId, seed.workerAId);
+
+    const canonical = await queryCanonicalEmployeeRevenue(seed.workspaceId, {
+      dateFrom: METRIC_DATE,
+      dateTo: METRIC_DATE,
+    });
+    assert.equal(canonical.get(seed.workerAId)?.revenue, 120);
+    assert.equal(canonical.get(seed.adminId)?.revenue ?? 0, 0);
   });
 
   test("rejects unreadable csv", async () => {
