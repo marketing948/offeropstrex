@@ -15,9 +15,9 @@
     "replay:event": "tsx ./src/scripts/replay-event.ts"
   },
   "dependencies": {
+    "@workspace/alert-rules": "workspace:*",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
-    "@workspace/alert-rules": "workspace:*",
     "@workspace/voluum-offer-ids": "workspace:*",
     "cookie-parser": "^1.4.7",
     "cors": "^2",
@@ -27,6 +27,7 @@
     "jsonwebtoken": "^9.0.2",
     "pino": "^9",
     "pino-http": "^10",
+    "xlsx": "^0.18.5",
     "zod": "catalog:"
   },
   "devDependencies": {

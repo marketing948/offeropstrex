@@ -361,3 +361,89 @@ export function shiftMonthKey(monthKey: string, delta: number): string {
   const d = new Date(y, m - 1 + delta, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
+
+export type GoalsImportPreviewRow = {
+  rowNumber: number;
+  status: "valid" | "error" | "warning";
+  employeeName: string | null;
+  employeeEmail: string | null;
+  monthKey: string | null;
+  affiliateNetworkName: string | null;
+  selectedGeoCodes: string[];
+  revenueTarget: number | null;
+  testingTarget: number | null;
+  workingTarget: number | null;
+  messages: string[];
+};
+
+export type NormalizedImportGoal = {
+  monthKey: string;
+  employeeId: number;
+  employeeName: string;
+  employeeEmail: string;
+  affiliateNetworkId: number;
+  affiliateNetworkName: string;
+  selectedGeoCodes: string[] | null;
+  geoId: number | null;
+  geoCode: string | null;
+  metricKey: "revenue" | "testingBatches" | "workingCampaigns";
+  monthlyTarget: number;
+  source: "goals_sheet" | "geo_override_sheet";
+  sourceRowNumber: number;
+};
+
+export type GoalsImportPreviewResponse = {
+  ok: boolean;
+  summary: {
+    validRows: number;
+    errorRows: number;
+    warnings: number;
+    newGoals: number;
+    updatedGoals: number;
+    skippedRows: number;
+  };
+  rows: GoalsImportPreviewRow[];
+  errors: string[];
+  warnings: string[];
+  normalizedGoals: NormalizedImportGoal[];
+  checksum: string;
+};
+
+export type GoalsImportConfirmResponse = {
+  ok: boolean;
+  importMode: "UPSERT_ROWS_ONLY";
+  createdCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  goalsBeforeCount: number;
+  goalsAfterCount: number;
+};
+
+export async function previewMonthlyGoalsExcelImport(params: {
+  workspaceId: number;
+  fileName: string;
+  fileBase64: string;
+}): Promise<GoalsImportPreviewResponse> {
+  return authedJson<GoalsImportPreviewResponse>("/api/performance/monthly-goals/import/preview", {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+export async function confirmMonthlyGoalsExcelImport(params: {
+  workspaceId: number;
+  importMode: "UPSERT_ROWS_ONLY";
+  checksum: string;
+  normalizedGoals: NormalizedImportGoal[];
+}): Promise<GoalsImportConfirmResponse> {
+  return authedJson<GoalsImportConfirmResponse>("/api/performance/monthly-goals/import/confirm", {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+export const GOALS_EXCEL_TEMPLATE_HEADERS =
+  "month,employee_email,employee_name,affiliate_network,selected_geos,revenue_target,testing_target,working_target";
+
+export const GOALS_EXCEL_TEMPLATE_SAMPLE =
+  "2026-07,sara.bogdani@isaltech.com,Sara,Yieldkit CBV,\"GB,DE,FR\",3000,12,4";
