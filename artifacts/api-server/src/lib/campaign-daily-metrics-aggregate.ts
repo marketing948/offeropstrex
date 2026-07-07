@@ -1,12 +1,24 @@
 import { and, eq, gte, inArray, lt, lte, sql, sum, type SQL } from "drizzle-orm";
 import {
+  affiliateNetworksTable,
   batchResultsTable,
   campaignDailyMetricsTable,
   campaignsTable,
   db,
   employeesTable,
   testingBatchesTable,
+  workspaceTrafficSourcesTable,
 } from "@workspace/db";
+import {
+  affiliateNetworkAttributionJoin,
+  batchAttributionJoin,
+  canonicalCampaignEmployeeId,
+  canonicalCampaignGeoCode,
+  canonicalCampaignNetworkName,
+  canonicalCampaignTrafficSource,
+  campaignMetricsJoin,
+  trafficSourceAttributionJoin,
+} from "./canonical-campaign-actuals.ts";
 import {
   totalsFromSums,
   type AggregatedMetricTotals,
@@ -36,6 +48,11 @@ export type PerformanceListRow = {
   id: number;
   campaignId: number;
   batchId: number | null;
+  campaignName: string;
+  employeeId: number | null;
+  affiliateNetwork: string;
+  geo: string;
+  trafficSource: string;
   date: string;
   spend: number;
   clicks: number;
@@ -56,7 +73,7 @@ export type BatchMetricsBucket = {
   revenue: number;
 };
 
-function batchFilterConditions(filters: MetricsAggregateFilters): SQL[] {
+function metricFilterConditions(filters: MetricsAggregateFilters): SQL[] {
   const conditions: SQL[] = [
     eq(campaignDailyMetricsTable.workspaceId, filters.workspaceId),
     eq(campaignsTable.workspaceId, filters.workspaceId),
@@ -68,40 +85,34 @@ function batchFilterConditions(filters: MetricsAggregateFilters): SQL[] {
     conditions.push(eq(campaignsTable.batchId, filters.batchId));
   }
   if (filters.employeeId != null) {
-    conditions.push(eq(testingBatchesTable.employeeId, filters.employeeId));
+    conditions.push(sql`${canonicalCampaignEmployeeId} = ${filters.employeeId}`);
   }
   if (filters.geo) {
-    conditions.push(eq(testingBatchesTable.geo, filters.geo));
+    conditions.push(sql`${canonicalCampaignGeoCode} = ${filters.geo}`);
   }
   if (filters.affiliateNetwork) {
-    conditions.push(eq(testingBatchesTable.affiliateNetwork, filters.affiliateNetwork));
+    conditions.push(sql`${canonicalCampaignNetworkName} = ${filters.affiliateNetwork}`);
   }
   if (filters.trafficSource) {
-    conditions.push(eq(testingBatchesTable.trafficSource, filters.trafficSource));
+    conditions.push(sql`${canonicalCampaignTrafficSource} = ${filters.trafficSource}`);
   }
   if (filters.allowedAffiliateNetworkNames) {
     if (filters.allowedAffiliateNetworkNames.length === 0) {
       conditions.push(sql`1 = 0`);
     } else {
-      conditions.push(inArray(testingBatchesTable.affiliateNetwork, filters.allowedAffiliateNetworkNames));
+      conditions.push(inArray(canonicalCampaignNetworkName, filters.allowedAffiliateNetworkNames));
     }
   }
 
   return conditions;
 }
 
-function metricsJoin() {
-  return and(
-    eq(campaignDailyMetricsTable.campaignId, campaignsTable.id),
-    eq(campaignDailyMetricsTable.workspaceId, campaignsTable.workspaceId),
-  );
-}
-
-function batchJoin() {
-  return and(
-    eq(campaignsTable.batchId, testingBatchesTable.id),
-    eq(testingBatchesTable.workspaceId, campaignsTable.workspaceId),
-  );
+function metricsAttributionJoins(workspaceId: number) {
+  return {
+    batch: batchAttributionJoin(workspaceId),
+    network: affiliateNetworkAttributionJoin(),
+    trafficSource: trafficSourceAttributionJoin(),
+  };
 }
 
 export type CampaignMetricRangeTotals = {
@@ -170,9 +181,11 @@ export async function queryWorkspaceMetricTotals(
       revenue: sum(campaignDailyMetricsTable.revenue),
     })
     .from(campaignDailyMetricsTable)
-    .innerJoin(campaignsTable, metricsJoin())
-    .leftJoin(testingBatchesTable, batchJoin())
-    .where(and(...batchFilterConditions(filters)));
+    .innerJoin(campaignsTable, campaignMetricsJoin())
+    .leftJoin(testingBatchesTable, metricsAttributionJoins(filters.workspaceId).batch)
+    .leftJoin(affiliateNetworksTable, metricsAttributionJoins(filters.workspaceId).network)
+    .leftJoin(workspaceTrafficSourcesTable, metricsAttributionJoins(filters.workspaceId).trafficSource)
+    .where(and(...metricFilterConditions(filters)));
 
   return totalsFromSums(
     Number(row?.visits ?? 0),
@@ -186,10 +199,16 @@ export async function queryWorkspaceMetricTotals(
 export async function queryPerformanceListRows(
   filters: MetricsAggregateFilters,
 ): Promise<PerformanceListRow[]> {
+  const joins = metricsAttributionJoins(filters.workspaceId);
   const rows = await db
     .select({
       campaignId: campaignsTable.id,
       batchId: campaignsTable.batchId,
+      campaignName: sql<string>`max(${campaignsTable.campaignName})`,
+      employeeId: sql<number | null>`max(${canonicalCampaignEmployeeId})`,
+      affiliateNetwork: sql<string>`max(${canonicalCampaignNetworkName})`,
+      geo: sql<string>`max(${canonicalCampaignGeoCode})`,
+      trafficSource: sql<string>`max(${canonicalCampaignTrafficSource})`,
       date: campaignDailyMetricsTable.date,
       visits: sum(campaignDailyMetricsTable.visits),
       conversions: sum(campaignDailyMetricsTable.conversions),
@@ -198,9 +217,11 @@ export async function queryPerformanceListRows(
       minId: sql<number>`min(${campaignDailyMetricsTable.id})::int`,
     })
     .from(campaignDailyMetricsTable)
-    .innerJoin(campaignsTable, metricsJoin())
-    .leftJoin(testingBatchesTable, batchJoin())
-    .where(and(...batchFilterConditions(filters)))
+    .innerJoin(campaignsTable, campaignMetricsJoin())
+    .leftJoin(testingBatchesTable, joins.batch)
+    .leftJoin(affiliateNetworksTable, joins.network)
+    .leftJoin(workspaceTrafficSourcesTable, joins.trafficSource)
+    .where(and(...metricFilterConditions(filters)))
     .groupBy(campaignsTable.id, campaignsTable.batchId, campaignDailyMetricsTable.date)
     .orderBy(campaignDailyMetricsTable.date, campaignsTable.id);
 
@@ -216,6 +237,11 @@ export async function queryPerformanceListRows(
       id: Number(r.minId ?? 0),
       campaignId: r.campaignId,
       batchId: r.batchId,
+      campaignName: String(r.campaignName ?? `Campaign #${r.campaignId}`),
+      employeeId: r.employeeId != null ? Number(r.employeeId) : null,
+      affiliateNetwork: String(r.affiliateNetwork ?? "(unset)"),
+      geo: String(r.geo ?? "(unset)"),
+      trafficSource: String(r.trafficSource ?? "(unset)"),
       date: String(r.date),
       spend: cost,
       clicks,
@@ -244,7 +270,7 @@ export async function queryBatchMetricTotalsMap(
       revenue: sum(campaignDailyMetricsTable.revenue),
     })
     .from(campaignDailyMetricsTable)
-    .innerJoin(campaignsTable, metricsJoin())
+    .innerJoin(campaignsTable, campaignMetricsJoin())
     .where(
       and(
         eq(campaignDailyMetricsTable.workspaceId, workspaceId),
@@ -342,34 +368,55 @@ export async function queryDashboardBreakdowns(
     return EMPTY_BREAKDOWNS;
   }
 
-  const batchConditions = [eq(testingBatchesTable.workspaceId, workspaceId)];
-  if (scope?.employeeId != null) {
-    batchConditions.push(eq(testingBatchesTable.employeeId, scope.employeeId));
-  }
-  if (scope?.allowedNetworkNames?.length) {
-    batchConditions.push(inArray(testingBatchesTable.affiliateNetwork, scope.allowedNetworkNames));
-  }
+  const filters: MetricsAggregateFilters = {
+    workspaceId,
+    dateFrom: range.dateFrom,
+    dateTo: range.dateTo,
+    employeeId: scope?.employeeId,
+    allowedAffiliateNetworkNames: scope?.allowedNetworkNames,
+  };
 
-  const batches = await db
-    .select({
-      batchId: testingBatchesTable.id,
-      employeeId: testingBatchesTable.employeeId,
-      employeeName: employeesTable.name,
-      trafficSource: testingBatchesTable.trafficSource,
-      geo: testingBatchesTable.geo,
-      affiliateNetwork: testingBatchesTable.affiliateNetwork,
-    })
-    .from(testingBatchesTable)
-    .leftJoin(employeesTable, eq(testingBatchesTable.employeeId, employeesTable.id))
-    .where(and(...batchConditions));
+  const [metricRows, winnersByBatch, batchMeta] = await Promise.all([
+    queryPerformanceListRows(filters),
+    queryBatchWinnersInRange(workspaceId, range),
+    db
+      .select({
+        batchId: testingBatchesTable.id,
+        employeeId: testingBatchesTable.employeeId,
+        employeeName: employeesTable.name,
+        trafficSource: testingBatchesTable.trafficSource,
+        geo: testingBatchesTable.geo,
+        affiliateNetwork: testingBatchesTable.affiliateNetwork,
+      })
+      .from(testingBatchesTable)
+      .leftJoin(employeesTable, eq(testingBatchesTable.employeeId, employeesTable.id))
+      .where(eq(testingBatchesTable.workspaceId, workspaceId)),
+  ]);
 
-  const metricsByBatch = await queryBatchMetricTotalsMap(workspaceId, range);
-  const winnersByBatch = await queryBatchWinnersInRange(workspaceId, range);
+  const employeeNames = new Map<number, string>();
+  for (const b of batchMeta) {
+    if (b.employeeId != null) {
+      employeeNames.set(b.employeeId, b.employeeName ?? `Employee #${b.employeeId}`);
+    }
+  }
+  const metricEmployeeIds = [
+    ...new Set(metricRows.map((r) => r.employeeId).filter((id): id is number => id != null)),
+  ];
+  if (metricEmployeeIds.length > 0) {
+    const employees = await db
+      .select({ id: employeesTable.id, name: employeesTable.name })
+      .from(employeesTable)
+      .where(inArray(employeesTable.id, metricEmployeeIds));
+    for (const e of employees) {
+      employeeNames.set(e.id, e.name);
+    }
+  }
 
   const byWorker = new Map<string, BreakdownBucketRow>();
   const byTrafficSource = new Map<string, BreakdownBucketRow>();
   const byGeo = new Map<string, BreakdownBucketRow>();
   const byNetwork = new Map<string, BreakdownBucketRow>();
+  const campaignsSeenByBucket = new Map<string, Set<number>>();
 
   function makeBucket(key: string, label: string): BreakdownBucketRow {
     return {
@@ -387,34 +434,80 @@ export async function queryDashboardBreakdowns(
     };
   }
 
-  function add(map: Map<string, BreakdownBucketRow>, key: string, label: string, batchId: number) {
+  function addMetric(
+    map: Map<string, BreakdownBucketRow>,
+    mapId: string,
+    key: string,
+    label: string,
+    row: PerformanceListRow,
+  ): void {
+    const bucketKey = `${mapId}:${key}`;
     let b = map.get(key);
     if (!b) {
       b = makeBucket(key, label);
       map.set(key, b);
     }
-    b.batches += 1;
-    const m = metricsByBatch.get(batchId);
-    if (m) {
-      b.tested += 1;
-      b.clicks += m.visits;
-      b.cost += m.cost;
-      b.revenue += m.revenue;
-      b.conversions += m.conversions;
+    let seen = campaignsSeenByBucket.get(bucketKey);
+    if (!seen) {
+      seen = new Set();
+      campaignsSeenByBucket.set(bucketKey, seen);
     }
-    b.winners += winnersByBatch.get(batchId) ?? 0;
+    if (!seen.has(row.campaignId)) {
+      seen.add(row.campaignId);
+      b.batches += 1;
+    }
+    b.tested += 1;
+    b.clicks += row.clicks;
+    b.cost += row.spend;
+    b.revenue += row.revenue;
+    b.conversions += row.conversions;
   }
 
-  for (const b of batches) {
-    add(byWorker, String(b.employeeId), b.employeeName ?? `Employee #${b.employeeId}`, b.batchId);
-    add(byTrafficSource, b.trafficSource || "(unset)", b.trafficSource || "(unset)", b.batchId);
-    add(byGeo, b.geo || "(unset)", b.geo || "(unset)", b.batchId);
-    add(
-      byNetwork,
-      b.affiliateNetwork || "(unset)",
-      b.affiliateNetwork || "(unset)",
-      b.batchId,
-    );
+  for (const row of metricRows) {
+    if (row.employeeId != null) {
+      const empKey = String(row.employeeId);
+      const empLabel = employeeNames.get(row.employeeId) ?? `Employee #${row.employeeId}`;
+      addMetric(byWorker, "worker", empKey, empLabel, row);
+    }
+
+    const trafficKey = row.trafficSource?.trim() || "(unset)";
+    addMetric(byTrafficSource, "traffic", trafficKey, trafficKey, row);
+
+    const geoKey = row.geo?.trim() || "(unset)";
+    addMetric(byGeo, "geo", geoKey, geoKey, row);
+
+    const networkKey = row.affiliateNetwork?.trim() || "(unset)";
+    addMetric(byNetwork, "network", networkKey, networkKey, row);
+  }
+
+  for (const b of batchMeta) {
+    const winners = winnersByBatch.get(b.batchId) ?? 0;
+    if (winners <= 0) continue;
+
+    const workerKey = String(b.employeeId);
+    const workerLabel = b.employeeName ?? `Employee #${b.employeeId}`;
+    let workerBucket = byWorker.get(workerKey);
+    if (!workerBucket) {
+      workerBucket = makeBucket(workerKey, workerLabel);
+      byWorker.set(workerKey, workerBucket);
+    }
+    workerBucket.winners += winners;
+
+    const networkKey = b.affiliateNetwork?.trim() || "(unset)";
+    let networkBucket = byNetwork.get(networkKey);
+    if (!networkBucket) {
+      networkBucket = makeBucket(networkKey, networkKey);
+      byNetwork.set(networkKey, networkBucket);
+    }
+    networkBucket.winners += winners;
+
+    const geoKey = b.geo?.trim() || "(unset)";
+    let geoBucket = byGeo.get(geoKey);
+    if (!geoBucket) {
+      geoBucket = makeBucket(geoKey, geoKey);
+      byGeo.set(geoKey, geoBucket);
+    }
+    geoBucket.winners += winners;
   }
 
   function finalize(map: Map<string, BreakdownBucketRow>): BreakdownBucketRow[] {

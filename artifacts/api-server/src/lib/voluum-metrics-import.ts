@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { campaignDailyMetricsTable, campaignsTable, db } from "@workspace/db";
 import type { checkWorkspaceAccess } from "./workspace-access.ts";
+import { resolveCanonicalCampaignOwnerEmployeeId } from "./canonical-campaign-actuals.ts";
 import {
   assertCanUpsertCampaignDailyMetrics,
   CampaignDailyMetricsError,
@@ -160,6 +161,7 @@ async function buildImportPlan(input: BuildPlanInput): Promise<{
   summary: VoluumImportSummary;
   upsertCandidates: Array<{
     campaignId: number;
+    employeeId: number;
     visits: number;
     conversions: number;
     cost: string;
@@ -242,8 +244,14 @@ async function buildImportPlan(input: BuildPlanInput): Promise<{
     }
 
     matchedCampaignIds.push(match.id);
+    const ownerEmployeeId = await resolveCanonicalCampaignOwnerEmployeeId(
+      workspaceId,
+      match.campaign,
+    );
+    const metricEmployeeId = ownerEmployeeId ?? access.employee.id;
     upsertCandidates.push({
       campaignId: match.id,
+      employeeId: metricEmployeeId,
       visits: row.visits!,
       conversions: row.conversions!,
       cost: row.cost!,
@@ -416,7 +424,7 @@ export async function confirmVoluumMetricsImport(params: {
             workspaceId: parsed.workspaceId,
             campaignId: row.campaignId,
             date: parsed.date,
-            employeeId: params.access.employee.id,
+            employeeId: row.employeeId,
             cost: row.cost,
             revenue: row.revenue,
             conversions: row.conversions,
@@ -426,7 +434,7 @@ export async function confirmVoluumMetricsImport(params: {
           .onConflictDoUpdate({
             target: [campaignDailyMetricsTable.campaignId, campaignDailyMetricsTable.date],
             set: {
-              employeeId: params.access.employee.id,
+              employeeId: row.employeeId,
               cost: row.cost,
               revenue: row.revenue,
               conversions: row.conversions,
@@ -445,7 +453,7 @@ export async function confirmVoluumMetricsImport(params: {
             workspaceId: parsed.workspaceId,
             campaignId: row.campaignId,
             date: parsed.date,
-            employeeId: params.access.employee.id,
+            employeeId: row.employeeId,
             cost: row.cost,
             revenue: row.revenue,
             conversions: row.conversions,

@@ -2,9 +2,7 @@ import { useMemo } from "react";
 import { useLocation } from "wouter";
 import {
   useListPerformance,
-  useListTestingBatches,
   getListPerformanceQueryKey,
-  getListTestingBatchesQueryKey,
 } from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -43,13 +41,8 @@ export function PerformancePanel({
   const [, nav] = useLocation();
 
   const wsId = activeWorkspaceId ?? 0;
-  const batchParams = { workspace_id: wsId };
   const perfParams = { workspace_id: wsId, date_from: dateFrom, date_to: dateTo };
 
-  const { data: batches = [] } = useListTestingBatches(
-    batchParams,
-    wsQueryOpts(activeWorkspaceId, getListTestingBatchesQueryKey(batchParams)),
-  );
   const {
     data: records = [],
     isLoading,
@@ -85,8 +78,7 @@ export function PerformancePanel({
   const byTrafficSource = useMemo(() => {
     const map = new Map<string, { revenue: number; profit: number; spend: number }>();
     for (const r of records) {
-      const batch = batches.find((b) => b.id === r.batchId);
-      const key = batch?.trafficSource || "(unset)";
+      const key = r.trafficSource?.trim() || "(unset)";
       const ex = map.get(key) ?? { revenue: 0, profit: 0, spend: 0 };
       ex.revenue += Number(r.revenue ?? 0);
       ex.profit += Number(r.profit ?? 0);
@@ -102,30 +94,33 @@ export function PerformancePanel({
       }))
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 5);
-  }, [records, batches]);
+  }, [records]);
 
-  const topBatches = useMemo(() => {
-    const map = new Map<number, { revenue: number; profit: number; spend: number }>();
+  const topCampaigns = useMemo(() => {
+    const map = new Map<number, { name: string; revenue: number; profit: number; spend: number }>();
     for (const r of records) {
-      const ex = map.get(r.batchId) ?? { revenue: 0, profit: 0, spend: 0 };
+      const ex = map.get(r.campaignId) ?? {
+        name: r.campaignName?.trim() || `Campaign #${r.campaignId}`,
+        revenue: 0,
+        profit: 0,
+        spend: 0,
+      };
       ex.revenue += Number(r.revenue ?? 0);
       ex.profit += Number(r.profit ?? 0);
       ex.spend += Number(r.spend ?? 0);
-      map.set(r.batchId, ex);
+      map.set(r.campaignId, ex);
     }
     return [...map.entries()]
-      .map(([batchId, v]) => {
-        const batch = batches.find((b) => b.id === batchId);
-        return {
-          batchId,
-          name: batch?.batchName ?? `Batch #${batchId}`,
-          ...v,
-          roi: v.spend > 0 ? (v.profit / v.spend) * 100 : 0,
-        };
-      })
+      .map(([campaignId, v]) => ({
+        campaignId,
+        name: v.name,
+        revenue: v.revenue,
+        profit: v.profit,
+        roi: v.spend > 0 ? (v.profit / v.spend) * 100 : 0,
+      }))
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 5);
-  }, [records, batches]);
+  }, [records]);
 
   const totals = useMemo(() => {
     let spend = 0;
@@ -138,17 +133,6 @@ export function PerformancePanel({
     const roi = spend > 0 ? (profit / spend) * 100 : 0;
     return { spend, revenue, profit, roi };
   }, [records]);
-
-  const winnersProfit = useMemo(() => {
-    const winnerBatchIds = new Set(
-      batches.filter((b) => b.status === "COMPLETED" || b.status === "TESTED").map((b) => b.id),
-    );
-    let profit = 0;
-    for (const r of records) {
-      if (winnerBatchIds.has(r.batchId)) profit += Number(r.profit ?? 0);
-    }
-    return profit;
-  }, [records, batches]);
 
   if (isLoading) {
     return <PerformanceSectionSkeleton />;
@@ -184,7 +168,7 @@ export function PerformancePanel({
           { label: "Revenue", value: fmt$(totals.revenue) },
           { label: "Spend", value: fmt$(totals.spend) },
           { label: "ROI", value: fmtPct(totals.roi) },
-          { label: "Winners (tested+)", value: fmt$(winnersProfit), sub: "profit in period" },
+          { label: "Profit", value: fmt$(totals.profit), sub: "in period" },
         ].map((s) => (
           <div key={s.label} className="rounded-lg border border-border bg-card px-3 py-2">
             <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -261,15 +245,15 @@ export function PerformancePanel({
 
         <div className="rounded-lg border border-border bg-card p-3">
           <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            <Trophy className="h-3.5 w-3.5" /> Top campaigns (batches)
+            <Trophy className="h-3.5 w-3.5" /> Top campaigns
           </p>
           <ul className="divide-y divide-border text-sm">
-            {topBatches.map((row) => (
-              <li key={row.batchId}>
+            {topCampaigns.map((row) => (
+              <li key={row.campaignId}>
                 <button
                   type="button"
                   className="flex w-full items-center justify-between gap-2 py-2 text-left hover:text-primary"
-                  onClick={() => nav(`/testing-batches/${row.batchId}`)}
+                  onClick={() => nav("/live-campaigns")}
                 >
                   <span className="truncate font-medium">{row.name}</span>
                   <span className="shrink-0 tabular-nums text-muted-foreground">

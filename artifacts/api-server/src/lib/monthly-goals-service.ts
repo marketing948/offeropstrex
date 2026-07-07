@@ -1,15 +1,15 @@
-import { and, eq, gte, inArray, lt, lte, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import {
-  campaignsTable,
   db,
   employeeWorkspaceAssignmentsTable,
   employeesTable,
-  testingBatchesTable,
 } from "@workspace/db";
+import type { MetricsDateRange } from "./campaign-daily-metrics-aggregate.ts";
 import {
-  queryDashboardBreakdowns,
-  type MetricsDateRange,
-} from "./campaign-daily-metrics-aggregate.ts";
+  queryCanonicalEmployeeRevenue,
+  queryCanonicalTestingCounts,
+  queryCanonicalWorkingCounts,
+} from "./canonical-campaign-actuals.ts";
 import {
   awardXp,
   currentMonthKey,
@@ -31,13 +31,6 @@ import {
   queryTestingNetworkGeo,
   queryWorkingNetworkGeo,
 } from "./metric-breakdown-service.ts";
-
-const ACTIVE_TESTING_STATUSES = [
-  "NEW_BATCH",
-  "WAITING_FOR_TRACKER_CAMPAIGNS",
-  "OFFER_READY_FOR_LIVE_TESTING",
-  "LIVE_TESTS",
-] as const;
 
 export type WorkerGoalStatus = "Strong" | "On track" | "Watch" | "Behind";
 
@@ -118,13 +111,14 @@ async function loadEmployeeActivityMaps(
   workspaceId: number,
   range: MetricsDateRange,
   employeeIds: number[],
+  monthKey: string,
 ): Promise<Map<number, EmployeeActivityMaps>> {
   const entries = await Promise.all(
     employeeIds.map(async (employeeId) => {
       const [revenue, testing, working] = await Promise.all([
         queryRevenueNetworkGeo(workspaceId, range, employeeId),
-        queryTestingNetworkGeo(workspaceId, employeeId),
-        queryWorkingNetworkGeo(workspaceId, employeeId),
+        queryTestingNetworkGeo(workspaceId, employeeId, undefined, monthKey),
+        queryWorkingNetworkGeo(workspaceId, employeeId, undefined, monthKey),
       ]);
       return [employeeId, { revenue, testing, working }] as const;
     }),
@@ -188,62 +182,7 @@ async function queryEmployeeMetrics(
   workspaceId: number,
   range: MetricsDateRange,
 ): Promise<Map<number, { revenue: number; profit: number }>> {
-  const breakdown = await queryDashboardBreakdowns(workspaceId, range);
-  const map = new Map<number, { revenue: number; profit: number }>();
-  for (const row of breakdown.byWorker) {
-    const employeeId = Number(row.key);
-    if (!Number.isFinite(employeeId)) continue;
-    map.set(employeeId, { revenue: row.revenue, profit: row.profit });
-  }
-  return map;
-}
-
-async function queryTestingCounts(workspaceId: number): Promise<Map<number, number>> {
-  const rows = await db
-    .select({
-      employeeId: testingBatchesTable.employeeId,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(testingBatchesTable)
-    .where(
-      and(
-        eq(testingBatchesTable.workspaceId, workspaceId),
-        inArray(testingBatchesTable.status, [...ACTIVE_TESTING_STATUSES]),
-      ),
-    )
-    .groupBy(testingBatchesTable.employeeId);
-
-  const map = new Map<number, number>();
-  for (const r of rows) map.set(r.employeeId, Number(r.count ?? 0));
-  return map;
-}
-
-async function queryWorkingCounts(workspaceId: number): Promise<Map<number, number>> {
-  const rows = await db
-    .select({
-      employeeId: testingBatchesTable.employeeId,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(campaignsTable)
-    .innerJoin(
-      testingBatchesTable,
-      and(
-        eq(campaignsTable.batchId, testingBatchesTable.id),
-        eq(testingBatchesTable.workspaceId, campaignsTable.workspaceId),
-      ),
-    )
-    .where(
-      and(
-        eq(campaignsTable.workspaceId, workspaceId),
-        eq(campaignsTable.status, "live"),
-        eq(campaignsTable.campaignPurpose, "working"),
-      ),
-    )
-    .groupBy(testingBatchesTable.employeeId);
-
-  const map = new Map<number, number>();
-  for (const r of rows) map.set(r.employeeId, Number(r.count ?? 0));
-  return map;
+  return queryCanonicalEmployeeRevenue(workspaceId, range);
 }
 
 async function syncGoalCompletionXp(
@@ -335,8 +274,8 @@ export async function buildMonthlyGoalsDashboard(
       )
       .where(eq(employeeWorkspaceAssignmentsTable.workspaceId, workspaceId)),
     queryEmployeeMetrics(workspaceId, range),
-    queryTestingCounts(workspaceId),
-    queryWorkingCounts(workspaceId),
+    queryCanonicalTestingCounts(workspaceId, monthKey),
+    queryCanonicalWorkingCounts(workspaceId, monthKey),
   ]);
 
   const actuals = new Map<number, { revenue: number; testing: number; working: number }>();
@@ -356,6 +295,7 @@ export async function buildMonthlyGoalsDashboard(
     workspaceId,
     range,
     employees.map((emp) => emp.id),
+    monthKey,
   );
 
   const revGoals = {

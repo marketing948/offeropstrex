@@ -740,6 +740,25 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
             throw new Error("trafficSourceId does not belong to this workspace");
           }
 
+          const [batchRow] = await tx
+            .select({
+              employeeId: testingBatchesTable.employeeId,
+              affiliateNetworkId: testingBatchesTable.affiliateNetworkId,
+              geoId: testingBatchesTable.geoId,
+              geo: testingBatchesTable.geo,
+            })
+            .from(testingBatchesTable)
+            .where(
+              and(
+                eq(testingBatchesTable.id, task.relatedBatchId),
+                eq(testingBatchesTable.workspaceId, action.workspaceId),
+              ),
+            )
+            .limit(1);
+          if (!batchRow) {
+            throw new Error("Related testing batch not found");
+          }
+
           const [campaign] = await tx
             .insert(campaignsTable)
             .values({
@@ -752,6 +771,10 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
               voluumCampaignId,
               voluumCampaignName: action.completion.voluumCampaignName,
               status: "voluum_created",
+              createdByEmployeeId: batchRow.employeeId,
+              affiliateNetworkId: batchRow.affiliateNetworkId,
+              geoId: batchRow.geoId,
+              geo: batchRow.geo?.trim().toUpperCase() ?? null,
             })
             .returning({ id: campaignsTable.id });
           resolvedCampaignId = campaign.id;

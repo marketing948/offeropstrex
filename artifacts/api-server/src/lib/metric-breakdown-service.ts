@@ -6,7 +6,6 @@ import {
   testingBatchesTable,
 } from "@workspace/db";
 import {
-  queryBatchMetricTotalsMap,
   type MetricsDateRange,
 } from "./campaign-daily-metrics-aggregate.ts";
 import { monthKeyToRange } from "./xp-award-service.ts";
@@ -25,14 +24,12 @@ import {
   resolveGeoTargetsForNetworkMetric,
   resolveNetworkTargetsForMetric,
 } from "./goal-network-resolution.ts";
+import {
+  queryCanonicalRevenueNetworkGeo,
+  queryCanonicalTestingNetworkGeo,
+  queryCanonicalWorkingNetworkGeo,
+} from "./canonical-campaign-actuals.ts";
 import { loadAssignedNetworksForEmployee } from "./worker-network-access.ts";
-
-const ACTIVE_TESTING_STATUSES = [
-  "NEW_BATCH",
-  "WAITING_FOR_TRACKER_CAMPAIGNS",
-  "OFFER_READY_FOR_LIVE_TESTING",
-  "LIVE_TESTS",
-] as const;
 
 export type MetricBreakdownKind = "revenue" | "testing" | "working";
 
@@ -131,116 +128,25 @@ export async function queryRevenueNetworkGeo(
   employeeId: number | null,
   allowedNetworkNames?: string[],
 ): Promise<NetworkGeoMap> {
-  const conditions = [eq(testingBatchesTable.workspaceId, workspaceId)];
-  if (employeeId != null) {
-    conditions.push(eq(testingBatchesTable.employeeId, employeeId));
-  }
-  if (allowedNetworkNames) {
-    if (allowedNetworkNames.length === 0) return new Map();
-    conditions.push(inArray(testingBatchesTable.affiliateNetwork, allowedNetworkNames));
-  }
-
-  const batches = await db
-    .select({
-      batchId: testingBatchesTable.id,
-      network: testingBatchesTable.affiliateNetwork,
-      geo: testingBatchesTable.geo,
-    })
-    .from(testingBatchesTable)
-    .where(and(...conditions));
-
-  const metricsByBatch = await queryBatchMetricTotalsMap(workspaceId, range);
-  const map: NetworkGeoMap = new Map();
-
-  for (const b of batches) {
-    const m = metricsByBatch.get(b.batchId);
-    if (!m) continue;
-    const net = b.network?.trim() || "(unset)";
-    const geo = b.geo?.trim() || "(unset)";
-    addNetworkGeo(map, net, geo, m.revenue);
-  }
-
-  return map;
+  return queryCanonicalRevenueNetworkGeo(workspaceId, range, employeeId, allowedNetworkNames);
 }
 
 export async function queryTestingNetworkGeo(
   workspaceId: number,
   employeeId: number | null,
   allowedNetworkNames?: string[],
+  monthKey?: string,
 ): Promise<NetworkGeoMap> {
-  const conditions = [
-    eq(testingBatchesTable.workspaceId, workspaceId),
-    inArray(testingBatchesTable.status, [...ACTIVE_TESTING_STATUSES]),
-  ];
-  if (employeeId != null) {
-    conditions.push(eq(testingBatchesTable.employeeId, employeeId));
-  }
-  if (allowedNetworkNames) {
-    if (allowedNetworkNames.length === 0) return new Map();
-    conditions.push(inArray(testingBatchesTable.affiliateNetwork, allowedNetworkNames));
-  }
-
-  const rows = await db
-    .select({
-      network: testingBatchesTable.affiliateNetwork,
-      geo: testingBatchesTable.geo,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(testingBatchesTable)
-    .where(and(...conditions))
-    .groupBy(testingBatchesTable.affiliateNetwork, testingBatchesTable.geo);
-
-  const map: NetworkGeoMap = new Map();
-  for (const r of rows) {
-    const net = r.network?.trim() || "(unset)";
-    const geo = r.geo?.trim() || "(unset)";
-    addNetworkGeo(map, net, geo, Number(r.count ?? 0));
-  }
-  return map;
+  return queryCanonicalTestingNetworkGeo(workspaceId, employeeId, allowedNetworkNames, monthKey);
 }
 
 export async function queryWorkingNetworkGeo(
   workspaceId: number,
   employeeId: number | null,
   allowedNetworkNames?: string[],
+  monthKey?: string,
 ): Promise<NetworkGeoMap> {
-  const conditions = [
-    eq(campaignsTable.workspaceId, workspaceId),
-    eq(campaignsTable.status, "live"),
-    eq(campaignsTable.campaignPurpose, "working"),
-  ];
-  if (employeeId != null) {
-    conditions.push(eq(testingBatchesTable.employeeId, employeeId));
-  }
-  if (allowedNetworkNames) {
-    if (allowedNetworkNames.length === 0) return new Map();
-    conditions.push(inArray(testingBatchesTable.affiliateNetwork, allowedNetworkNames));
-  }
-
-  const rows = await db
-    .select({
-      network: testingBatchesTable.affiliateNetwork,
-      geo: testingBatchesTable.geo,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(campaignsTable)
-    .innerJoin(
-      testingBatchesTable,
-      and(
-        eq(campaignsTable.batchId, testingBatchesTable.id),
-        eq(testingBatchesTable.workspaceId, campaignsTable.workspaceId),
-      ),
-    )
-    .where(and(...conditions))
-    .groupBy(testingBatchesTable.affiliateNetwork, testingBatchesTable.geo);
-
-  const map: NetworkGeoMap = new Map();
-  for (const r of rows) {
-    const net = r.network?.trim() || "(unset)";
-    const geo = r.geo?.trim() || "(unset)";
-    addNetworkGeo(map, net, geo, Number(r.count ?? 0));
-  }
-  return map;
+  return queryCanonicalWorkingNetworkGeo(workspaceId, employeeId, allowedNetworkNames, monthKey);
 }
 
 function geoTargetSourceFromAllocation(
@@ -430,9 +336,9 @@ export async function buildMetricBreakdown(
   if (metric === "revenue") {
     networkGeo = await queryRevenueNetworkGeo(workspaceId, range, employeeId, allowedNetworkNames);
   } else if (metric === "testing") {
-    networkGeo = await queryTestingNetworkGeo(workspaceId, employeeId, allowedNetworkNames);
+    networkGeo = await queryTestingNetworkGeo(workspaceId, employeeId, allowedNetworkNames, monthKey);
   } else {
-    networkGeo = await queryWorkingNetworkGeo(workspaceId, employeeId, allowedNetworkNames);
+    networkGeo = await queryWorkingNetworkGeo(workspaceId, employeeId, allowedNetworkNames, monthKey);
   }
 
   const totalCurrent = [...networkGeo.values()].reduce(
@@ -454,9 +360,9 @@ export async function buildMetricBreakdown(
       if (metric === "revenue") {
         employeeGeo = await queryRevenueNetworkGeo(workspaceId, range, eid, allowedNetworkNames);
       } else if (metric === "testing") {
-        employeeGeo = await queryTestingNetworkGeo(workspaceId, eid, allowedNetworkNames);
+        employeeGeo = await queryTestingNetworkGeo(workspaceId, eid, allowedNetworkNames, monthKey);
       } else {
-        employeeGeo = await queryWorkingNetworkGeo(workspaceId, eid, allowedNetworkNames);
+        employeeGeo = await queryWorkingNetworkGeo(workspaceId, eid, allowedNetworkNames, monthKey);
       }
       teamTarget += computeEffectiveMetricTarget(monthGoals, metricKey, eid, employeeGeo);
     }

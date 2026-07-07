@@ -279,8 +279,8 @@ export async function buildGoalAllocation(
 
   const [revenueActivity, testingActivity, workingActivity] = await Promise.all([
     queryRevenueNetworkGeo(workspaceId, range, employeeId),
-    queryTestingNetworkGeo(workspaceId, employeeId),
-    queryWorkingNetworkGeo(workspaceId, employeeId),
+    queryTestingNetworkGeo(workspaceId, employeeId, undefined, monthKey),
+    queryWorkingNetworkGeo(workspaceId, employeeId, undefined, monthKey),
   ]);
 
   const activity = {
