@@ -386,9 +386,15 @@ export function useUpdateGoalsConfig() {
       if (activeWorkspaceId == null) {
         return Promise.reject(new Error("No active workspace"));
       }
+      // Worker goals are managed by Performance Engine worker-goals endpoints.
+      // For non-worker-goals tabs, avoid sending workerGoalTargets in the payload.
+      const configPayload: Partial<GoalsConfig> = { ...config };
+      if (tab !== "Worker Goals") {
+        delete configPayload.workerGoalTargets;
+      }
       return authedJson<GoalsConfig>(`/api/settings/goals?workspace_id=${activeWorkspaceId}`, {
         method: "PATCH",
-        body: JSON.stringify({ ...config, _adminInfo: { adminId, adminName, summary, tab } }),
+        body: JSON.stringify({ ...configPayload, _adminInfo: { adminId, adminName, summary, tab } }),
       }).then(migrateConfig);
     },
     onSuccess: () => {
