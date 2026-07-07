@@ -36,6 +36,11 @@ import {
   findEnabledPointAction,
   resolveTaskXpActionType,
 } from "../lib/performance-action-catalog.ts";
+import {
+  previewGoalsExcelImport,
+  confirmGoalsExcelImport,
+  type NormalizedImportGoal,
+} from "../lib/monthly-goals-excel-import.ts";
 
 const router: IRouter = Router();
 
@@ -115,6 +120,35 @@ const resetAllGoalPlanSchema = z.object({
   employeeId: z.number().int().positive(),
   monthKey: monthKeySchema,
   confirmation: z.literal(true),
+});
+
+const goalsImportPreviewSchema = z.object({
+  workspaceId: z.number().int().positive(),
+  fileName: z.string().min(1),
+  fileBase64: z.string().min(1),
+});
+
+const normalizedImportGoalSchema = z.object({
+  monthKey: monthKeySchema,
+  employeeId: z.number().int().positive(),
+  employeeName: z.string().min(1),
+  employeeEmail: z.string().email(),
+  affiliateNetworkId: z.number().int().positive(),
+  affiliateNetworkName: z.string().min(1),
+  selectedGeoCodes: z.array(z.string().min(1)).nullable(),
+  geoId: z.number().int().positive().nullable(),
+  geoCode: z.string().nullable(),
+  metricKey: goalMetricKeySchema,
+  monthlyTarget: z.number().nonnegative(),
+  source: z.enum(["goals_sheet", "geo_override_sheet"]),
+  sourceRowNumber: z.number().int().positive(),
+});
+
+const goalsImportConfirmSchema = z.object({
+  workspaceId: z.number().int().positive(),
+  importMode: z.literal("UPSERT_ROWS_ONLY"),
+  checksum: z.string().min(1),
+  normalizedGoals: z.array(normalizedImportGoalSchema).min(1),
 });
 
 router.get("/performance/monthly-goals", async (req, res): Promise<void> => {
@@ -772,6 +806,78 @@ router.post("/performance/worker-goals", async (req, res): Promise<void> => {
   await upsertSetting(workspaceId, "goals_config", JSON.stringify(cfg));
 
   res.json({ ok: true, goal: nextGoal });
+});
+
+router.post("/performance/monthly-goals/import/preview", async (req, res): Promise<void> => {
+  const employee = await getEmployeeFromToken(req);
+  if (!employee || employee.role !== "admin") {
+    res.status(employee ? 403 : 401).json({ error: employee ? "Admin access required" : "Unauthorized" });
+    return;
+  }
+
+  const parsed = goalsImportPreviewSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const { workspaceId, fileName } = parsed.data;
+  if ((await requireWorkspaceAccess(req, res, workspaceId)) === null) return;
+
+  if (!fileName.toLowerCase().endsWith(".xlsx")) {
+    res.status(400).json({ error: "Only .xlsx files are supported." });
+    return;
+  }
+
+  let fileBuffer: Buffer;
+  try {
+    fileBuffer = Buffer.from(parsed.data.fileBase64, "base64");
+  } catch {
+    res.status(400).json({ error: "Invalid file encoding." });
+    return;
+  }
+
+  if (!fileBuffer.length) {
+    res.status(400).json({ error: "Empty file." });
+    return;
+  }
+
+  try {
+    const preview = await previewGoalsExcelImport(workspaceId, fileBuffer);
+    res.json(preview);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Failed to parse Excel file." });
+  }
+});
+
+router.post("/performance/monthly-goals/import/confirm", async (req, res): Promise<void> => {
+  const employee = await getEmployeeFromToken(req);
+  if (!employee || employee.role !== "admin") {
+    res.status(employee ? 403 : 401).json({ error: employee ? "Admin access required" : "Unauthorized" });
+    return;
+  }
+
+  const parsed = goalsImportConfirmSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const { workspaceId, importMode, checksum, normalizedGoals } = parsed.data;
+  if ((await requireWorkspaceAccess(req, res, workspaceId)) === null) return;
+
+  try {
+    const result = await confirmGoalsExcelImport({
+      workspaceId,
+      adminId: employee.id,
+      importMode,
+      normalizedGoals: normalizedGoals as NormalizedImportGoal[],
+      checksum,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Import failed." });
+  }
 });
 
 export default router;

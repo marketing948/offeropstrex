@@ -35,6 +35,7 @@ import { KpiBreakdownPanel } from "@/components/performance-engine/kpi-breakdown
 import { InitialsBadge } from "@/components/performance-engine/initials-badge";
 import { SegmentedProgress } from "@/components/performance-engine/segmented-progress";
 import { CreateGoalPlanModal, type GoalPlanEditContext } from "@/components/performance-engine/create-goal-plan-modal";
+import { MonthlyGoalsExcelImportDialog } from "@/components/performance-engine/monthly-goals-excel-import-dialog";
 import { MonthlyGoalWorkerDrawer } from "@/components/performance-engine/monthly-goal-worker-drawer";
 import { ensureGoalsConfig, useGoalsConfig } from "@/lib/goals-config";
 import {
@@ -99,6 +100,7 @@ export function MonthlyGoalsPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedBreakdown, setSelectedBreakdown] = useState<MetricBreakdownKind | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [editContext, setEditContext] = useState<GoalPlanEditContext | null>(null);
   const [drawerWorker, setDrawerWorker] = useState<WorkerMonthlyRow | null>(null);
   const [howOpen, setHowOpen] = useState(false);
@@ -189,6 +191,10 @@ export function MonthlyGoalsPage() {
           <Button variant="outline" size="sm" onClick={() => setHowOpen((v) => !v)}>
             <HelpCircle size={14} className="mr-1.5" />
             How it works
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
+            <Upload size={14} className="mr-1.5" />
+            Import Excel
           </Button>
           <Button size="sm" onClick={openCreate}>
             <Plus size={14} className="mr-1.5" />
@@ -395,10 +401,14 @@ export function MonthlyGoalsPage() {
               <p className="text-sm font-medium flex items-center gap-1"><Copy size={14} /> Copy Goal Plan</p>
               <p className="text-xs text-muted-foreground">Coming soon</p>
             </div>
-            <div className="rounded-lg border p-3 opacity-50 cursor-not-allowed" title="Coming soon">
+            <button
+              type="button"
+              className="rounded-lg border p-3 text-left hover:bg-slate-50 transition-colors"
+              onClick={() => setImportOpen(true)}
+            >
               <p className="text-sm font-medium flex items-center gap-1"><Upload size={14} /> Import Goals</p>
-              <p className="text-xs text-muted-foreground">Coming soon</p>
-            </div>
+              <p className="text-xs text-muted-foreground">Upload Excel workbook</p>
+            </button>
             <Link
               href="/performance/xp-rules"
               className="rounded-lg border p-3 text-left hover:bg-slate-50 transition-colors block"
@@ -458,6 +468,14 @@ export function MonthlyGoalsPage() {
         allGoals={goalsCfg.workerGoalTargets}
         editContext={editContext}
         onSaved={refresh}
+      />
+
+      <MonthlyGoalsExcelImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        workspaceId={wsId}
+        monthKey={monthKey}
+        onImported={refresh}
       />
     </div>
   );
