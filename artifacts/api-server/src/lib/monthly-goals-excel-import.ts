@@ -30,6 +30,28 @@ export const GOALS_REQUIRED_HEADERS = [
   "working_target",
 ] as const;
 
+export const GOALS_OPTIONAL_HEADERS = [
+  "revenue_xp",
+  "testing_xp",
+  "working_xp",
+] as const;
+
+export const GOALS_TEMPLATE_HEADERS = [
+  "month",
+  "employee_email",
+  "employee_name",
+  "affiliate_network",
+  "selected_geos",
+  "revenue_target",
+  "revenue_xp",
+  "testing_target",
+  "testing_xp",
+  "working_target",
+  "working_xp",
+] as const;
+
+export const INSTRUCTIONS_SHEET_NAME = "Instructions";
+
 export const GEO_OVERRIDE_HEADERS = [
   "month",
   "employee_email",
@@ -56,6 +78,8 @@ export type NormalizedImportGoal = {
   geoCode: string | null;
   metricKey: GoalMetricKey;
   monthlyTarget: number;
+  xpReward: number | null;
+  xpProvided: boolean;
   source: "goals_sheet" | "geo_override_sheet";
   sourceRowNumber: number;
 };
@@ -69,8 +93,11 @@ export type ImportPreviewRow = {
   affiliateNetworkName: string | null;
   selectedGeoCodes: string[];
   revenueTarget: number | null;
+  revenueXp: number | null;
   testingTarget: number | null;
+  testingXp: number | null;
   workingTarget: number | null;
+  workingXp: number | null;
   messages: string[];
 };
 
@@ -134,6 +161,7 @@ function parseMonthKey(value: unknown): string | null {
   return s;
 }
 
+
 function parseNonNegativeNumber(value: unknown, integer = false): number | null {
   if (value == null || value === "") return 0;
   const n = Number(value);
@@ -176,11 +204,50 @@ function resolveNetworkName(input: string, ctx: WorkspaceImportContext): { name:
   return null;
 }
 
-function sheetToRows(workbook: XLSX.WorkBook, sheetName: string, requiredHeaders: readonly string[]): RawSheetRow[] {
+function parseOptionalXp(value: unknown): number | null | "invalid" {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) return "invalid";
+  return n;
+}
+
+function defaultXpForMetric(metricKey: GoalMetricKey): number {
+  if (metricKey === "revenue") return 500;
+  if (metricKey === "testingBatches") return 200;
+  return 300;
+}
+
+function resolveXpReward(
+  metricKey: GoalMetricKey,
+  xpProvided: boolean,
+  xpReward: number | null,
+  existing: ServerWorkerGoalTarget | undefined,
+): number {
+  if (xpProvided && xpReward != null) return xpReward;
+  if (existing?.xpReward != null) return existing.xpReward;
+  return defaultXpForMetric(metricKey);
+}
+
+function readSheetRows(
+  workbook: XLSX.WorkBook,
+  sheetName: string,
+  requiredHeaders: readonly string[],
+  optionalHeaders: readonly string[] = [],
+): RawSheetRow[] {
   const sheet = workbook.Sheets[sheetName];
-  if (!sheet) return [];
+  if (!sheet) {
+    const found = workbook.SheetNames;
+    throw new Error(
+      found.length > 0
+        ? `Missing required sheet: ${sheetName}. Found sheets: ${found.join(", ")}`
+        : `Missing required sheet: ${sheetName}`,
+    );
+  }
+
   const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
-  if (matrix.length === 0) return [];
+  if (matrix.length === 0) {
+    throw new Error(`Sheet "${sheetName}" is empty.`);
+  }
 
   const headerRow = (matrix[0] ?? []).map(normalizeHeader);
   const headerIndex = new Map<string, number>();
@@ -188,26 +255,37 @@ function sheetToRows(workbook: XLSX.WorkBook, sheetName: string, requiredHeaders
     if (h) headerIndex.set(h, i);
   });
 
-  for (const required of requiredHeaders) {
-    if (!headerIndex.has(required)) {
-      throw new Error(`Missing required column "${required}" on sheet "${sheetName}"`);
-    }
+  const missing = requiredHeaders.filter((h) => !headerIndex.has(h));
+  if (missing.length > 0) {
+    const found = headerRow.filter(Boolean);
+    throw new Error(
+      `Header mismatch on sheet "${sheetName}". Expected: ${requiredHeaders.join(", ")}. Found: ${found.join(", ") || "(none)"}. Missing: ${missing.join(", ")}`,
+    );
   }
+
+  const allHeaders = [
+    ...requiredHeaders,
+    ...optionalHeaders.filter((h) => headerIndex.has(h)),
+  ];
 
   const rows: RawSheetRow[] = [];
   for (let i = 1; i < matrix.length; i++) {
     const line = matrix[i] ?? [];
     const obj: RawSheetRow = {};
     let hasValue = false;
-    for (const required of requiredHeaders) {
-      const idx = headerIndex.get(required)!;
+    for (const header of allHeaders) {
+      const idx = headerIndex.get(header)!;
       const val = line[idx] ?? "";
-      obj[required] = val;
+      obj[header] = val;
       if (cellString(val)) hasValue = true;
     }
     if (hasValue) rows.push(obj);
   }
   return rows;
+}
+
+function sheetToRows(workbook: XLSX.WorkBook, sheetName: string, requiredHeaders: readonly string[]): RawSheetRow[] {
+  return readSheetRows(workbook, sheetName, requiredHeaders);
 }
 
 export function parseGoalsWorkbook(buffer: Buffer): {
@@ -218,12 +296,27 @@ export function parseGoalsWorkbook(buffer: Buffer): {
   if (!buffer.length) {
     throw new Error("Empty file");
   }
-  const workbook = XLSX.read(buffer, { type: "buffer" });
-  const goalsRows = sheetToRows(workbook, GOALS_SHEET_NAME, GOALS_REQUIRED_HEADERS);
+  let workbook: XLSX.WorkBook;
+  try {
+    workbook = XLSX.read(buffer, { type: "buffer" });
+  } catch {
+    throw new Error("Invalid .xlsx file. Upload a valid Excel workbook, not CSV or another format.");
+  }
+
+  const goalsRows = readSheetRows(
+    workbook,
+    GOALS_SHEET_NAME,
+    GOALS_REQUIRED_HEADERS,
+    GOALS_OPTIONAL_HEADERS,
+  );
+  if (goalsRows.length === 0) {
+    throw new Error("No data rows found in Goals sheet");
+  }
+
   const hasGeoOverridesSheet = Boolean(workbook.Sheets[GEO_OVERRIDES_SHEET_NAME]);
   let geoOverrideRows: RawSheetRow[] = [];
   if (hasGeoOverridesSheet) {
-    geoOverrideRows = sheetToRows(workbook, GEO_OVERRIDES_SHEET_NAME, GEO_OVERRIDE_HEADERS);
+    geoOverrideRows = readSheetRows(workbook, GEO_OVERRIDES_SHEET_NAME, GEO_OVERRIDE_HEADERS);
   }
   return { goalsRows, geoOverrideRows, hasGeoOverridesSheet };
 }
@@ -341,6 +434,8 @@ export function computeImportChecksum(goals: NormalizedImportGoal[]): string {
       geoCode: g.geoCode,
       metricKey: g.metricKey,
       monthlyTarget: g.monthlyTarget,
+      xpReward: g.xpReward,
+      xpProvided: g.xpProvided,
     }));
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
 }
@@ -373,6 +468,9 @@ export function validateGoalsImport(
     const revenueTarget = parseNonNegativeNumber(raw.revenue_target, false);
     const testingTarget = parseNonNegativeNumber(raw.testing_target, true);
     const workingTarget = parseNonNegativeNumber(raw.working_target, true);
+    const revenueXpRaw = parseOptionalXp(raw.revenue_xp);
+    const testingXpRaw = parseOptionalXp(raw.testing_xp);
+    const workingXpRaw = parseOptionalXp(raw.working_xp);
 
     const previewRow: ImportPreviewRow = {
       rowNumber,
@@ -383,8 +481,11 @@ export function validateGoalsImport(
       affiliateNetworkName: networkInput || null,
       selectedGeoCodes,
       revenueTarget,
+      revenueXp: revenueXpRaw === "invalid" ? null : revenueXpRaw,
       testingTarget,
+      testingXp: testingXpRaw === "invalid" ? null : testingXpRaw,
       workingTarget,
+      workingXp: workingXpRaw === "invalid" ? null : workingXpRaw,
       messages,
     };
 
@@ -395,6 +496,9 @@ export function validateGoalsImport(
     if (revenueTarget == null) messages.push("revenue_target must be a non-negative number.");
     if (testingTarget == null) messages.push("testing_target must be a non-negative integer.");
     if (workingTarget == null) messages.push("working_target must be a non-negative integer.");
+    if (revenueXpRaw === "invalid") messages.push("revenue_xp must be a non-negative integer.");
+    if (testingXpRaw === "invalid") messages.push("testing_xp must be a non-negative integer.");
+    if (workingXpRaw === "invalid") messages.push("working_xp must be a non-negative integer.");
 
     const employee = email ? ctx.employeesByEmail.get(email) : undefined;
     if (email && !employee) messages.push(`Unknown employee_email "${email}" in workspace.`);
@@ -459,16 +563,25 @@ export function validateGoalsImport(
     previewRow.status = "valid";
     previewRow.affiliateNetworkName = network!.name;
     previewRow.employeeName = employee!.name;
+    previewRow.revenueXp = revenueXpRaw ?? defaultXpForMetric("revenue");
+    previewRow.testingXp = testingXpRaw ?? defaultXpForMetric("testingBatches");
+    previewRow.workingXp = workingXpRaw ?? defaultXpForMetric("workingCampaigns");
     validRows += 1;
     rows.push(previewRow);
 
-    const metricTargets: { metricKey: GoalMetricKey; value: number }[] = [
-      { metricKey: "revenue", value: revenueTarget ?? 0 },
-      { metricKey: "testingBatches", value: testingTarget ?? 0 },
-      { metricKey: "workingCampaigns", value: workingTarget ?? 0 },
+    const metricTargets: {
+      metricKey: GoalMetricKey;
+      value: number;
+      xpRaw: number | null | "invalid";
+      xpColumn: "revenue_xp" | "testing_xp" | "working_xp";
+    }[] = [
+      { metricKey: "revenue", value: revenueTarget ?? 0, xpRaw: revenueXpRaw, xpColumn: "revenue_xp" },
+      { metricKey: "testingBatches", value: testingTarget ?? 0, xpRaw: testingXpRaw, xpColumn: "testing_xp" },
+      { metricKey: "workingCampaigns", value: workingTarget ?? 0, xpRaw: workingXpRaw, xpColumn: "working_xp" },
     ];
 
     for (const metric of metricTargets) {
+      const xpProvided = metric.xpRaw !== null && metric.xpRaw !== "invalid";
       normalizedGoals.push({
         monthKey: monthKey!,
         employeeId: employee!.id,
@@ -481,6 +594,8 @@ export function validateGoalsImport(
         geoCode: null,
         metricKey: metric.metricKey,
         monthlyTarget: metric.value,
+        xpReward: xpProvided ? metric.xpRaw : null,
+        xpProvided,
         source: "goals_sheet",
         sourceRowNumber: rowNumber,
       });
@@ -565,6 +680,8 @@ export function validateGoalsImport(
         geoCode: geo.code,
         metricKey: metric.metricKey,
         monthlyTarget: metric.value ?? 0,
+        xpReward: 0,
+        xpProvided: false,
         source: "geo_override_sheet",
         sourceRowNumber: rowNumber,
       });
@@ -636,9 +753,11 @@ export function upsertNormalizedGoals(
     };
 
     const dup = findDuplicateGoal(nextGoals, candidate);
+    const resolvedXp = goal.geoCode
+      ? 0
+      : resolveXpReward(goal.metricKey, goal.xpProvided, goal.xpReward, dup);
     if (dup) {
       const idx = nextGoals.findIndex((g) => g.id === dup.id);
-      const preservedXp = dup.xpReward ?? 0;
       nextGoals[idx] = {
         ...dup,
         employeeName: goal.employeeName,
@@ -651,7 +770,7 @@ export function upsertNormalizedGoals(
         monthKey: goal.monthKey,
         isActive: true,
         updatedAt: now,
-        xpReward: preservedXp,
+        xpReward: resolvedXp,
       };
       updatedCount += 1;
     } else {
@@ -660,19 +779,13 @@ export function upsertNormalizedGoals(
         id: `wg_${goal.metricKey}_${goal.employeeId}_${goal.monthKey}_${goal.affiliateNetworkName}_${goal.geoCode ?? "net"}_${ts}_${createdCount}`,
         createdAt: now,
         updatedAt: now,
-        xpReward: goal.geoCode ? 0 : defaultXpForMetric(goal.metricKey),
+        xpReward: resolvedXp,
       });
       createdCount += 1;
     }
   }
 
   return { nextGoals, createdCount, updatedCount };
-}
-
-function defaultXpForMetric(metricKey: GoalMetricKey): number {
-  if (metricKey === "revenue") return 500;
-  if (metricKey === "testingBatches") return 200;
-  return 300;
 }
 
 export function revalidateNormalizedGoals(
@@ -855,4 +968,67 @@ export async function confirmGoalsExcelImport(params: {
     goalsBeforeCount,
     goalsAfterCount: nextGoals.length,
   };
+}
+
+export async function buildGoalsImportTemplateBuffer(workspaceId: number): Promise<Buffer> {
+  const ctx = await loadWorkspaceImportContext(workspaceId);
+  const wb = XLSX.utils.book_new();
+
+  const goalsData: unknown[][] = [
+    [...GOALS_TEMPLATE_HEADERS],
+    [
+      "2026-07",
+      "employee@example.com",
+      "Employee Name",
+      "Network Name",
+      "DE,US",
+      1000,
+      500,
+      4,
+      200,
+      1,
+      300,
+    ],
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(goalsData), GOALS_SHEET_NAME);
+
+  const geoData: unknown[][] = [
+    [...GEO_OVERRIDE_HEADERS],
+    ["2026-07", "employee@example.com", "Network Name", "DE", "", "", ""],
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(geoData), GEO_OVERRIDES_SHEET_NAME);
+
+  const instructions = [
+    ["Monthly Goals Excel Import"],
+    [""],
+    ["Upload .xlsx only. Use Preview before Confirm."],
+    ["Import mode: UPSERT_ROWS_ONLY — only rows in the file are created/updated."],
+    ["Other existing goals are preserved."],
+    ["XP columns (revenue_xp, testing_xp, working_xp) are optional."],
+    ["Blank XP uses defaults: revenue 500, testing 200, working 300."],
+    ["When updating an existing goal, blank XP preserves the current XP value."],
+    [""],
+    ["Required sheet: Goals"],
+    ["Optional sheet: Geo Overrides"],
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(instructions), INSTRUCTIONS_SHEET_NAME);
+
+  const refRows: unknown[][] = [["employee_email", "employee_name", "affiliate_network", "geo_code"]];
+  for (const [email, employee] of ctx.employeesByEmail) {
+    for (const assignKey of ctx.assignments) {
+      const [employeeIdStr, networkIdStr] = assignKey.split("|");
+      if (Number(employeeIdStr) !== employee.id) continue;
+      const network = [...ctx.networksByLowerName.values()].find((n) => n.id === Number(networkIdStr));
+      if (!network) continue;
+      for (const geo of ctx.geosByCode.values()) {
+        refRows.push([email, employee.name, network.name, geo.code]);
+      }
+    }
+  }
+  if (refRows.length === 1) {
+    refRows.push(["(no assignments found)", "", "", ""]);
+  }
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(refRows), "References");
+
+  return Buffer.from(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
 }

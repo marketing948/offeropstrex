@@ -39,6 +39,7 @@ import {
 import {
   previewGoalsExcelImport,
   confirmGoalsExcelImport,
+  buildGoalsImportTemplateBuffer,
   type NormalizedImportGoal,
 } from "../lib/monthly-goals-excel-import.ts";
 
@@ -140,6 +141,8 @@ const normalizedImportGoalSchema = z.object({
   geoCode: z.string().nullable(),
   metricKey: goalMetricKeySchema,
   monthlyTarget: z.number().nonnegative(),
+  xpReward: z.number().int().nonnegative().nullable(),
+  xpProvided: z.boolean(),
   source: z.enum(["goals_sheet", "geo_override_sheet"]),
   sourceRowNumber: z.number().int().positive(),
 });
@@ -806,6 +809,35 @@ router.post("/performance/worker-goals", async (req, res): Promise<void> => {
   await upsertSetting(workspaceId, "goals_config", JSON.stringify(cfg));
 
   res.json({ ok: true, goal: nextGoal });
+});
+
+router.get("/performance/monthly-goals/import/template", async (req, res): Promise<void> => {
+  const employee = await getEmployeeFromToken(req);
+  if (!employee || employee.role !== "admin") {
+    res.status(employee ? 403 : 401).json({ error: employee ? "Admin access required" : "Unauthorized" });
+    return;
+  }
+
+  const workspaceId = await requireWorkspaceFromQuery(req, res);
+  if (workspaceId === null) return;
+  if ((await requireWorkspaceAccess(req, res, workspaceId)) === null) return;
+
+  try {
+    const buffer = await buildGoalsImportTemplateBuffer(workspaceId);
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="monthly-goals-template.xlsx"',
+    );
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to build import template.",
+    });
+  }
 });
 
 router.post("/performance/monthly-goals/import/preview", async (req, res): Promise<void> => {

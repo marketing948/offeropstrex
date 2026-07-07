@@ -371,8 +371,11 @@ export type GoalsImportPreviewRow = {
   affiliateNetworkName: string | null;
   selectedGeoCodes: string[];
   revenueTarget: number | null;
+  revenueXp: number | null;
   testingTarget: number | null;
+  testingXp: number | null;
   workingTarget: number | null;
+  workingXp: number | null;
   messages: string[];
 };
 
@@ -388,6 +391,8 @@ export type NormalizedImportGoal = {
   geoCode: string | null;
   metricKey: "revenue" | "testingBatches" | "workingCampaigns";
   monthlyTarget: number;
+  xpReward: number | null;
+  xpProvided: boolean;
   source: "goals_sheet" | "geo_override_sheet";
   sourceRowNumber: number;
 };
@@ -442,8 +447,22 @@ export async function confirmMonthlyGoalsExcelImport(params: {
   });
 }
 
-export const GOALS_EXCEL_TEMPLATE_HEADERS =
-  "month,employee_email,employee_name,affiliate_network,selected_geos,revenue_target,testing_target,working_target";
+export async function downloadMonthlyGoalsImportTemplate(workspaceId: number): Promise<Blob> {
+  const res = await authedFetch(
+    `/api/performance/monthly-goals/import/template?workspace_id=${workspaceId}`,
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    let detail = text;
+    try {
+      detail = (JSON.parse(text) as { error?: string }).error ?? text;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail || `${res.status} ${res.statusText}`);
+  }
+  return res.blob();
+}
 
-export const GOALS_EXCEL_TEMPLATE_SAMPLE =
-  "2026-07,sara.bogdani@isaltech.com,Sara,Yieldkit CBV,\"GB,DE,FR\",3000,12,4";
+export const GOALS_EXCEL_TEMPLATE_HEADERS =
+  "month,employee_email,employee_name,affiliate_network,selected_geos,revenue_target,revenue_xp,testing_target,testing_xp,working_target,working_xp";
