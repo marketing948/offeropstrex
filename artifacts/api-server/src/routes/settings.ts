@@ -17,6 +17,11 @@ import {
   type AlertRulesConfig,
 } from "@workspace/alert-rules";
 import { getSettingValue, upsertSetting } from "../lib/settings-store";
+import {
+  countWorkerGoalTargets,
+  mergeLegacyGoalsSettingsPreservingWorkerTargets,
+  safeParseGoalsConfig,
+} from "../lib/goals-config-merge";
 
 const router: IRouter = Router();
 
@@ -353,24 +358,51 @@ router.patch("/settings/goals", async (req, res): Promise<void> => {
     return;
   }
   // Extract and strip admin audit info before saving
-  const { _adminInfo, ...config } = body as Record<string, unknown>;
-  await upsertSetting(workspaceId, "goals_config", JSON.stringify(config));
+  const { _adminInfo, ...incomingPatch } = body as Record<string, unknown>;
+  const existingRaw = await getSettingValue(workspaceId, "goals_config");
+  let existingConfigRaw: unknown = {};
+  try {
+    existingConfigRaw = existingRaw ? JSON.parse(existingRaw) : {};
+  } catch {
+    existingConfigRaw = {};
+  }
+  const incomingConfigRaw = safeParseGoalsConfig(incomingPatch);
+  const beforeWorkerGoalTargetsCount = countWorkerGoalTargets(
+    safeParseGoalsConfig(existingConfigRaw),
+  );
+  const incomingWorkerGoalTargetsCount = countWorkerGoalTargets(incomingConfigRaw);
+  const mergedConfig = mergeLegacyGoalsSettingsPreservingWorkerTargets(
+    existingConfigRaw,
+    incomingConfigRaw,
+  );
+  const afterWorkerGoalTargetsCount = countWorkerGoalTargets(mergedConfig);
+  await upsertSetting(workspaceId, "goals_config", JSON.stringify(mergedConfig));
 
   // Append audit log entry
-  if (_adminInfo && typeof _adminInfo === "object") {
-    const ai = _adminInfo as Record<string, unknown>;
-    const entry = {
-      timestamp: new Date().toISOString(),
-      adminId: ai.adminId ?? 0,
-      adminName: ai.adminName ?? "Admin",
-      summary: ai.summary ?? "Configuration updated",
-      tab: ai.tab ?? null,
-    };
-    const existing = await getSettingValue(workspaceId, "goals_audit_log");
-    const log: unknown[] = existing ? JSON.parse(existing) : [];
-    log.unshift(entry);
-    await upsertSetting(workspaceId, "goals_audit_log", JSON.stringify(log.slice(0, 50)));
+  const ai = _adminInfo && typeof _adminInfo === "object" ? (_adminInfo as Record<string, unknown>) : {};
+  const entry = {
+    timestamp: new Date().toISOString(),
+    route: "PATCH /api/settings/goals",
+    adminId: ai.adminId ?? 0,
+    adminName: ai.adminName ?? "Admin",
+    summary: ai.summary ?? "Configuration updated",
+    tab: ai.tab ?? null,
+    beforeWorkerGoalTargetsCount,
+    afterWorkerGoalTargetsCount,
+    incomingWorkerGoalTargetsCount,
+    preservedWorkerGoalTargets: true,
+  };
+  const existing = await getSettingValue(workspaceId, "goals_audit_log");
+  let log: unknown[] = [];
+  if (existing) {
+    try {
+      log = JSON.parse(existing) as unknown[];
+    } catch {
+      log = [];
+    }
   }
+  log.unshift(entry);
+  await upsertSetting(workspaceId, "goals_audit_log", JSON.stringify(log.slice(0, 50)));
 
   const saved = await getSettingValue(workspaceId, "goals_config");
   res.json(JSON.parse(saved ?? DEFAULT_GOALS_CONFIG));
