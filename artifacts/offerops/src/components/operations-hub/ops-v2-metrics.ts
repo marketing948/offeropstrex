@@ -63,6 +63,27 @@ function countWeekdaysInclusive(start: Date, end: Date): number {
   return total;
 }
 
+/**
+ * Number of Monday–Friday working days remaining in the month, INCLUDING today.
+ * Falls back to a 20-day month split when the month key cannot be parsed.
+ */
+export function remainingWorkingDaysInMonth(monthKey: string, now = new Date()): number {
+  const parsed = parseMonthKey(monthKey);
+  if (!parsed) {
+    // Fallback: assume ~20 working days, distribute by calendar progress.
+    const remainingFraction = Math.max(0, 1 - monthProgressFraction(now));
+    return Math.max(1, Math.round(20 * remainingFraction));
+  }
+  if (now > parsed.end) return 0;
+  // Clamp the window start to today (or month start if the month hasn't begun).
+  const from = now < parsed.start ? parsed.start : startOfDay(now);
+  return countWeekdaysInclusive(from, parsed.end);
+}
+
+function startOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
 export type WorkingDayPace = {
   totalWorkingDaysInMonth: number;
   elapsedWorkingDaysInMonth: number;

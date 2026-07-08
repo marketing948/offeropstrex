@@ -6,7 +6,11 @@
  * Revenue is never included.
  */
 
-import { ceilCount, evaluateWorkingDayPace } from "./ops-v2-metrics.ts";
+import {
+  ceilCount,
+  evaluateWorkingDayPace,
+  remainingWorkingDaysInMonth,
+} from "./ops-v2-metrics.ts";
 import { isScalingOpportunity } from "./scaling-opportunity.ts";
 import {
   countTestingCreatedToday,
@@ -147,6 +151,33 @@ export function computeTodayRequired(
   };
 }
 
+/**
+ * Network daily test total — the ONLY correct daily figure for a network.
+ *
+ *   networkRemaining      = max(0, monthlyTarget - current)
+ *   remainingWorkingDays  = Mon–Fri days left in the month (including today)
+ *   todayNeededNetwork    = ceil(networkRemaining / remainingWorkingDays)
+ *
+ * Completed → 0. Never negative. Never exceeds remaining.
+ * This is computed ONCE per network; GEO counts are distributed from it (never summed up).
+ */
+export function computeNetworkTodayRequired(
+  monthlyTarget: number,
+  current: number,
+  monthKey: string,
+  now = new Date(),
+): number {
+  const remaining = Math.max(0, monthlyTarget - current);
+  if (remaining <= 0) return 0;
+  const remainingDays = remainingWorkingDaysInMonth(monthKey, now);
+  if (remainingDays <= 0) {
+    // Month is over (or unparseable with no time left): ask for everything remaining.
+    return remaining;
+  }
+  const needed = Math.ceil(remaining / remainingDays);
+  return Math.min(remaining, Math.max(0, needed));
+}
+
 function campaignName(c: MissionCampaignRow | OpsCampaignRowLite): string {
   const raw = (c as { campaignName?: string | null }).campaignName;
   if (typeof raw === "string" && raw.trim()) return raw.trim();
@@ -193,16 +224,20 @@ export function allocateTodayRequiredAcrossGeos(
   const eligible = geos
     .map((g) => ({
       geo: g.geo,
-      weight: Math.max(1, g.gapToPace),
+      // Weight by how far behind pace, falling back to remaining so equal-pace
+      // GEOs still split by size. Always ≥ 1 so every eligible GEO can receive.
+      weight: Math.max(1, g.gapToPace > 0 ? g.gapToPace : Math.max(0, g.remaining)),
+      gapToPace: Math.max(0, g.gapToPace),
       remaining: Math.max(0, g.remaining),
     }))
     .filter((g) => g.remaining > 0);
 
   if (eligible.length === 0) return [];
 
-  // Sort: most behind first, then geo code for stability
+  // Priority: most behind pace → larger remaining → geo code (stable tie-break).
   eligible.sort((a, b) => {
-    if (b.weight !== a.weight) return b.weight - a.weight;
+    if (b.gapToPace !== a.gapToPace) return b.gapToPace - a.gapToPace;
+    if (b.remaining !== a.remaining) return b.remaining - a.remaining;
     return a.geo.localeCompare(b.geo);
   });
 
@@ -222,9 +257,19 @@ export function allocateTodayRequiredAcrossGeos(
     remaining -= share;
   }
 
-  if (remaining > 0 && out[0]) {
-    const bump = Math.min(remaining, eligible[0]!.remaining - out[0].count);
-    if (bump > 0) out[0] = { ...out[0], count: out[0].count + bump };
+  // Distribute any leftover to the highest-priority GEO(s) with room left.
+  if (remaining > 0) {
+    for (const row of eligible) {
+      if (remaining <= 0) break;
+      const existing = out.find((o) => o.geo === row.geo);
+      const used = existing?.count ?? 0;
+      const room = row.remaining - used;
+      if (room <= 0) continue;
+      const bump = Math.min(remaining, room);
+      if (existing) existing.count += bump;
+      else out.push({ geo: row.geo, count: bump });
+      remaining -= bump;
+    }
   }
 
   return out.filter((r) => r.count > 0);
@@ -271,14 +316,32 @@ export function buildTestingNetworkPlans(
     const geoSlices = slices.filter((s) => Boolean(s.geo?.trim()));
     const networkOnly = slices.filter((s) => !s.geo?.trim());
 
-    let geos: TestingGeoAction[] = [];
+    // 1) Network daily total FIRST (single ceil, never per-GEO summed).
+    const networkTarget =
+      geoSlices.length > 0
+        ? geoSlices.reduce((s, x) => s + x.target, 0)
+        : networkOnly.reduce((s, x) => s + x.target, 0);
+    const networkCurrent =
+      geoSlices.length > 0
+        ? geoSlices.reduce((s, x) => s + x.current, 0)
+        : networkOnly.reduce((s, x) => s + x.current, 0);
 
+    if (!(networkTarget > 0)) continue;
+
+    const todayNeededNetwork = computeNetworkTodayRequired(
+      networkTarget,
+      networkCurrent,
+      monthKey,
+      now,
+    );
+    const networkRemaining = Math.max(0, networkTarget - networkCurrent);
+
+    // 2) Build GEO metrics (pace inputs only — NOT their own daily ceil totals).
+    let geos: TestingGeoAction[];
     if (geoSlices.length > 0) {
-      // Prefer independent per-GEO monthly math (overrides already in target).
       geos = geoSlices.map((s) => {
         const geo = s.geo!.trim();
         const math = computeTodayRequired(s.target, s.current, monthKey, now);
-        const doneToday = countTestingDoneForSlice(rows, network, geo, now);
         return {
           geo,
           monthlyTarget: s.target,
@@ -286,57 +349,73 @@ export function buildTestingNetworkPlans(
           expectedByNow: math.expectedByNow,
           dailyExpected: math.dailyExpected,
           gapToPace: math.gapToPace,
-          todayRequired: math.todayRequired,
-          doneToday: Math.min(math.todayRequired, doneToday),
+          todayRequired: 0, // distributed below from the network total
+          doneToday: 0,
           remaining: math.remaining,
         };
       });
-
-      // If every GEO has todayRequired 0 but network is behind, nothing to show.
-      // If GEOs share equal inherited targets and we only want to redistribute a
-      // network-level budget, prefer sum of per-GEO todayRequired (natural behind priority).
-    } else if (networkOnly.length > 0) {
-      // Aggregate network-only slice(s)
-      const current = networkOnly.reduce((s, x) => s + x.current, 0);
-      const target = networkOnly.reduce((s, x) => s + x.target, 0);
-      const math = computeTodayRequired(target, current, monthKey, now);
-      const doneToday = countTestingDoneForSlice(rows, network, null, now);
+    } else {
+      const math = computeTodayRequired(networkTarget, networkCurrent, monthKey, now);
       geos = [
         {
           geo: "ALL",
-          monthlyTarget: target,
-          current,
+          monthlyTarget: networkTarget,
+          current: networkCurrent,
           expectedByNow: math.expectedByNow,
           dailyExpected: math.dailyExpected,
           gapToPace: math.gapToPace,
-          todayRequired: math.todayRequired,
-          doneToday: Math.min(math.todayRequired, doneToday),
+          todayRequired: 0,
+          doneToday: 0,
           remaining: math.remaining,
         },
       ];
     }
 
-    geos = geos.filter((g) => g.todayRequired > 0 || g.doneToday > 0);
-    // Drop fully completed with nothing left today
-    geos = geos.filter((g) => g.todayRequired > 0);
+    // 3) Distribute exactly `todayNeededNetwork` integer units across GEOs.
+    if (todayNeededNetwork > 0) {
+      const alloc = allocateTodayRequiredAcrossGeos(
+        todayNeededNetwork,
+        geos.map((g) => ({
+          geo: g.geo,
+          gapToPace: g.gapToPace,
+          remaining: g.remaining,
+        })),
+      );
+      const byGeo = new Map(alloc.map((a) => [a.geo, a.count]));
+      for (const g of geos) {
+        g.todayRequired = byGeo.get(g.geo) ?? 0;
+      }
+    }
 
-    if (geos.length === 0) continue;
+    // 4) Done today counted per matching Network/GEO testing campaigns (honest).
+    for (const g of geos) {
+      const done = countTestingDoneForSlice(
+        rows,
+        network,
+        g.geo === "ALL" ? null : g.geo,
+        now,
+      );
+      g.doneToday = Math.min(g.todayRequired, done);
+    }
 
-    const todayRequired = geos.reduce((s, g) => s + g.todayRequired, 0);
+    const geosWithWork = geos.filter((g) => g.todayRequired > 0 || g.doneToday > 0);
+    if (geosWithWork.length === 0 || todayNeededNetwork <= 0) continue;
+
     const doneToday = Math.min(
-      todayRequired,
-      geos.reduce((s, g) => s + g.doneToday, 0),
+      todayNeededNetwork,
+      geosWithWork.reduce((s, g) => s + g.doneToday, 0),
     );
     const anyBehind = geos.some((g) => g.gapToPace > 0);
-    const allDoneMonth = geos.every((g) => g.remaining <= 0);
+    const allDoneMonth = networkRemaining <= 0;
 
     plans.push({
       network,
-      todayRequired,
-      geoCount: geos.filter((g) => g.geo !== "ALL").length || geos.length,
+      todayRequired: todayNeededNetwork,
+      geoCount: geosWithWork.filter((g) => g.geo !== "ALL").length || geosWithWork.length,
       doneToday,
       paceStatus: allDoneMonth ? "completed" : anyBehind ? "behind" : "on_pace",
-      geos: geos.sort((a, b) => {
+      geos: geosWithWork.sort((a, b) => {
+        if (b.todayRequired !== a.todayRequired) return b.todayRequired - a.todayRequired;
         if (b.gapToPace !== a.gapToPace) return b.gapToPace - a.gapToPace;
         return a.geo.localeCompare(b.geo);
       }),
