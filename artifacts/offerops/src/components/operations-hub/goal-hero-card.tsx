@@ -1,5 +1,6 @@
 import type { GoalCardModel } from "@/components/operations-hub/ops-hub-drilldown-data";
 import { PaceDetailPanel } from "@/components/operations-hub/goal-progress-row";
+import { formatOpsMetric } from "@/components/operations-hub/ops-v2-metrics";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DollarSign, FlaskConical, Radio } from "lucide-react";
 
@@ -39,18 +40,8 @@ const CARD_THEME = {
   },
 } as const;
 
-function fmt$(n: number) {
-  if (n >= 1000) return `$${(n / 1000).toFixed(1)}K`;
-  return `$${Math.round(n).toLocaleString()}`;
-}
-
-function fmtActual(n: number, format: "currency" | "count") {
-  return format === "currency" ? fmt$(n) : String(n);
-}
-
 function fmtGap(n: number, format: "currency" | "count") {
-  if (format === "currency") return `${fmt$(n)} to go`;
-  return `${n} to go`;
+  return `${formatOpsMetric(n, format)} to go`;
 }
 
 export function GoalHeroCard({
@@ -96,10 +87,10 @@ export function GoalHeroCard({
       ) : (
         <>
           <p className="mt-6 text-4xl font-black tabular-nums tracking-tight text-slate-900">
-            {fmtActual(card.actual, card.format)}
+            {formatOpsMetric(card.actual, card.format)}
           </p>
           <p className="mt-1 text-sm font-medium text-slate-500">
-            of {fmtActual(card.target, card.format)} monthly target
+            of {formatOpsMetric(card.target, card.format)} monthly target
           </p>
           <PaceDetailPanel pace={card.pace} actual={card.actual} monthlyTarget={card.target} format={card.format} />
           <div className="mt-auto space-y-2.5 pt-4">

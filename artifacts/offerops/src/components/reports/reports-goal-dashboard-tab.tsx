@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { ReportKpiCardsSkeleton } from "@/components/operational-state/operational-skeletons";
-import { fmtReportMoney } from "@/components/reports/reports-analytics";
 import { evaluatePace, gapRemaining, progressPct } from "@/components/operations-hub/ops-v2-metrics";
 import { goalKindToUnitLabel } from "@/components/operations-hub/operational-metric-dropdown";
 import type { MetricBreakdownKind, MetricBreakdownResult } from "@/lib/performance-engine/api";
@@ -48,8 +47,14 @@ function peMetric(peGoals: PeGoalsTriple, metric: GoalMetric) {
 }
 
 function fmtValue(value: number, format: "currency" | "count", unitLabel?: string) {
-  if (format === "currency") return fmtReportMoney(value);
-  return unitLabel ? `${value} ${unitLabel}` : String(value);
+  if (format === "currency") {
+    const rounded = Math.ceil(Number.isFinite(value) ? Math.max(0, value) : 0);
+    if (rounded >= 10_000) return `$${(rounded / 1000).toFixed(0)}K`;
+    if (rounded >= 1000) return `$${(rounded / 1000).toFixed(1)}K`;
+    return `$${rounded.toLocaleString()}`;
+  }
+  const count = Math.ceil(Number.isFinite(value) ? Math.max(0, value) : 0);
+  return unitLabel ? `${count.toLocaleString()} ${unitLabel}` : count.toLocaleString();
 }
 
 function GoalPerformanceCard({

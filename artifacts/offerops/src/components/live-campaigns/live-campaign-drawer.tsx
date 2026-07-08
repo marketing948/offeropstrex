@@ -214,11 +214,27 @@ export function LiveCampaignDrawer({
           </SheetDescription>
         </SheetHeader>
 
-        <div className="mt-2 space-y-1 text-sm text-slate-600">
-          <p>{campaign.trafficSourceName ?? "No traffic source"}</p>
-          <p>
-            {campaign.batchAffiliateNetwork ?? "—"} · {campaign.batchGeo ?? "—"}
-          </p>
+        <div className="mt-3 space-y-2 rounded-lg border border-slate-200 bg-white px-3 py-3 text-sm">
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-500">Type</span>
+            <span className="font-medium text-slate-800">{campaignTypeLabel(campaign.campaignPurpose)}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-500">Network</span>
+            <span className="font-medium text-slate-800">{campaign.batchAffiliateNetwork ?? "—"}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-500">GEO</span>
+            <span className="font-medium uppercase text-slate-800">{campaign.batchGeo ?? "—"}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-500">Source</span>
+            <span className="font-medium text-slate-800">{campaign.trafficSourceName ?? "—"}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-500">OS</span>
+            <span className="font-medium uppercase text-slate-800">{campaign.platform}</span>
+          </div>
         </div>
 
         <section className="mt-6 space-y-3">
@@ -231,7 +247,7 @@ export function LiveCampaignDrawer({
               <MetricTile label="Offer Count" value={offerCount > 0 ? String(offerCount) : "Missing offer count"} />
               <MetricTile
                 label="Visits / Offer"
-                value={visitsPerOffer != null ? Math.round(visitsPerOffer).toLocaleString() : "—"}
+                value={visitsPerOffer != null ? Math.ceil(visitsPerOffer).toLocaleString() : "—"}
               />
               <MetricTile label="Cost" value={fmtMoney(range.cost)} />
               <MetricTile label="Revenue" value={fmtMoney(range.revenue)} />
@@ -322,7 +338,11 @@ export function LiveCampaignDrawer({
 
         <section className="mt-6 space-y-2">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-            {campaign.campaignPurpose === "working" ? "Scaling Opportunities" : "Action Required"}
+            {campaign.campaignPurpose === "working"
+              ? "Scaling Opportunities"
+              : campaign.campaignPurpose === "testing"
+                ? "Winner Candidates"
+                : "Action Required"}
           </h3>
           <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-3">
             {campaign.campaignPurpose === "working" ? (

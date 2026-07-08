@@ -1,19 +1,11 @@
 import {
   PACE_BADGE_CLASS,
+  formatOpsMetric,
   formatPaceVariance,
   progressBarGradient,
   type PaceEvaluation,
   type PaceStatus,
 } from "@/components/operations-hub/ops-v2-metrics";
-
-function fmt$(n: number) {
-  if (n >= 1000) return `$${(n / 1000).toFixed(1)}K`;
-  return `$${Math.round(n).toLocaleString()}`;
-}
-
-function fmtVal(n: number, format: "currency" | "count") {
-  return format === "currency" ? fmt$(n) : String(n);
-}
 
 export function ProgressBarVisual({
   pct,
@@ -60,15 +52,19 @@ export function PaceDetailPanel({
       <div className="grid grid-cols-2 gap-x-4 gap-y-2">
         <span className="font-medium text-slate-500">Goal</span>
         <span className="text-right text-sm font-bold tabular-nums text-slate-800">
-          {fmtVal(monthlyTarget, format)}
+          {formatOpsMetric(monthlyTarget, format)}
         </span>
         <span className="font-medium text-slate-500">Expected today</span>
         <span className="text-right text-sm font-bold tabular-nums text-slate-800">
-          {fmtVal(pace.expectedByToday, format)}
+          {formatOpsMetric(pace.expectedByToday, format)}
+        </span>
+        <span className="font-medium text-slate-500">Expected by now</span>
+        <span className="text-right text-sm font-bold tabular-nums text-slate-800">
+          {formatOpsMetric(pace.expectedByNow, format)}
         </span>
         <span className="font-medium text-slate-500">Current</span>
         <span className="text-right text-sm font-bold tabular-nums text-slate-800">
-          {fmtVal(actual, format)}
+          {formatOpsMetric(actual, format)}
         </span>
       </div>
       <div className="mt-3 border-t border-slate-100 pt-2 text-center">
@@ -120,14 +116,14 @@ export function GoalProgressRow({
       </div>
       {hasTarget && showFraction && (
         <span className="shrink-0 tabular-nums text-muted-foreground">
-          {fmtVal(actual, format)} / {fmtVal(target, format)}
+          {formatOpsMetric(actual, format)} / {formatOpsMetric(target, format)}
         </span>
       )}
       {!hasTarget && (
         <span className="shrink-0 text-xs text-muted-foreground">
           {format === "currency"
-            ? `${fmtVal(actual, format)} MTD · No target configured`
-            : `${fmtVal(actual, format)} active · No target configured`}
+            ? `${formatOpsMetric(actual, format)} MTD · No target configured`
+            : `${formatOpsMetric(actual, format)} active · No target configured`}
         </span>
       )}
       {hasTarget && progressPct != null && (
