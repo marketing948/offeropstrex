@@ -269,6 +269,9 @@ export default function OperationsHub() {
                   ? Number(scopeEmployeeId)
                   : null
             }
+            monthKey={drilldown.monthKey}
+            testingSlices={drilldown.focusTestingSlices}
+            teamWorkers={drilldown.focusTeamWorkers}
           />
 
           <OpenTasksPanel
