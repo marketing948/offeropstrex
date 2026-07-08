@@ -252,6 +252,23 @@ export default function OperationsHub() {
             focus={drilldown.focus}
             loading={loading}
             onSelectFocus={setFocusItem}
+            campaigns={campaignsTyped}
+            isWorker={isWorker}
+            isAdminAllEmployees={isAdmin && scopeEmployeeId === ""}
+            employeeName={
+              isWorker
+                ? currentEmployee?.name ?? null
+                : scopeEmployeeId !== ""
+                  ? employees.find((e) => e.id === scopeEmployeeId)?.name ?? null
+                  : null
+            }
+            employeeId={
+              isWorker
+                ? currentEmployee?.id ?? null
+                : scopeEmployeeId !== ""
+                  ? Number(scopeEmployeeId)
+                  : null
+            }
           />
 
           <OpenTasksPanel

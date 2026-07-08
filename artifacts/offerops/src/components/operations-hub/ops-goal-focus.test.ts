@@ -231,7 +231,7 @@ describe("buildDailyFocusActions", () => {
     });
     const testing = items.find((i) => i.context?.actionType === "testing_action");
     assert.ok(testing);
-    assert.match(testing!.text, /^Sara is /);
+    assert.match(testing!.text, /^Sara needs /);
     assert.equal(testing!.context?.employeeName, "Sara");
   });
 
