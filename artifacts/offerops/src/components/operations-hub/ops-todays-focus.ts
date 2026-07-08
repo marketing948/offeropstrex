@@ -1,5 +1,5 @@
 /**
- * Today’s Focus orchestration (goal pace + operational blockers).
+ * Today’s Focus orchestration (goal pace + operational blockers + network/GEO actions).
  */
 
 import type { TodoTask, TestingBatch } from "@workspace/api-client-react";
@@ -9,13 +9,14 @@ import {
   recommendationSummary,
 } from "@/lib/mission-control-health";
 import {
-  computeGoalBasedFocus,
-  ensureThreeFocusItems,
+  buildDailyFocusActions,
   type FocusItem,
   type GoalCardModel,
+  type MetricSliceBundle,
   type OpsCampaignRowLite,
   type TodaysFocus,
 } from "@/components/operations-hub/ops-goal-focus";
+import { currentMonthKey } from "@/lib/performance-engine/api";
 
 export type {
   FocusItem,
@@ -24,9 +25,27 @@ export type {
   GoalKind,
   OpsCampaignRowLite,
   TodaysFocus,
+  FocusActionType,
+  MetricSliceBundle,
+  NetworkGeoSlice,
 } from "@/components/operations-hub/ops-goal-focus";
 
-export { computeGoalBasedFocus, missingOfferCountFocus, buildGoalPaceFocusItem } from "@/components/operations-hub/ops-goal-focus";
+export {
+  buildDailyFocusActions,
+  buildAdminInterventionFocus,
+  computeGoalBasedFocus,
+  allocateCatchUpAcrossSlices,
+  priorityScore,
+  enrichSlicesWithPerformance,
+  buildPerfBoostBuckets,
+  suggestReportsAction,
+  reportsPaceFields,
+  REVENUE_BEHIND_THRESHOLD_PCT,
+} from "@/components/operations-hub/ops-goal-focus";
+
+export type { AdminWorkerFocusInput } from "@/components/operations-hub/ops-goal-focus";
+
+export { isScalingOpportunity } from "@/components/operations-hub/scaling-opportunity";
 
 export type OperationalFocusInput = {
   batches: TestingBatch[];
@@ -47,8 +66,21 @@ export function computeTodaysFocus(
   operational: OperationalFocusInput,
   campaigns: OpsCampaignRowLite[] = [],
   hasGeoTargets = false,
+  options: {
+    slices?: MetricSliceBundle;
+    isAdmin?: boolean;
+    employeeName?: string | null;
+    monthKey?: string;
+    now?: Date;
+  } = {},
 ): TodaysFocus {
   const hasGoals = goalCards.some((g) => g.target > 0);
+  const monthKey = options.monthKey ?? currentMonthKey();
+  const slices: MetricSliceBundle = options.slices ?? {
+    testing: [],
+    working: [],
+    revenue: [],
+  };
 
   if (!hasAnyActivity && !hasGeoTargets && !hasGoals && goalCards[0]?.actual === 0) {
     const hasOps =
@@ -61,20 +93,30 @@ export function computeTodaysFocus(
     if (!hasOps) return { items: [], empty: true };
   }
 
-  const goalItems = computeGoalBasedFocus(goalCards, campaigns);
-  const items: FocusItem[] = [...goalItems];
-  const batchById = new Map(operational.batches.map((b) => [b.id, b]));
+  const items: FocusItem[] = [
+    ...buildDailyFocusActions({
+      monthKey,
+      goalCards,
+      slices,
+      campaigns,
+      isAdmin: options.isAdmin,
+      employeeName: options.employeeName,
+      now: options.now,
+      maxActions: 5,
+    }),
+  ];
 
+  const batchById = new Map(operational.batches.map((b) => [b.id, b]));
   const criticalRows = buildMissionControlRows(
     operational.batches,
     operational.healthByBatchId,
     new Map(operational.batches.map((b) => [b.id, { loading: false, error: false }])),
   ).filter((row) => row.healthState === "critical");
 
-  if (items.length < 3 && criticalRows.length > 0 && !items.some((i) => i.context?.batchId)) {
+  if (items.length < 5 && criticalRows.length > 0 && !items.some((i) => i.context?.batchId)) {
     const row = criticalRows[0]!;
     items.push({
-      tier: items.length === 0 ? "primary" : items.length === 1 ? "secondary" : "tertiary",
+      tier: items.length === 0 ? "primary" : "secondary",
       emoji: "🔥",
       title: "Critical batch",
       text: `Resolve critical issue on ${row.batch.batchName}.`,
@@ -83,6 +125,8 @@ export function computeTodaysFocus(
         : "Batch health flagged as critical.",
       context: {
         kind: "action",
+        actionType: "campaign_health",
+        actionLabel: "Review campaigns",
         batchId: row.batch.id,
         batchName: row.batch.batchName,
         suggestedAction: "Review batch health and resolve the critical blocker.",
@@ -92,12 +136,12 @@ export function computeTodaysFocus(
   }
 
   const blockedTasks = operational.tasks.filter((t) => t.status === "BLOCKED");
-  if (items.length < 3 && blockedTasks.length > 0) {
+  if (items.length < 5 && blockedTasks.length > 0) {
     const task = blockedTasks[0]!;
     const batch = task.relatedBatchId != null ? batchById.get(task.relatedBatchId) : undefined;
     const label = batch ? batchLabel(batch) : task.title;
     items.push({
-      tier: items.length === 0 ? "primary" : items.length === 1 ? "secondary" : "tertiary",
+      tier: items.length === 0 ? "primary" : "secondary",
       emoji: "🚫",
       title: "Blocked work",
       text: batch ? `Resolve blocked ${label} batch.` : `Unblock: ${task.title}.`,
@@ -106,6 +150,8 @@ export function computeTodaysFocus(
         : "Blocked task is stopping pipeline flow.",
       context: {
         kind: "action",
+        actionType: "campaign_health",
+        actionLabel: "Review campaigns",
         batchId: task.relatedBatchId ?? undefined,
         batchName: batch?.batchName ?? task.batchName ?? undefined,
         taskIds: blockedTasks.map((t) => t.id),
@@ -117,16 +163,10 @@ export function computeTodaysFocus(
     });
   }
 
-  if (items.length === 0 && hasAnyActivity) {
-    items.push({
-      tier: "primary",
-      emoji: "✨",
-      title: "On track",
-      text: "Goals are on track — review Open Tasks for remaining work.",
-      reason: "No critical blockers detected from goals or tasks.",
-    });
-  }
+  const finalItems = items.slice(0, 5).map((item, i) => ({
+    ...item,
+    tier: (i === 0 ? "primary" : i === 1 ? "secondary" : "tertiary") as FocusItem["tier"],
+  }));
 
-  const finalItems = ensureThreeFocusItems(items, goalCards);
   return { items: finalItems, empty: finalItems.length === 0 };
 }

@@ -1,19 +1,19 @@
 /**
- * Operations Hub — Today's Focus (goal-based action cards).
+ * Operations Hub — Today's Focus (daily action engine cards).
  */
 
 import { Skeleton } from "@/components/ui/skeleton";
 import type { FocusItem, TodaysFocus } from "@/components/operations-hub/ops-hub-drilldown-data";
 import { ProgressBarVisual } from "@/components/operations-hub/goal-progress-row";
 import {
-  Eye,
-  Flame,
   FlaskConical,
   Radio,
   Sparkles,
   Target,
   DollarSign,
   Puzzle,
+  TrendingUp,
+  Flame,
 } from "lucide-react";
 
 const TIER_CONFIG = {
@@ -34,27 +34,34 @@ const TIER_CONFIG = {
   },
 } as const;
 
-function kindIcon(kind: string | undefined) {
-  if (kind === "revenue") return DollarSign;
-  if (kind === "testing") return FlaskConical;
-  if (kind === "working") return Radio;
-  if (kind === "action") return Puzzle;
-  return Target;
+function typeBadge(item: FocusItem): { label: string; Icon: typeof Target } {
+  const t = item.context?.actionType;
+  if (t === "testing_action") return { label: "Testing", Icon: FlaskConical };
+  if (t === "working_action") return { label: "Working", Icon: Radio };
+  if (t === "scaling_opportunity") return { label: "Scaling", Icon: TrendingUp };
+  if (t === "campaign_health") return { label: "Campaign Health", Icon: Puzzle };
+  if (t === "revenue_rescue") return { label: "Revenue", Icon: DollarSign };
+  if (t === "admin_intervention") return { label: "Admin", Icon: Flame };
+  if (item.context?.kind === "testing") return { label: "Testing", Icon: FlaskConical };
+  if (item.context?.kind === "working") return { label: "Working", Icon: Radio };
+  if (item.context?.kind === "revenue") return { label: "Revenue", Icon: DollarSign };
+  if (item.context?.kind === "scaling") return { label: "Scaling", Icon: TrendingUp };
+  return { label: "Focus", Icon: Target };
 }
 
 const FALLBACK_SLOTS: FocusItem[] = [
   {
     tier: "primary",
-    emoji: "🔥",
-    title: "Set goals",
-    text: "Configure monthly revenue, testing, and working targets to unlock Focus Today.",
-    reason: "Focus Today is driven by Goal Engine pacing.",
+    emoji: "✨",
+    title: "On pace",
+    text: "You’re on pace today. Keep monitoring working campaigns and scaling opportunities.",
+    reason: "No material gaps detected from goals.",
     context: {
       kind: "action",
-      progressLabel: "No goal set",
-      progressPct: 0,
-      suggestedAction: "Open Monthly Goals and set targets for this month.",
-      navigationPath: "/performance/monthly-goals",
+      actionLabel: "Review campaigns",
+      navigationPath: "/live-campaigns",
+      progressPct: 100,
+      progressLabel: "Month progress vs today’s expected pace",
     },
   },
 ];
@@ -67,27 +74,43 @@ function FocusCard({
   onSelect: (item: FocusItem) => void;
 }) {
   const cfg = TIER_CONFIG[item.tier];
-  const LeftIcon = item.tier === "primary" ? Flame : item.tier === "secondary" ? Target : Eye;
-  const KindIcon = kindIcon(item.context?.kind);
+  const badge = typeBadge(item);
+  const BadgeIcon = badge.Icon;
   const ctx = item.context;
   const hasMetrics = !!(ctx?.todayTarget || ctx?.currentValue || ctx?.expectedByNow);
+  const where =
+    ctx?.network != null
+      ? ctx.geo
+        ? `${ctx.network} / ${ctx.geo}`
+        : ctx.network
+      : null;
 
   return (
     <button
       type="button"
       onClick={() => onSelect(item)}
-      className={`flex min-h-[180px] w-full cursor-pointer flex-col rounded-2xl border-2 p-4 text-left backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70 ${cfg.card} ${cfg.glow}`}
+      className={`flex min-h-[200px] w-full cursor-pointer flex-col rounded-2xl border-2 p-4 text-left backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70 ${cfg.card} ${cfg.glow}`}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <LeftIcon className={`h-4 w-4 ${cfg.accent}`} strokeWidth={2.25} />
-          <p className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-violet-100/90">
-            {item.title}
-          </p>
-        </div>
-        <KindIcon className={`h-4 w-4 opacity-60 ${cfg.accent}`} strokeWidth={2} />
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`inline-flex items-center gap-1 rounded-full border border-white/15 bg-black/25 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider ${cfg.accent}`}>
+          <BadgeIcon className="h-3 w-3" strokeWidth={2.25} />
+          {badge.label}
+        </span>
+        {where && (
+          <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-violet-100/90">
+            {where}
+          </span>
+        )}
+        {ctx?.employeeName && (
+          <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-violet-100/90">
+            {ctx.employeeName}
+          </span>
+        )}
       </div>
-      <p className="mt-3 text-sm font-semibold leading-snug text-white">{item.text}</p>
+      <p className="mt-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-violet-100/80">
+        {item.title}
+      </p>
+      <p className="mt-2 whitespace-pre-line text-sm font-semibold leading-snug text-white">{item.text}</p>
       {item.reason && (
         <p className="mt-2 text-xs leading-relaxed text-violet-200/75">{item.reason}</p>
       )}
@@ -114,7 +137,7 @@ function FocusCard({
           )}
           {ctx?.paceGapLabel && (
             <>
-              <span className="text-violet-200/70">Pace gap</span>
+              <span className="text-violet-200/70">Gap</span>
               <span className="text-right font-bold tabular-nums text-white">{ctx.paceGapLabel}</span>
             </>
           )}
@@ -131,7 +154,13 @@ function FocusCard({
         </div>
       )}
       {ctx?.progressLabel === "No goal set" && (
-        <p className="mt-3 text-[11px] font-semibold text-amber-200/90">No goal set</p>
+        <p className="mt-3 text-[11px] font-semibold text-amber-200/90">No goals set for this month.</p>
+      )}
+
+      {ctx?.actionLabel && (
+        <p className="mt-3 text-[11px] font-bold uppercase tracking-wider text-violet-200">
+          → {ctx.actionLabel}
+        </p>
       )}
 
       <p className="mt-auto pt-2 text-[10px] font-semibold uppercase tracking-wider text-violet-300/60">
@@ -143,7 +172,7 @@ function FocusCard({
 
 function displayItems(focus: TodaysFocus): FocusItem[] {
   if (focus.empty || focus.items.length === 0) return FALLBACK_SLOTS;
-  return focus.items.slice(0, 3);
+  return focus.items.slice(0, 5);
 }
 
 export function TodaysFocusCard({
@@ -183,22 +212,22 @@ export function TodaysFocusCard({
             </h2>
           </div>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-violet-200/80">
-            What to do today based on monthly goals, today&apos;s expected pace, and current progress.
+            Up to 5 daily actions by Network/GEO — what to create, review, fix, or scale.
           </p>
         </div>
         <span className="rounded-full border border-violet-400/50 bg-violet-500/20 px-3 py-1 text-[10px] font-extrabold uppercase tracking-wider text-violet-100 shadow-[0_0_12px_rgba(139,92,246,0.3)]">
-          Goal-based
+          Goal-based · {items.length} action{items.length === 1 ? "" : "s"}
         </span>
       </div>
 
       {loading ? (
-        <div className="relative mt-5 grid gap-3 md:grid-cols-3">
+        <div className="relative mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-44 rounded-2xl bg-violet-900/40" />
+            <Skeleton key={i} className="h-48 rounded-2xl bg-violet-900/40" />
           ))}
         </div>
       ) : (
-        <div className="relative mt-5 grid gap-3 md:grid-cols-3">
+        <div className="relative mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {items.map((item, i) => (
             <FocusCard key={`${item.tier}-${item.title}-${i}`} item={item} onSelect={onSelectFocus} />
           ))}

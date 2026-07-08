@@ -12,7 +12,9 @@ export function invalidateGoalSurfaces(
   void qc.invalidateQueries({ queryKey: ["goal-allocation", workspaceId, monthKey] });
   void qc.invalidateQueries({ queryKey: ["metric-breakdown", workspaceId, monthKey] });
   void qc.invalidateQueries({ queryKey: ["ops-metric-breakdown", workspaceId] });
+  void qc.invalidateQueries({ queryKey: ["ops-focus-breakdown", workspaceId] });
   void qc.invalidateQueries({ queryKey: ["reports-metric-breakdown", workspaceId, monthKey] });
+  void qc.invalidateQueries({ queryKey: ["reports-pe-goal-dashboard", workspaceId, monthKey] });
   void qc.invalidateQueries({ queryKey: ["live-campaigns", workspaceId] });
   void qc.invalidateQueries({ queryKey: ["reports-live-campaigns", workspaceId] });
   void qc.invalidateQueries({ queryKey: ["testing-batches", workspaceId] });

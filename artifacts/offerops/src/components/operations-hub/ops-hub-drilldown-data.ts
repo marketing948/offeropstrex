@@ -7,8 +7,10 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import {
   useListPerformance,
   useListAffiliateNetworks,
+  useListEmployees,
   getListPerformanceQueryKey,
   getListAffiliateNetworksQueryKey,
+  getListEmployeesQueryKey,
   type DashboardBreakdownRow,
   type Performance,
   type TestingBatch,
@@ -51,6 +53,7 @@ import {
 
 export type OpsCampaignRow = {
   id?: number;
+  batchId?: number | null;
   affiliateNetworkId?: number | null;
   campaignName?: string | null;
   status: string;
@@ -66,7 +69,10 @@ export type OpsCampaignRow = {
   clicks?: number | null;
   offerCount?: number | null;
   liveStartedAt?: string | null;
+  createdAt?: string | null;
   updatedAt?: string | null;
+  employeeId?: number | null;
+  employeeName?: string | null;
 };
 
 type DashboardBreakdowns = { byNetwork: DashboardBreakdownRow[] };
@@ -132,7 +138,20 @@ export type {
 export { computeTodaysFocus } from "@/components/operations-hub/ops-todays-focus";
 import {
   computeTodaysFocus as computeTodaysFocusImpl,
+  buildAdminInterventionFocus,
+  enrichSlicesWithPerformance,
+  buildPerfBoostBuckets,
+  type MetricSliceBundle,
+  type NetworkGeoSlice,
+  type AdminWorkerFocusInput,
+  type TodaysFocus,
 } from "@/components/operations-hub/ops-todays-focus";
+import {
+  currentMonthKey,
+  fetchMetricBreakdown,
+  type MetricBreakdownResult,
+} from "@/lib/performance-engine/api";
+import { peGoalsFromWorkerRow } from "@/lib/performance-engine/pe-goals";
 
 function normNetwork(network: string | null | undefined): string {
   return normNetworkName(network);
@@ -450,6 +469,7 @@ export function useOpsDrilldownData(
     isWorker,
     monthKey,
     peGoals,
+    dashboard: monthlyGoalsDashboard,
     isLoading: peGoalsLoading,
   } = useMonthlyGoalsScope(scopeEmployeeId);
 
@@ -564,21 +584,301 @@ export function useOpsDrilldownData(
 
   const hasAnyActivity = networkGroups.some((g) => g.hasActivity) || mtdRevenue > 0;
 
-  const focus = useMemo(() => {
+  const focusEmployeeId =
+    isWorker
+      ? currentEmployee?.id
+      : scopeEmployeeId !== "" && scopeEmployeeId != null
+        ? scopeEmployeeId
+        : undefined;
+
+  const employeesParams = { workspace_id: wsId };
+  const { data: employees = [] } = useListEmployees(
+    employeesParams,
+    wsQueryOpts(activeWorkspaceId, getListEmployeesQueryKey(employeesParams), {
+      enabled: !isWorker,
+    }),
+  );
+
+  const focusEmployeeName = useMemo(() => {
+    if (focusEmployeeId == null) return null;
+    if (isWorker) return currentEmployee?.name ?? null;
+    return employees.find((e) => e.id === focusEmployeeId)?.name ?? null;
+  }, [focusEmployeeId, isWorker, currentEmployee?.name, employees]);
+
+  const testingBreakdownQ = useQuery({
+    queryKey: ["ops-focus-breakdown", wsId, "testing", focusEmployeeId ?? "team", monthKey],
+    enabled: !!wsId && !!currentEmployee && focusEmployeeId != null,
+    staleTime: 60_000,
+    queryFn: () => fetchMetricBreakdown(wsId, monthKey, "testing", focusEmployeeId),
+  });
+  const workingBreakdownQ = useQuery({
+    queryKey: ["ops-focus-breakdown", wsId, "working", focusEmployeeId ?? "team", monthKey],
+    enabled: !!wsId && !!currentEmployee && focusEmployeeId != null,
+    staleTime: 60_000,
+    queryFn: () => fetchMetricBreakdown(wsId, monthKey, "working", focusEmployeeId),
+  });
+  const revenueBreakdownQ = useQuery({
+    queryKey: ["ops-focus-breakdown", wsId, "revenue", focusEmployeeId ?? "team", monthKey],
+    enabled: !!wsId && !!currentEmployee && focusEmployeeId != null,
+    staleTime: 60_000,
+    queryFn: () => fetchMetricBreakdown(wsId, monthKey, "revenue", focusEmployeeId),
+  });
+
+  /** Team-wide breakdowns only used when admin has no employee filter (intervention queue). */
+  const teamTestingQ = useQuery({
+    queryKey: ["ops-focus-breakdown", wsId, "testing", "team", monthKey],
+    enabled: !!wsId && !!currentEmployee && !isWorker && focusEmployeeId == null,
+    staleTime: 60_000,
+    queryFn: () => fetchMetricBreakdown(wsId, monthKey, "testing"),
+  });
+  const teamWorkingQ = useQuery({
+    queryKey: ["ops-focus-breakdown", wsId, "working", "team", monthKey],
+    enabled: !!wsId && !!currentEmployee && !isWorker && focusEmployeeId == null,
+    staleTime: 60_000,
+    queryFn: () => fetchMetricBreakdown(wsId, monthKey, "working"),
+  });
+  const teamRevenueQ = useQuery({
+    queryKey: ["ops-focus-breakdown", wsId, "revenue", "team", monthKey],
+    enabled: !!wsId && !!currentEmployee && !isWorker && focusEmployeeId == null,
+    staleTime: 60_000,
+    queryFn: () => fetchMetricBreakdown(wsId, monthKey, "revenue"),
+  });
+
+  const perfBoostBuckets = useMemo(() => {
+    const campaignsById = buildCampaignByIdMap(enrichedCampaigns);
+    const batchMeta = buildBatchMeta(batches);
+    const rows: { network: string; geo?: string | null; revenue: number; profit: number; spend: number }[] =
+      [];
+    for (const p of normalizedPerf) {
+      const attr = resolvePerfAttribution(p, campaignsById, batchMeta);
+      if (!attr) continue;
+      const revenue = Number(p.revenue ?? 0);
+      const spend = Number(p.spend ?? 0);
+      const profit = Number(p.profit ?? revenue - spend);
+      rows.push({
+        network: attr.network,
+        geo: attr.geo,
+        revenue,
+        profit,
+        spend,
+      });
+    }
+    // Campaign-level fallback when perf rows are sparse
+    for (const c of enrichedCampaigns) {
+      const network = resolveAffiliateNetwork(c);
+      const geo = resolveCampaignGeo(c);
+      const revenue = Number(c.revenue ?? 0);
+      const cost = Number(c.cost ?? 0);
+      if (!(revenue > 0) && !(cost > 0)) continue;
+      rows.push({
+        network,
+        geo,
+        revenue,
+        profit: revenue - cost,
+        spend: cost,
+      });
+    }
+    return buildPerfBoostBuckets(rows);
+  }, [normalizedPerf, enrichedCampaigns, batches]);
+
+  const focusSlices = useMemo((): MetricSliceBundle => {
+    function toSlices(data: MetricBreakdownResult | undefined): NetworkGeoSlice[] {
+      if (!data) return [];
+      const out: NetworkGeoSlice[] = [];
+      for (const net of data.networks) {
+        for (const g of net.geos ?? []) {
+          if (!(g.target > 0)) continue;
+          out.push({
+            network: net.label,
+            geo: g.label,
+            current: g.current,
+            target: g.target,
+          });
+        }
+      }
+      if (out.length > 0) {
+        return enrichSlicesWithPerformance(out, perfBoostBuckets);
+      }
+      return enrichSlicesWithPerformance(
+        data.networks
+          .filter((n) => n.target > 0)
+          .map((n) => ({
+            network: n.label,
+            geo: null,
+            current: n.current,
+            target: n.target,
+          })),
+        perfBoostBuckets,
+      );
+    }
+    const testingSrc =
+      focusEmployeeId != null ? testingBreakdownQ.data : teamTestingQ.data;
+    const workingSrc =
+      focusEmployeeId != null ? workingBreakdownQ.data : teamWorkingQ.data;
+    const revenueSrc =
+      focusEmployeeId != null ? revenueBreakdownQ.data : teamRevenueQ.data;
+    return {
+      testing: toSlices(testingSrc),
+      working: toSlices(workingSrc),
+      revenue: toSlices(revenueSrc),
+    };
+  }, [
+    testingBreakdownQ.data,
+    workingBreakdownQ.data,
+    revenueBreakdownQ.data,
+    teamTestingQ.data,
+    teamWorkingQ.data,
+    teamRevenueQ.data,
+    focusEmployeeId,
+    perfBoostBuckets,
+  ]);
+
+  const interventionWorkers = useMemo(() => {
+    if (isWorker || focusEmployeeId != null) return [];
+    return (monthlyGoalsDashboard?.workers ?? [])
+      .filter((w) => w.testing.target > 0 || w.working.target > 0 || w.revenue.target > 0)
+      .slice(0, 12);
+  }, [isWorker, focusEmployeeId, monthlyGoalsDashboard?.workers]);
+
+  const interventionQueries = useQueries({
+    queries: interventionWorkers.flatMap((w) =>
+      (["testing", "working", "revenue"] as const).map((metric) => ({
+        queryKey: ["ops-focus-breakdown", wsId, metric, w.employeeId, monthKey],
+        enabled: !!wsId && !!currentEmployee && !isWorker && focusEmployeeId == null,
+        staleTime: 60_000,
+        queryFn: () => fetchMetricBreakdown(wsId, monthKey, metric, w.employeeId),
+      })),
+    ),
+  });
+
+  const interventionQueryDataKey = interventionQueries
+    .map((q) => `${q.status}:${q.dataUpdatedAt}`)
+    .join("|");
+
+  const focus = useMemo((): TodaysFocus => {
     const hasGeoTargets = networkGroups.some((g) => g.geos.some((geo) => geo.configured));
+    const mk = monthKey || currentMonthKey();
+    const operational = { batches, tasks, healthByBatchId, today };
+
+    // Admin all-employees → per-worker intervention queue (not team aggregate)
+    if (!isWorker && focusEmployeeId == null) {
+      const workers = monthlyGoalsDashboard?.workers ?? [];
+      const batchEmployeeById = new Map(batches.map((b) => [b.id, b.employeeId] as const));
+      const adminWorkers: AdminWorkerFocusInput[] = workers
+        .filter(
+          (w) =>
+            w.testing.target > 0 || w.working.target > 0 || w.revenue.target > 0,
+        )
+        .slice(0, 12)
+        .map((w) => {
+          const pe = peGoalsFromWorkerRow(w);
+          const cards = buildGoalCards(
+            pe.revenue.current,
+            enrichedCampaigns,
+            batches,
+            networkGroups,
+            mk,
+            pe,
+          );
+          const idx = workers.findIndex((x) => x.employeeId === w.employeeId);
+          // Prefer per-worker breakdown when loaded; fallback to empty slices (still shows employee-level pace actions)
+          const toWorkerSlices = (): MetricSliceBundle => {
+            // Match parallel order in interventionQueries: testing/working/revenue per worker index
+            const base = idx >= 0 ? idx * 3 : -1;
+            const tData =
+              base >= 0 ? (interventionQueries[base]?.data as MetricBreakdownResult | undefined) : undefined;
+            const wData =
+              base >= 0
+                ? (interventionQueries[base + 1]?.data as MetricBreakdownResult | undefined)
+                : undefined;
+            const rData =
+              base >= 0
+                ? (interventionQueries[base + 2]?.data as MetricBreakdownResult | undefined)
+                : undefined;
+            const parse = (data: MetricBreakdownResult | undefined): NetworkGeoSlice[] => {
+              if (!data) return [];
+              const out: NetworkGeoSlice[] = [];
+              for (const net of data.networks) {
+                for (const g of net.geos ?? []) {
+                  if (!(g.target > 0)) continue;
+                  out.push({ network: net.label, geo: g.label, current: g.current, target: g.target });
+                }
+              }
+              if (out.length > 0) return enrichSlicesWithPerformance(out, perfBoostBuckets);
+              return enrichSlicesWithPerformance(
+                data.networks
+                  .filter((n) => n.target > 0)
+                  .map((n) => ({
+                    network: n.label,
+                    geo: null,
+                    current: n.current,
+                    target: n.target,
+                  })),
+                perfBoostBuckets,
+              );
+            };
+            return {
+              testing: parse(tData),
+              working: parse(wData),
+              revenue: parse(rData),
+            };
+          };
+          const workerCampaigns = enrichedCampaigns.filter((c) => {
+            const empId =
+              c.employeeId ??
+              (c.batchId != null ? batchEmployeeById.get(c.batchId) : null) ??
+              null;
+            return empId === w.employeeId;
+          });
+          return {
+            employeeId: w.employeeId,
+            employeeName: w.name,
+            goalCards: cards,
+            slices: toWorkerSlices(),
+            campaigns: workerCampaigns,
+          };
+        });
+
+      const items = buildAdminInterventionFocus({
+        monthKey: mk,
+        workers: adminWorkers,
+        maxActions: 5,
+      });
+      return { items, empty: items.length === 0 };
+    }
+
     return computeTodaysFocusImpl(
       goalCards,
       hasAnyActivity,
-      {
-        batches,
-        tasks,
-        healthByBatchId,
-        today,
-      },
+      operational,
       enrichedCampaigns,
       hasGeoTargets,
+      {
+        slices: focusSlices,
+        isAdmin: !isWorker,
+        employeeName: focusEmployeeName,
+        monthKey: mk,
+      },
     );
-  }, [goalCards, networkGroups, hasAnyActivity, batches, tasks, healthByBatchId, today, enrichedCampaigns]);
+  }, [
+    goalCards,
+    networkGroups,
+    hasAnyActivity,
+    batches,
+    tasks,
+    healthByBatchId,
+    today,
+    enrichedCampaigns,
+    focusSlices,
+    isWorker,
+    focusEmployeeName,
+    focusEmployeeId,
+    monthKey,
+    monthlyGoalsDashboard,
+    interventionQueryDataKey,
+    interventionQueries,
+    perfBoostBuckets,
+  ]);
 
   const healthLoading = healthQueries.some((q) => q.isLoading);
 

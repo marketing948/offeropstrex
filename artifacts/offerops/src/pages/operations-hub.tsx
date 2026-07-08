@@ -128,7 +128,8 @@ export default function OperationsHub() {
   }, [campaigns, tasks, todayPerf]);
 
   const loading = batchesLoading || tasksLoading || drilldown.isLoading;
-  const [selectedMetric, setSelectedMetric] = useState<GoalKind>("revenue");
+  /** null = no breakdown panel open (closed by default). */
+  const [selectedMetric, setSelectedMetric] = useState<GoalKind | null>(null);
   const [focusItem, setFocusItem] = useState<FocusItem | null>(null);
   const [taskSheetCategory, setTaskSheetCategory] = useState<OpenTaskCategory | null>(null);
   const [taskSheetIds, setTaskSheetIds] = useState<number[] | null>(null);
@@ -200,7 +201,7 @@ export default function OperationsHub() {
             </div>
             <p className="flex items-center gap-1.5 text-xs text-violet-600/80">
               <Hand className="h-3.5 w-3.5" strokeWidth={2} />
-              Tap a goal to expand network progress
+              Tap a goal to open its network breakdown
             </p>
           </header>
 
