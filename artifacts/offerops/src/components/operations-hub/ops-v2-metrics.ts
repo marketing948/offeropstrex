@@ -37,6 +37,84 @@ export function monthProgressFraction(now = new Date()): number {
   return Math.min(1, Math.max(0, daysElapsed / totalDays));
 }
 
+function isWeekday(date: Date): boolean {
+  const day = date.getDay();
+  return day >= 1 && day <= 5;
+}
+
+function parseMonthKey(monthKey: string): { start: Date; end: Date } | null {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthKey.trim());
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) return null;
+  return {
+    start: new Date(year, month - 1, 1),
+    end: new Date(year, month, 0),
+  };
+}
+
+function countWeekdaysInclusive(start: Date, end: Date): number {
+  if (end < start) return 0;
+  let total = 0;
+  for (const cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+    if (isWeekday(cursor)) total += 1;
+  }
+  return total;
+}
+
+export type WorkingDayPace = {
+  totalWorkingDaysInMonth: number;
+  elapsedWorkingDaysInMonth: number;
+  dailyExpected: number;
+  expectedByNow: number;
+  paceDelta: number;
+  pacePercent: number;
+  remaining: number;
+  progressPercent: number;
+};
+
+export function evaluateWorkingDayPace(
+  monthKey: string,
+  monthlyTarget: number,
+  currentValue: number,
+  now = new Date(),
+): WorkingDayPace {
+  const parsed = parseMonthKey(monthKey);
+  if (!parsed) {
+    const fallbackDays = 20;
+    const expectedByNow = monthlyTarget * monthProgressFraction(now);
+    return {
+      totalWorkingDaysInMonth: fallbackDays,
+      elapsedWorkingDaysInMonth: Math.round(fallbackDays * monthProgressFraction(now)),
+      dailyExpected: monthlyTarget > 0 ? monthlyTarget / fallbackDays : 0,
+      expectedByNow,
+      paceDelta: currentValue - expectedByNow,
+      pacePercent: expectedByNow > 0 ? ((currentValue / expectedByNow) - 1) * 100 : 0,
+      remaining: Math.max(monthlyTarget - currentValue, 0),
+      progressPercent: monthlyTarget > 0 ? (currentValue / monthlyTarget) * 100 : 0,
+    };
+  }
+
+  const totalWorkingDaysInMonth = Math.max(1, countWeekdaysInclusive(parsed.start, parsed.end));
+  const elapsedEnd = now < parsed.start ? null : (now > parsed.end ? parsed.end : now);
+  const elapsedWorkingDaysInMonth = elapsedEnd ? countWeekdaysInclusive(parsed.start, elapsedEnd) : 0;
+  const dailyExpected = monthlyTarget > 0 ? monthlyTarget / totalWorkingDaysInMonth : 0;
+  const expectedByNow = monthlyTarget > 0
+    ? (monthlyTarget * elapsedWorkingDaysInMonth) / totalWorkingDaysInMonth
+    : 0;
+  return {
+    totalWorkingDaysInMonth,
+    elapsedWorkingDaysInMonth,
+    dailyExpected,
+    expectedByNow,
+    paceDelta: currentValue - expectedByNow,
+    pacePercent: expectedByNow > 0 ? ((currentValue / expectedByNow) - 1) * 100 : 0,
+    remaining: Math.max(monthlyTarget - currentValue, 0),
+    progressPercent: monthlyTarget > 0 ? (currentValue / monthlyTarget) * 100 : 0,
+  };
+}
+
 export function daysRemainingInMonth(now = new Date()): number {
   const totalDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   return Math.max(0, totalDays - now.getDate());
@@ -173,17 +251,19 @@ export type PaceEvaluation = {
 export function evaluatePace(
   actual: number,
   target: number,
+  monthKey: string | null = null,
   now = new Date(),
 ): PaceEvaluation {
   const progressPctVal = progressPct(actual, target);
-  const expectedFraction = monthProgressFraction(now);
-  const expectedByToday = Math.round(target * expectedFraction);
-  const expectedProgressPct = Math.round(expectedFraction * 100);
+  const wd = monthKey ? evaluateWorkingDayPace(monthKey, target, actual, now) : null;
+  const expectedByToday = wd ? wd.dailyExpected : (target * monthProgressFraction(now));
+  const expectedByNow = wd ? wd.expectedByNow : (target * monthProgressFraction(now));
+  const expectedProgressPct = target > 0 ? Math.round((expectedByNow / target) * 100) : 0;
   const gap = gapRemaining(actual, target);
 
   const paceVariancePct =
-    expectedByToday > 0
-      ? Math.round(((actual - expectedByToday) / expectedByToday) * 1000) / 10
+    expectedByNow > 0
+      ? Math.round(((actual - expectedByNow) / expectedByNow) * 1000) / 10
       : actual > 0
         ? 100
         : 0;
@@ -200,9 +280,9 @@ export function evaluatePace(
   }
 
   let paceStatus: PaceStatus;
-  if (actual >= expectedByToday) {
+  if (actual >= expectedByNow) {
     paceStatus = "On Track";
-  } else if (actual >= expectedByToday * 0.75) {
+  } else if (actual >= expectedByNow * 0.75) {
     paceStatus = "Watch";
   } else {
     paceStatus = "Behind Pace";

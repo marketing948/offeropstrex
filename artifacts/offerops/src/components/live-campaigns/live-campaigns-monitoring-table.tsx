@@ -51,6 +51,7 @@ export type MonitoringCampaign = {
   conversions: number | null;
   roi: string | null;
   employeeName: string | null;
+  offerCount?: number | null;
 };
 
 export type DailyMetricRow = {

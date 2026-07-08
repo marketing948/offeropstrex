@@ -146,6 +146,7 @@ export default function LiveCampaigns() {
   params.set("status", statusFilter);
   params.set("limit", String(pageSize));
   params.set("offset", String(offset));
+  params.set("sort", "visits:desc");
   if (platformFilter !== "all") params.set("platform", platformFilter);
   if (trafficSourceFilter !== "all") params.set("traffic_source_id", trafficSourceFilter);
   if (geoFilter !== "all") params.set("geo", geoFilter);
@@ -284,7 +285,8 @@ export default function LiveCampaigns() {
   );
 
   const selectedOfferCount =
-    selectedCampaign?.batchId != null ? offersPerBatch.get(selectedCampaign.batchId) ?? 0 : 0;
+    selectedCampaign?.offerCount
+      ?? (selectedCampaign?.batchId != null ? offersPerBatch.get(selectedCampaign.batchId) ?? 0 : 0);
 
   return (
     <div className="space-y-5">
@@ -444,6 +446,10 @@ export default function LiveCampaigns() {
           setImportOpen(true);
         }}
         onCloseCampaign={setCloseTarget}
+        onCampaignUpdated={() => {
+          void queryClient.invalidateQueries({ queryKey: ["live-campaigns"] });
+          void queryClient.invalidateQueries({ queryKey: ["live-campaign-filter-options"] });
+        }}
       />
 
       <RefreshingHint visible={isFetching && !isLoading} className="mb-1" />

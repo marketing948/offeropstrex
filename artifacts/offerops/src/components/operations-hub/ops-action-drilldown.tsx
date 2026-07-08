@@ -61,6 +61,9 @@ const HIGHLIGHT_CLASS: Record<string, string> = {
   "Scaling Well": "bg-emerald-100 text-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-100",
   "Performance Dropping": "bg-red-100 text-red-900 dark:bg-red-950/50 dark:text-red-100",
   "No Recent Conversions": "bg-amber-100 text-amber-900 dark:bg-amber-950/50 dark:text-amber-100",
+  "Missing offer count": "bg-slate-100 text-slate-900 dark:bg-slate-900/60 dark:text-slate-100",
+  "Behind target": "bg-amber-100 text-amber-900 dark:bg-amber-950/50 dark:text-amber-100",
+  "Off target": "bg-orange-100 text-orange-900 dark:bg-orange-950/50 dark:text-orange-100",
 };
 
 function fmt$(n: number): string {
@@ -226,9 +229,9 @@ function TestingTable({ rows }: { rows: TestingOfferRow[] }) {
 }
 
 function WorkingTable({ rows }: { rows: WorkingCampaignRow[] }) {
-  // No visits column here, so default to Profit DESC; all numeric columns
+  // No visits column here, so default to Revenue DESC; all numeric columns
   // are still click-sortable.
-  const sort = useTableSort("profit");
+  const sort = useTableSort("revenue");
   const sorted = useMemo(() => sortRows(rows, sort.col, sort.dir), [rows, sort.col, sort.dir]);
   if (rows.length === 0) {
     return (

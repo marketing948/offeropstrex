@@ -88,6 +88,10 @@ async function runEnsureOnce(): Promise<void> {
     ALTER TABLE campaigns
       ADD COLUMN IF NOT EXISTS created_by_employee_id integer REFERENCES employees(id) ON DELETE SET NULL
   `);
+  await db.execute(sql`
+    ALTER TABLE campaigns
+      ADD COLUMN IF NOT EXISTS offer_count integer
+  `);
 
   // ── Beta metrics + winners (migration 0018) — idempotent for route tests ──
   await db.execute(sql`

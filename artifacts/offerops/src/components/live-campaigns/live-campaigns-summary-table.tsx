@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 /**
  * Live Campaigns — compact summary table (Sketch 3).
  */
@@ -38,6 +39,8 @@ import {
 } from "@/components/operational-state/table-body-state";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { sortRows, useTableSort } from "@/lib/use-table-sort";
 
 function fmtMoney(v: string | number | null | undefined): string {
   if (v == null || v === "") return "—";
@@ -114,6 +117,29 @@ export function LiveCampaignsSummaryTable({
   retrying: boolean;
   onSelectCampaign: (campaign: MonitoringCampaign) => void;
 }) {
+  const sort = useTableSort("visits");
+  const sortedCampaigns = useMemo(
+    () =>
+      sortRows(
+        campaigns,
+        sort.col,
+        sort.dir,
+        (row, col) => {
+          const c = row as MonitoringCampaign;
+          const daily = metricsByCampaignId.get(c.id);
+          const range = toRangeSnapshot(daily);
+          if (col === "visits") return range?.visits ?? Number(c.clicks ?? 0);
+          if (col === "revenue") return range?.revenue ?? Number(c.revenue ?? 0);
+          if (col === "profit") return range?.profit ?? (Number(c.revenue ?? 0) - Number(c.cost ?? 0));
+          if (col === "roi") return range?.roi ?? roiPercent(c.roi);
+          if (col === "conversions") return range?.conversions ?? Number(c.conversions ?? 0);
+          if (col === "offerCount") return c.offerCount ?? (c.batchId != null ? offersPerBatch.get(c.batchId) ?? 0 : 0);
+          if (col === "campaignName") return c.campaignName;
+          return 0;
+        },
+      ),
+    [campaigns, metricsByCampaignId, offersPerBatch, sort.col, sort.dir],
+  );
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200/90 bg-white shadow-sm ring-1 ring-slate-100">
       <div className="border-b border-slate-100 bg-gradient-to-r from-slate-50/90 to-white px-4 py-3.5">
@@ -128,9 +154,12 @@ export function LiveCampaignsSummaryTable({
         <Table className="min-w-[980px]">
           <TableHeader>
             <TableRow className="bg-slate-50/90 hover:bg-slate-50/90">
-              <TableHead className="sticky left-0 z-20 min-w-[200px] bg-slate-50/95 text-xs font-bold uppercase tracking-wide text-slate-500">
-                Campaign
-              </TableHead>
+              <SortableTableHead
+                className="sticky left-0 z-20 min-w-[200px] bg-slate-50/95 text-xs font-bold uppercase tracking-wide text-slate-500"
+                label="Campaign"
+                col="campaignName"
+                sort={sort}
+              />
               <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500">
                 Campaign Type
               </TableHead>
@@ -143,18 +172,11 @@ export function LiveCampaignsSummaryTable({
               <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500">
                 Network / GEO
               </TableHead>
-              <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                Visits
-              </TableHead>
-              <TableHead className="text-right text-xs font-bold uppercase tracking-wide text-slate-500">
-                ROI
-              </TableHead>
-              <TableHead className="text-right text-xs font-bold uppercase tracking-wide text-slate-500">
-                Profit
-              </TableHead>
-              <TableHead className="text-right text-xs font-bold uppercase tracking-wide text-slate-500">
-                Conv
-              </TableHead>
+              <SortableTableHead label="Visits" col="visits" sort={sort} align="right" />
+              <SortableTableHead label="Offer Count" col="offerCount" sort={sort} align="right" />
+              <SortableTableHead label="ROI" col="roi" sort={sort} align="right" />
+              <SortableTableHead label="Profit" col="profit" sort={sort} align="right" />
+              <SortableTableHead label="Conv" col="conversions" sort={sort} align="right" />
               <TableHead className="min-w-[108px] text-xs font-bold uppercase tracking-wide text-slate-500">
                 Action Required
               </TableHead>
@@ -163,10 +185,10 @@ export function LiveCampaignsSummaryTable({
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRowsSkeleton rows={6} cols={11} />
+              <TableRowsSkeleton rows={6} cols={12} />
             ) : isError ? (
               <TableSectionState
-                colSpan={11}
+                colSpan={12}
                 variant="error"
                 title="Couldn't load live campaigns"
                 description={loadErrorMessage}
@@ -176,16 +198,16 @@ export function LiveCampaignsSummaryTable({
               />
             ) : campaigns.length === 0 ? (
               <TableSectionState
-                colSpan={11}
+                colSpan={12}
                 variant="empty"
                 title="No campaigns match these filters"
                 description="Adjust filters or import Voluum metrics for the selected range."
               />
             ) : (
-              campaigns.map((c) => {
+              sortedCampaigns.map((c) => {
                 const daily = metricsByCampaignId.get(c.id);
                 const range = toRangeSnapshot(daily);
-                const offerCount = c.batchId != null ? offersPerBatch.get(c.batchId) ?? 0 : 0;
+                const offerCount = c.offerCount ?? (c.batchId != null ? offersPerBatch.get(c.batchId) ?? 0 : 0);
                 const reviewInput = toReviewInput(c);
                 const monitoring = evaluateCampaignMonitoringHealth(reviewInput, offerCount, rules);
                 const health = deriveSummaryHealth(range, reviewInput, offerCount, rules);
@@ -278,6 +300,9 @@ export function LiveCampaignsSummaryTable({
                           </Badge>
                         )}
                       </div>
+                    </TableCell>
+                    <TableCell className="py-3 text-right text-sm tabular-nums text-slate-700">
+                      {offerCount > 0 ? offerCount.toLocaleString() : "Missing offer count"}
                     </TableCell>
                     <TableCell
                       className={cn(

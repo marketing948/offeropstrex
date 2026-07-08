@@ -157,6 +157,7 @@ function workingBody(
     trafficSourceId: seed.sourceId,
     affiliateNetworkId: seed.networkId,
     geoId: seed.geoId,
+    offerCount: 1,
     voluumCampaignId: voluumId,
     campaignUrl: `https://voluum.example/${voluumId}`,
     ...overrides,
@@ -367,6 +368,14 @@ describe("POST /production-live-campaigns", { concurrency: false }, () => {
     assert.equal(response.status, 400);
   });
 
+  test("offerCount is required for production live campaign creation", async () => {
+    const seed = await seedWorkspaceWithSource();
+    const body = workingBody(seed, `vc-missing-offer-count-${Date.now()}`);
+    delete (body as { offerCount?: number }).offerCount;
+    const { response } = await request("POST", "/production-live-campaigns", seed.adminId, body);
+    assert.equal(response.status, 400);
+  });
+
   test("duplicate voluumCampaignId in same workspace is rejected", async () => {
     const seed = await seedWorkspaceWithSource();
     const voluumId = `vc-dup-prod-${Date.now()}`;
@@ -383,6 +392,153 @@ describe("POST /production-live-campaigns", { concurrency: false }, () => {
       campaignName: "Duplicate attempt",
     });
     assert.equal(second.response.status, 409);
+  });
+
+  test("duplicate voluum returns conflict payload with override metadata", async () => {
+    const seed = await seedWorkspaceWithSource();
+    const voluumId = `vc-conflict-${Date.now()}`;
+    const first = await request(
+      "POST",
+      "/production-live-campaigns",
+      seed.workerId,
+      workingBody(seed, voluumId),
+    );
+    assert.equal(first.response.status, 201);
+
+    const second = await request(
+      "POST",
+      "/production-live-campaigns",
+      seed.workerId,
+      workingBody(seed, voluumId),
+    );
+    assert.equal(second.response.status, 409);
+    assert.equal(second.json?.code, "CAMPAIGN_ALREADY_LINKED");
+    assert.equal((second.json?.existingCampaign as { id?: number })?.id, first.json?.id);
+    assert.equal((second.json?.canOverride as boolean), true);
+  });
+
+  test("worker can override same-owned duplicate and row id is preserved", async () => {
+    const seed = await seedWorkspaceWithSource();
+    const voluumId = `vc-override-owned-${Date.now()}`;
+    const first = await request(
+      "POST",
+      "/production-live-campaigns",
+      seed.workerId,
+      workingBody(seed, voluumId),
+    );
+    assert.equal(first.response.status, 201);
+
+    const overriddenName = `Overridden ${Date.now()}`;
+    const second = await request(
+      "POST",
+      "/production-live-campaigns",
+      seed.workerId,
+      {
+        ...workingBody(seed, voluumId),
+        campaignName: overriddenName,
+        confirmOverride: true,
+        overrideExistingCampaignId: first.json?.id,
+      },
+    );
+    assert.equal(second.response.status, 200);
+    assert.equal(second.json?.id, first.json?.id);
+    assert.equal(second.json?.campaignName, overriddenName);
+    assert.equal(second.json?.overrideApplied, true);
+
+    const overrideEvents = await db
+      .select()
+      .from(operationalEventsTable)
+      .where(
+        and(
+          eq(operationalEventsTable.workspaceId, seed.workspaceId),
+          eq(operationalEventsTable.entityType, "campaign"),
+          eq(operationalEventsTable.entityId, String(first.json?.id)),
+          eq(operationalEventsTable.eventType, "manual_campaign_override_existing_voluum_id"),
+        ),
+      );
+    assert.ok(overrideEvents.length >= 1);
+  });
+
+  test("worker cannot override another worker campaign", async () => {
+    const seed = await seedWorkspaceWithSource();
+    const otherWorker = await createEmployee("employee");
+    await assign(otherWorker, seed.workspaceId);
+    const voluumId = `vc-override-denied-${Date.now()}`;
+    const first = await request(
+      "POST",
+      "/production-live-campaigns",
+      otherWorker,
+      workingBody(seed, voluumId),
+    );
+    assert.equal(first.response.status, 201);
+
+    const denied = await request(
+      "POST",
+      "/production-live-campaigns",
+      seed.workerId,
+      {
+        ...workingBody(seed, voluumId),
+        confirmOverride: true,
+        overrideExistingCampaignId: first.json?.id,
+      },
+    );
+    assert.equal(denied.response.status, 409);
+    assert.equal((denied.json?.canOverride as boolean), false);
+  });
+
+  test("batch-linked duplicate requires admin override", async () => {
+    const seed = await seedWorkspaceWithSource();
+    const voluumId = `vc-batch-linked-${Date.now()}`;
+    const [batch] = await db
+      .insert(testingBatchesTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        employeeId: seed.workerId,
+        batchName: "Batch linked campaign",
+        affiliateNetwork: "Net",
+        geo: "US",
+        trafficSource: "Source",
+        batchTag: `batch_linked_${Date.now()}`,
+      })
+      .returning({ id: testingBatchesTable.id });
+    const [existing] = await db
+      .insert(campaignsTable)
+      .values({
+        workspaceId: seed.workspaceId,
+        batchId: batch.id,
+        platform: "ios",
+        campaignName: "Batch-linked existing",
+        status: "live",
+        campaignPurpose: "working",
+        trafficSourceId: seed.sourceId,
+        affiliateNetworkId: seed.networkId,
+        geoId: seed.geoId,
+        geo: "US",
+        voluumCampaignId: voluumId,
+        campaignUrl: "https://voluum.example/batch-linked",
+        offerCount: 1,
+        createdByEmployeeId: seed.workerId,
+      })
+      .returning({ id: campaignsTable.id });
+
+    const workerAttempt = await request("POST", "/production-live-campaigns", seed.workerId, {
+      ...workingBody(seed, voluumId),
+      confirmOverride: true,
+      overrideExistingCampaignId: existing.id,
+    });
+    assert.equal(workerAttempt.response.status, 409);
+    assert.equal((workerAttempt.json?.overrideRequiresAdmin as boolean), true);
+    assert.equal((workerAttempt.json?.canOverride as boolean), false);
+
+    const adminAttempt = await request("POST", "/production-live-campaigns", seed.adminId, {
+      ...workingBody(seed, voluumId),
+      campaignName: "Admin override batch linked",
+      confirmOverride: true,
+      overrideExistingCampaignId: existing.id,
+    });
+    assert.equal(adminAttempt.response.status, 200);
+    assert.equal(adminAttempt.json?.id, existing.id);
+    assert.equal(adminAttempt.json?.overrideApplied, true);
   });
 
   test("no CampaignOps tasks or batch run mutations", async () => {

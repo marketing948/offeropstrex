@@ -845,6 +845,7 @@ router.post("/testing-batches/:id/campaigns-go-live", async (req, res): Promise<
       id: testingBatchesTable.id,
       workspaceId: testingBatchesTable.workspaceId,
       liveAt: testingBatchesTable.liveAt,
+      numberOfOffers: testingBatchesTable.numberOfOffers,
     })
     .from(testingBatchesTable)
     .where(eq(testingBatchesTable.id, params.data.id));
@@ -853,6 +854,14 @@ router.post("/testing-batches/:id/campaigns-go-live", async (req, res): Promise<
     return;
   }
   if ((await requireWorkspaceAccess(req, res, existing.workspaceId)) === null) return;
+  if (existing.numberOfOffers == null || existing.numberOfOffers <= 0) {
+    res.status(400).json({
+      error: "numberOfOffers is required before campaigns can go live",
+      detail:
+        "Set a positive numberOfOffers on the batch before moving campaigns to live.",
+    });
+    return;
+  }
 
   try {
     await emit({

@@ -2,7 +2,7 @@
  * Live Campaigns — campaign detail drawer.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AlertRulesConfig } from "@workspace/alert-rules";
 import {
   evaluateCampaignMonitoringHealth,
@@ -42,6 +42,7 @@ import {
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { authedJson } from "@/lib/api-fetch";
 
 function fmtMoney(v: string | number | null | undefined): string {
   if (v == null || v === "") return "—";
@@ -104,6 +105,7 @@ export function LiveCampaignDrawer({
   onClose,
   onImportCsv,
   onCloseCampaign,
+  onCampaignUpdated,
 }: {
   campaign: MonitoringCampaign | null;
   rangeMetrics: DailyMetricRow | undefined;
@@ -114,10 +116,17 @@ export function LiveCampaignDrawer({
   onClose: () => void;
   onImportCsv: () => void;
   onCloseCampaign: (c: { id: number; name: string }) => void;
+  onCampaignUpdated?: () => void;
 }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [offerCountDraft, setOfferCountDraft] = useState(offerCount > 0 ? String(offerCount) : "");
+  const [savingOfferCount, setSavingOfferCount] = useState(false);
+
+  useEffect(() => {
+    setOfferCountDraft(offerCount > 0 ? String(offerCount) : "");
+  }, [campaign?.id, offerCount]);
 
   if (!campaign) return null;
 
@@ -137,6 +146,35 @@ export function LiveCampaignDrawer({
   const health = deriveSummaryHealth(range, reviewInput, offerCount, rules);
   const pacing = deriveTrafficPacing(Number(campaign.clicks ?? 0), monitoring.targetPct, offerCount);
   const lifetimeRoi = roiPercent(campaign.roi);
+  const visitsPerOffer = offerCount > 0 ? Number(campaign.clicks ?? 0) / offerCount : null;
+
+  async function saveOfferCount() {
+    const parsed = Number(offerCountDraft);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      toast({
+        title: "Offer count must be a positive integer",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      setSavingOfferCount(true);
+      await authedJson(`/api/campaigns/${campaign.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ offerCount: parsed }),
+      });
+      toast({ title: "Offer count updated" });
+      onCampaignUpdated?.();
+    } catch (e: unknown) {
+      toast({
+        title: "Could not update offer count",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    } finally {
+      setSavingOfferCount(false);
+    }
+  }
 
   async function copyVoluumId() {
     if (!campaign?.voluumCampaignId) return;
@@ -190,6 +228,11 @@ export function LiveCampaignDrawer({
           {range ? (
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               <MetricTile label="Visits" value={range.visits.toLocaleString()} />
+              <MetricTile label="Offer Count" value={offerCount > 0 ? String(offerCount) : "Missing offer count"} />
+              <MetricTile
+                label="Visits / Offer"
+                value={visitsPerOffer != null ? Math.round(visitsPerOffer).toLocaleString() : "—"}
+              />
               <MetricTile label="Cost" value={fmtMoney(range.cost)} />
               <MetricTile label="Revenue" value={fmtMoney(range.revenue)} />
               <MetricTile
@@ -261,18 +304,42 @@ export function LiveCampaignDrawer({
               </div>
             )}
           </dl>
+          <div className="rounded-lg border border-slate-200 bg-white px-3 py-3">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Edit Offer Count</p>
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                className="h-9 w-28 rounded-md border border-slate-200 px-2 text-sm"
+                value={offerCountDraft}
+                onChange={(e) => setOfferCountDraft(e.target.value.replace(/[^\d]/g, ""))}
+                placeholder="e.g. 2"
+              />
+              <Button size="sm" onClick={() => void saveOfferCount()} disabled={savingOfferCount}>
+                {savingOfferCount ? "Saving..." : "Save"}
+              </Button>
+            </div>
+          </div>
         </section>
 
         <section className="mt-6 space-y-2">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Action Required</h3>
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+            {campaign.campaignPurpose === "working" ? "Scaling Opportunities" : "Action Required"}
+          </h3>
           <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-3">
-            <Badge
-              variant="outline"
-              className={cn("text-[11px] font-semibold", summaryHealthBadgeClass(health.status))}
-            >
-              {health.label}
-            </Badge>
-            <p className="mt-2 text-sm text-slate-600">{health.reason}</p>
+            {campaign.campaignPurpose === "working" ? (
+              <p className="text-sm text-slate-600">
+                This campaign is already working. Use performance trends to decide whether to scale.
+              </p>
+            ) : (
+              <>
+                <Badge
+                  variant="outline"
+                  className={cn("text-[11px] font-semibold", summaryHealthBadgeClass(health.status))}
+                >
+                  {health.label}
+                </Badge>
+                <p className="mt-2 text-sm text-slate-600">{health.reason}</p>
+              </>
+            )}
           </div>
         </section>
 

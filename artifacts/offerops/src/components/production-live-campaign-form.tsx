@@ -8,7 +8,7 @@ import {
   getListGeosQueryKey,
   getListWorkspaceTrafficSourcesQueryKey,
 } from "@workspace/api-client-react";
-import { authedJson } from "@/lib/api-fetch";
+import { authedFetch } from "@/lib/api-fetch";
 import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal-surfaces";
 import { useToast } from "@/hooks/use-toast";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -24,6 +24,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 type ProductionCampaign = {
   id: number;
@@ -70,6 +80,23 @@ export function ProductionLiveCampaignForm({
   const [geoId, setGeoId] = useState("");
   const [parentCampaignId, setParentCampaignId] = useState("");
   const [notes, setNotes] = useState("");
+  const [offerCount, setOfferCount] = useState("");
+  const [conflict, setConflict] = useState<{
+    canOverride: boolean;
+    overrideRequiresAdmin: boolean;
+    existingCampaign?: {
+      id: number;
+      name?: string;
+      employee?: string | null;
+      affiliateNetwork?: string | null;
+      geo?: string | null;
+      status?: string;
+      campaignPurpose?: string;
+      offerCount?: number | null;
+      batchId?: number | null;
+    };
+    reason?: string;
+  } | null>(null);
   const [pending, setPending] = useState(false);
 
   const parentOptions = useMemo(
@@ -80,7 +107,7 @@ export function ProductionLiveCampaignForm({
   const isScaling = campaignPurpose === "scaling";
   const isTestOrWorking = campaignPurpose === "working" || campaignPurpose === "testing";
 
-  async function submit() {
+  async function submitWithConflictHandling(confirmOverride: boolean): Promise<void> {
     if (!activeWorkspaceId) return;
     if (!campaignName.trim() || !voluumCampaignId.trim() || !campaignUrl.trim()) {
       toast({ title: "Fill all required fields", variant: "destructive" });
@@ -94,31 +121,50 @@ export function ProductionLiveCampaignForm({
       toast({ title: "Network, GEO, and traffic source are required", variant: "destructive" });
       return;
     }
+    if (!offerCount.trim() || Number(offerCount) <= 0 || !Number.isInteger(Number(offerCount))) {
+      toast({ title: "Offer count must be a positive integer", variant: "destructive" });
+      return;
+    }
+    const body: Record<string, unknown> = {
+      workspaceId: activeWorkspaceId,
+      campaignName: campaignName.trim(),
+      campaignPurpose,
+      voluumCampaignId: voluumCampaignId.trim(),
+      campaignUrl: campaignUrl.trim(),
+      notes: notes.trim() || null,
+      offerCount: Number(offerCount),
+      confirmOverride,
+      overrideExistingCampaignId: confirmOverride ? conflict?.existingCampaign?.id : undefined,
+    };
+    if (isScaling) {
+      body.parentCampaignId = Number(parentCampaignId);
+    } else {
+      body.platform = platform;
+      body.trafficSourceId = Number(trafficSourceId);
+      body.affiliateNetworkId = Number(affiliateNetworkId);
+      body.geoId = Number(geoId);
+    }
 
     setPending(true);
     try {
-      const body: Record<string, unknown> = {
-        workspaceId: activeWorkspaceId,
-        campaignName: campaignName.trim(),
-        campaignPurpose,
-        voluumCampaignId: voluumCampaignId.trim(),
-        campaignUrl: campaignUrl.trim(),
-        notes: notes.trim() || null,
-      };
-      if (isScaling) {
-        body.parentCampaignId = Number(parentCampaignId);
-      } else {
-        body.platform = platform;
-        body.trafficSourceId = Number(trafficSourceId);
-        body.affiliateNetworkId = Number(affiliateNetworkId);
-        body.geoId = Number(geoId);
-      }
-
-      await authedJson("/api/production-live-campaigns", {
+      const res = await authedFetch("/api/production-live-campaigns", {
         method: "POST",
         body: JSON.stringify(body),
       });
-      toast({ title: "Manual campaign added" });
+      const raw = await res.text();
+      const json = raw ? JSON.parse(raw) : {};
+      if (res.status === 409 && json?.code === "CAMPAIGN_ALREADY_LINKED") {
+        setConflict(json);
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(json?.error ?? `${res.status} ${res.statusText}`);
+      }
+      setConflict(null);
+      toast({
+        title: json?.overrideApplied ? "Campaign updated" : "Manual campaign added",
+        description: json?.overrideApplied ? "Existing campaign was updated without creating a duplicate." : undefined,
+      });
       void queryClient.invalidateQueries({ queryKey: ["live-campaigns"] });
       void queryClient.invalidateQueries({ queryKey: ["live-campaign-filter-options"] });
       invalidateGoalSurfaces(queryClient, activeWorkspaceId);
@@ -247,6 +293,18 @@ export function ProductionLiveCampaignForm({
         </>
       )}
       <div>
+        <Label className="text-xs">Offer count *</Label>
+        <Input
+          className="mt-1 h-9"
+          value={offerCount}
+          onChange={(e) => setOfferCount(e.target.value.replace(/[^\d]/g, ""))}
+          placeholder="e.g. 2"
+        />
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          Number of offers inside this campaign. Used for visits per offer.
+        </p>
+      </div>
+      <div>
         <Label className="text-xs">Voluum Campaign ID *</Label>
         <Input
           className="mt-1 h-9 font-mono text-sm"
@@ -275,10 +333,37 @@ export function ProductionLiveCampaignForm({
         <Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={pending}>
           Cancel
         </Button>
-        <Button type="button" size="sm" onClick={() => void submit()} disabled={pending}>
+        <Button type="button" size="sm" onClick={() => void submitWithConflictHandling(false)} disabled={pending}>
           {pending ? "Creating…" : "Add manual campaign"}
         </Button>
       </div>
+      <AlertDialog open={conflict != null} onOpenChange={(open) => !open && setConflict(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Voluum campaign already linked</AlertDialogTitle>
+            <AlertDialogDescription>
+              {conflict?.existingCampaign
+                ? `ID #${conflict.existingCampaign.id} · ${conflict.existingCampaign.name ?? "Existing campaign"}`
+                : "This Voluum campaign ID already exists in this workspace."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="text-xs text-muted-foreground">
+            {conflict?.reason ?? "You can update the existing campaign instead of creating a duplicate row."}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={pending || !conflict?.canOverride}
+              onClick={(e) => {
+                e.preventDefault();
+                void submitWithConflictHandling(true);
+              }}
+            >
+              Update existing campaign
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

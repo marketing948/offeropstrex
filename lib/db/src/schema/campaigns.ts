@@ -74,6 +74,8 @@ export const campaignsTable = pgTable("campaigns", {
   clicks: integer("clicks"),
   conversions: integer("conversions"),
   roi: numeric("roi"),
+  /** Manual/production campaigns: number of offers in campaign (nullable for legacy rows). */
+  offerCount: integer("offer_count"),
   notes: text("notes"),
   closeSource: text("close_source"),
   manualCloseReason: campaignManualCloseReasonEnum("manual_close_reason"),
