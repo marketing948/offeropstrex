@@ -9,14 +9,19 @@ import {
   buildDailyActionPlan,
   buildTeamDailyPlans,
   buildTestingNetworkPlans,
+  computeNetworkTodayRequired,
   computeTodayRequired,
   planContainsRevenue,
   splitNetworkTodayAcrossSelectedGeos,
 } from "./monthly-goal-daily-plan.ts";
-import { evaluateWorkingDayPace } from "./ops-v2-metrics.ts";
+import {
+  evaluateWorkingDayPace,
+  remainingWorkingDaysInMonth,
+} from "./ops-v2-metrics.ts";
 
 const NOW = new Date("2026-07-08T12:00:00");
 const MONTH = "2026-07";
+const REMAINING_DAYS = remainingWorkingDaysInMonth(MONTH, NOW);
 
 describe("computeTodayRequired", () => {
   test("completed monthly target removes action", () => {
@@ -43,7 +48,73 @@ describe("computeTodayRequired", () => {
   });
 });
 
+describe("computeNetworkTodayRequired (network daily total)", () => {
+  test("48 monthly target distributed over remaining working days → small daily", () => {
+    // ceil(48 / remainingDays). With Jul 8 (18 days left) → ceil(48/18) = 3.
+    const today = computeNetworkTodayRequired(48, 0, MONTH, NOW);
+    assert.equal(today, Math.ceil(48 / REMAINING_DAYS));
+    assert.equal(today, 3);
+  });
+
+  test("192 monthly target does NOT produce an inflated 72", () => {
+    const today = computeNetworkTodayRequired(192, 0, MONTH, NOW);
+    assert.equal(today, Math.ceil(192 / REMAINING_DAYS));
+    assert.ok(today < 15);
+    assert.notEqual(today, 72);
+  });
+
+  test("completed monthly goal returns 0 today", () => {
+    assert.equal(computeNetworkTodayRequired(48, 48, MONTH, NOW), 0);
+    assert.equal(computeNetworkTodayRequired(48, 60, MONTH, NOW), 0);
+  });
+
+  test("never exceeds remaining and never negative", () => {
+    assert.equal(computeNetworkTodayRequired(3, 2, MONTH, NOW), 1);
+    assert.ok(computeNetworkTodayRequired(48, 0, MONTH, NOW) >= 0);
+  });
+});
+
 describe("buildTestingNetworkPlans", () => {
+  test("network total is computed before GEO distribution (no ceil-per-GEO sum)", () => {
+    // 6 GEOs each target 32 (=192 total), current 0.
+    // WRONG (old): ceil-per-GEO summed would be huge (e.g. 6 * ceil(32/18) = 12+).
+    // RIGHT: ceil(192 / remainingDays) then split across GEOs.
+    const slices = ["GB", "US", "DE", "FR", "IT", "NL"].map((geo) => ({
+      network: "SHOPLOOKS PAP",
+      geo,
+      current: 0,
+      target: 32,
+    }));
+    const plans = buildTestingNetworkPlans(slices, [], MONTH, NOW);
+    assert.equal(plans.length, 1);
+    const net = plans[0]!;
+    assert.equal(net.todayRequired, computeNetworkTodayRequired(192, 0, MONTH, NOW));
+    assert.notEqual(net.todayRequired, 72);
+    // GEO distribution sums EXACTLY to the network daily total.
+    const sum = net.geos.reduce((s, g) => s + g.todayRequired, 0);
+    assert.equal(sum, net.todayRequired);
+  });
+
+  test("48-target network with 3 GEOs shows 3 today split across GEOs", () => {
+    const plans = buildTestingNetworkPlans(
+      [
+        { network: "BlueAffiliate CBV", geo: "GB", current: 0, target: 20 },
+        { network: "BlueAffiliate CBV", geo: "US", current: 0, target: 20 },
+        { network: "BlueAffiliate CBV", geo: "DE", current: 0, target: 8 },
+      ],
+      [],
+      MONTH,
+      NOW,
+    );
+    const net = plans[0]!;
+    assert.equal(net.todayRequired, 3); // ceil(48/18)
+    assert.equal(
+      net.geos.reduce((s, g) => s + g.todayRequired, 0),
+      3,
+    );
+  });
+
+
   test("network goal with GEO targets produces Network row with GEO actions", () => {
     const plans = buildTestingNetworkPlans(
       [
@@ -258,6 +329,39 @@ describe("buildDailyActionPlan", () => {
       plan.summary.scalingAdvisory;
     assert.equal(plan.summary.total, expected);
     assert.ok(plan.summary.total > 0);
+  });
+
+  test("Focus Bar tests total = sum of network daily totals (not ceil-per-GEO)", () => {
+    const plan = buildDailyActionPlan({
+      monthKey: MONTH,
+      now: NOW,
+      testingSlices: [
+        // Network A: 192 across 6 GEOs → ceil(192/days), NOT 6*ceil(32/days)
+        ...["GB", "US", "DE", "FR", "IT", "NL"].map((geo) => ({
+          network: "NET A",
+          geo,
+          current: 0,
+          target: 32,
+        })),
+        // Network B: 48 across 3 GEOs → ceil(48/days)
+        ...["GB", "US", "DE"].map((geo) => ({
+          network: "NET B",
+          geo,
+          current: 0,
+          target: 16,
+        })),
+      ],
+    });
+    const netA = computeNetworkTodayRequired(192, 0, MONTH, NOW);
+    const netB = computeNetworkTodayRequired(48, 0, MONTH, NOW);
+    assert.equal(plan.summary.testsRequired, netA + netB);
+    // Each network row sums exactly to its network total.
+    for (const n of plan.testingNetworks) {
+      assert.equal(
+        n.geos.reduce((s, g) => s + g.todayRequired, 0),
+        n.todayRequired,
+      );
+    }
   });
 
   test("no fake completion without timestamps", () => {
