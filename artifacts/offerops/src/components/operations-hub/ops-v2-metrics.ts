@@ -209,6 +209,43 @@ export function progressPct(actual: number, target: number): number {
   return Math.min(100, Math.round((actual / target) * 100));
 }
 
+/** Round count metrics UP for user-facing Ops Hub / Focus Today values. */
+export function ceilCount(n: number): number {
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.ceil(n);
+}
+
+/** Round currency UP to whole dollars before formatting. */
+export function ceilCurrency(n: number): number {
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.ceil(n);
+}
+
+/** Compact currency display after ceil-to-dollar (e.g. $3.1K, $72K, $850). */
+export function formatOpsCurrency(n: number): string {
+  const rounded = ceilCurrency(n);
+  if (rounded >= 10_000) return `$${(rounded / 1000).toFixed(0)}K`;
+  if (rounded >= 1000) return `$${(rounded / 1000).toFixed(1)}K`;
+  return `$${rounded.toLocaleString()}`;
+}
+
+/** Integer-only count display after ceil. */
+export function formatOpsCount(n: number): string {
+  return ceilCount(n).toLocaleString();
+}
+
+export function formatOpsMetric(n: number, format: "currency" | "count"): string {
+  return format === "currency" ? formatOpsCurrency(n) : formatOpsCount(n);
+}
+
+/** Pace / progress percent: default 1 decimal, never long floats. */
+export function formatOpsPercent(n: number, decimals: 0 | 1 = 1): string {
+  if (!Number.isFinite(n)) return "0%";
+  const factor = decimals === 0 ? 1 : 10;
+  const rounded = Math.round(n * factor) / factor;
+  return `${rounded.toFixed(decimals)}%`;
+}
+
 export function gapRemaining(actual: number, target: number): number {
   return Math.max(0, target - actual);
 }
@@ -239,11 +276,17 @@ export const HEALTH_TEXT_CLASS: Record<GoalHealthTone, string> = {
 
 export type PaceEvaluation = {
   progressPct: number;
+  /** Daily expected = monthly target / Mon–Fri working days (user-facing "Expected today"). */
   expectedByToday: number;
+  dailyExpected: number;
+  /** Cumulative expected by now = monthly target × elapsed working days / total working days. */
+  expectedByNow: number;
+  /** How far behind (−) or ahead (+) of expectedByNow. */
+  paceGap: number;
   expectedProgressPct: number;
   gap: number;
   paceStatus: PaceStatus;
-  /** % ahead (+) or behind (−) vs linear month-to-date expectation. */
+  /** % ahead (+) or behind (−) vs working-day month-to-date expectation. */
   paceVariancePct: number;
 };
 
@@ -256,10 +299,12 @@ export function evaluatePace(
 ): PaceEvaluation {
   const progressPctVal = progressPct(actual, target);
   const wd = monthKey ? evaluateWorkingDayPace(monthKey, target, actual, now) : null;
-  const expectedByToday = wd ? wd.dailyExpected : (target * monthProgressFraction(now));
+  const dailyExpected = wd ? wd.dailyExpected : (target * monthProgressFraction(now));
+  const expectedByToday = dailyExpected;
   const expectedByNow = wd ? wd.expectedByNow : (target * monthProgressFraction(now));
   const expectedProgressPct = target > 0 ? Math.round((expectedByNow / target) * 100) : 0;
   const gap = gapRemaining(actual, target);
+  const paceGap = actual - expectedByNow;
 
   const paceVariancePct =
     expectedByNow > 0
@@ -272,6 +317,9 @@ export function evaluatePace(
     return {
       progressPct: progressPctVal,
       expectedByToday,
+      dailyExpected,
+      expectedByNow,
+      paceGap,
       expectedProgressPct,
       gap: 0,
       paceStatus: "Completed",
@@ -291,6 +339,9 @@ export function evaluatePace(
   return {
     progressPct: progressPctVal,
     expectedByToday,
+    dailyExpected,
+    expectedByNow,
+    paceGap,
     expectedProgressPct,
     gap,
     paceStatus,

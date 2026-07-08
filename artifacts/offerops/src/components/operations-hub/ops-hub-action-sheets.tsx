@@ -257,6 +257,43 @@ export function OpsFocusDetailSheet({
             </section>
           )}
 
+          {(ctx?.todayTarget || ctx?.currentValue || ctx?.expectedByNow || ctx?.paceGapLabel) && (
+            <section className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                Goal progress
+              </p>
+              <dl className="mt-2 space-y-1.5 text-sm">
+                {ctx.todayTarget && (
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-slate-500">Today target</dt>
+                    <dd className="font-bold tabular-nums text-slate-900">{ctx.todayTarget}</dd>
+                  </div>
+                )}
+                {ctx.currentValue && (
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-slate-500">Current</dt>
+                    <dd className="font-bold tabular-nums text-slate-900">{ctx.currentValue}</dd>
+                  </div>
+                )}
+                {ctx.expectedByNow && (
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-slate-500">Expected by now</dt>
+                    <dd className="font-bold tabular-nums text-slate-900">{ctx.expectedByNow}</dd>
+                  </div>
+                )}
+                {ctx.paceGapLabel && (
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-slate-500">Pace gap</dt>
+                    <dd className="font-bold tabular-nums text-slate-900">{ctx.paceGapLabel}</dd>
+                  </div>
+                )}
+              </dl>
+              {ctx.progressLabel && (
+                <p className="mt-2 text-[11px] text-slate-500">{ctx.progressLabel}</p>
+              )}
+            </section>
+          )}
+
           {ctx?.metricLabel && ctx.metricValue && (
             <section className="rounded-xl border border-slate-200 bg-white px-4 py-3">
               <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">

@@ -1,73 +1,60 @@
 /**
- * Operations Hub V3.1 — Today's Focus (deterministic recommendations).
+ * Operations Hub — Today's Focus (goal-based action cards).
  */
 
 import { Skeleton } from "@/components/ui/skeleton";
 import type { FocusItem, TodaysFocus } from "@/components/operations-hub/ops-hub-drilldown-data";
+import { ProgressBarVisual } from "@/components/operations-hub/goal-progress-row";
 import {
   Eye,
   Flame,
-  Rocket,
+  FlaskConical,
+  Radio,
   Sparkles,
   Target,
-  Zap,
+  DollarSign,
+  Puzzle,
 } from "lucide-react";
 
 const TIER_CONFIG = {
   primary: {
     card: "border-red-400/50 bg-gradient-to-br from-red-950/50 to-purple-950/40 shadow-[0_0_24px_rgba(239,68,68,0.15)]",
     glow: "shadow-[inset_0_0_20px_rgba(239,68,68,0.12)]",
-    icon: Flame,
     accent: "text-red-300",
-    rightIcon: Target,
   },
   secondary: {
     card: "border-sky-400/50 bg-gradient-to-br from-sky-950/50 to-indigo-950/40 shadow-[0_0_24px_rgba(56,189,248,0.15)]",
     glow: "shadow-[inset_0_0_20px_rgba(56,189,248,0.12)]",
-    icon: Zap,
     accent: "text-sky-300",
-    rightIcon: Rocket,
   },
   tertiary: {
     card: "border-amber-400/45 bg-gradient-to-br from-amber-950/45 to-orange-950/35 shadow-[0_0_24px_rgba(251,191,36,0.12)]",
     glow: "shadow-[inset_0_0_20px_rgba(251,191,36,0.1)]",
-    icon: Eye,
     accent: "text-amber-300",
-    rightIcon: Eye,
   },
 } as const;
+
+function kindIcon(kind: string | undefined) {
+  if (kind === "revenue") return DollarSign;
+  if (kind === "testing") return FlaskConical;
+  if (kind === "working") return Radio;
+  if (kind === "action") return Puzzle;
+  return Target;
+}
 
 const FALLBACK_SLOTS: FocusItem[] = [
   {
     tier: "primary",
     emoji: "🔥",
-    title: "Highest Impact",
-    text: "Review revenue pace and prioritize the largest network gap.",
-    reason: "Based on current MTD pace vs monthly target.",
+    title: "Set goals",
+    text: "Configure monthly revenue, testing, and working targets to unlock Focus Today.",
+    reason: "Focus Today is driven by Goal Engine pacing.",
     context: {
-      suggestedAction: "Select a hero goal card above to inspect network gaps.",
-    },
-  },
-  {
-    tier: "secondary",
-    emoji: "⚡",
-    title: "Quick Win",
-    text: "Advance one testing batch or working campaign today.",
-    reason: "Small operational moves compound toward monthly goals.",
-    context: {
-      suggestedAction: "Pick a network with low activity and start a test batch.",
-      navigationPath: "/testing-batches",
-    },
-  },
-  {
-    tier: "tertiary",
-    emoji: "👀",
-    title: "Watch",
-    text: "Monitor live campaign performance for early winner signals.",
-    reason: "Stay ahead of pacing shifts before month-end.",
-    context: {
-      suggestedAction: "Check live campaigns for underperforming sources.",
-      navigationPath: "/live-campaigns",
+      kind: "action",
+      progressLabel: "No goal set",
+      progressPct: 0,
+      suggestedAction: "Open Monthly Goals and set targets for this month.",
+      navigationPath: "/performance/monthly-goals",
     },
   },
 ];
@@ -80,14 +67,16 @@ function FocusCard({
   onSelect: (item: FocusItem) => void;
 }) {
   const cfg = TIER_CONFIG[item.tier];
-  const LeftIcon = cfg.icon;
-  const RightIcon = cfg.rightIcon;
+  const LeftIcon = item.tier === "primary" ? Flame : item.tier === "secondary" ? Target : Eye;
+  const KindIcon = kindIcon(item.context?.kind);
+  const ctx = item.context;
+  const hasMetrics = !!(ctx?.todayTarget || ctx?.currentValue || ctx?.expectedByNow);
 
   return (
     <button
       type="button"
       onClick={() => onSelect(item)}
-      className={`flex min-h-[140px] w-full cursor-pointer flex-col rounded-2xl border-2 p-4 text-left backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70 ${cfg.card} ${cfg.glow}`}
+      className={`flex min-h-[180px] w-full cursor-pointer flex-col rounded-2xl border-2 p-4 text-left backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70 ${cfg.card} ${cfg.glow}`}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
@@ -96,16 +85,56 @@ function FocusCard({
             {item.title}
           </p>
         </div>
-        <RightIcon className={`h-4 w-4 opacity-60 ${cfg.accent}`} strokeWidth={2} />
+        <KindIcon className={`h-4 w-4 opacity-60 ${cfg.accent}`} strokeWidth={2} />
       </div>
-      <p className="mt-3 flex-1 text-sm font-semibold leading-snug text-white">{item.text}</p>
+      <p className="mt-3 text-sm font-semibold leading-snug text-white">{item.text}</p>
       {item.reason && (
-        <p className="mt-2 text-xs leading-relaxed text-violet-200/75">
-          <span className="font-semibold text-violet-100/90">Reason: </span>
-          {item.reason}
-        </p>
+        <p className="mt-2 text-xs leading-relaxed text-violet-200/75">{item.reason}</p>
       )}
-      <p className="mt-2 text-[10px] font-semibold uppercase tracking-wider text-violet-300/60">
+
+      {hasMetrics && (
+        <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px]">
+          {ctx?.todayTarget && (
+            <>
+              <span className="text-violet-200/70">Today target</span>
+              <span className="text-right font-bold tabular-nums text-white">{ctx.todayTarget}</span>
+            </>
+          )}
+          {ctx?.currentValue && (
+            <>
+              <span className="text-violet-200/70">Current</span>
+              <span className="text-right font-bold tabular-nums text-white">{ctx.currentValue}</span>
+            </>
+          )}
+          {ctx?.expectedByNow && (
+            <>
+              <span className="text-violet-200/70">Expected by now</span>
+              <span className="text-right font-bold tabular-nums text-white">{ctx.expectedByNow}</span>
+            </>
+          )}
+          {ctx?.paceGapLabel && (
+            <>
+              <span className="text-violet-200/70">Pace gap</span>
+              <span className="text-right font-bold tabular-nums text-white">{ctx.paceGapLabel}</span>
+            </>
+          )}
+        </div>
+      )}
+
+      {ctx?.progressPct != null && ctx.progressLabel !== "No goal set" && (
+        <div className="mt-3 space-y-1.5">
+          <div className="flex items-center justify-between text-[10px] text-violet-200/80">
+            <span>{ctx.progressLabel ?? "Month progress vs today’s expected pace"}</span>
+            <span className="font-bold tabular-nums text-white">{ctx.progressPct}%</span>
+          </div>
+          <ProgressBarVisual pct={ctx.progressPct} size="sm" />
+        </div>
+      )}
+      {ctx?.progressLabel === "No goal set" && (
+        <p className="mt-3 text-[11px] font-semibold text-amber-200/90">No goal set</p>
+      )}
+
+      <p className="mt-auto pt-2 text-[10px] font-semibold uppercase tracking-wider text-violet-300/60">
         Tap for details
       </p>
     </button>
@@ -114,13 +143,7 @@ function FocusCard({
 
 function displayItems(focus: TodaysFocus): FocusItem[] {
   if (focus.empty || focus.items.length === 0) return FALLBACK_SLOTS;
-  const items = [...focus.items];
-  while (items.length < 3) {
-    const missing = FALLBACK_SLOTS.find((f) => !items.some((i) => i.title === f.title));
-    if (missing) items.push(missing);
-    else break;
-  }
-  return items.slice(0, 3);
+  return focus.items.slice(0, 3);
 }
 
 export function TodaysFocusCard({
@@ -144,7 +167,7 @@ export function TodaysFocusCard({
         aria-hidden
         style={{
           backgroundImage:
-            "radial-gradient(circle at 20% 30%, rgba(167,139,250,0.15) 0%, transparent 50%), radial-gradient(circle at 80% 70%, rgba(139,92,246,0.1) 0%, transparent 40%), radial-gradient(1px 1px at 10% 20%, rgba(255,255,255,0.3) 0%, transparent 100%), radial-gradient(1px 1px at 60% 80%, rgba(255,255,255,0.2) 0%, transparent 100%)",
+            "radial-gradient(circle at 20% 30%, rgba(167,139,250,0.15) 0%, transparent 50%), radial-gradient(circle at 80% 70%, rgba(139,92,246,0.1) 0%, transparent 40%)",
         }}
       />
 
@@ -160,7 +183,7 @@ export function TodaysFocusCard({
             </h2>
           </div>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-violet-200/80">
-            Recommendations from your goals, pace, batches, and open tasks.
+            What to do today based on monthly goals, today&apos;s expected pace, and current progress.
           </p>
         </div>
         <span className="rounded-full border border-violet-400/50 bg-violet-500/20 px-3 py-1 text-[10px] font-extrabold uppercase tracking-wider text-violet-100 shadow-[0_0_12px_rgba(139,92,246,0.3)]">
@@ -171,7 +194,7 @@ export function TodaysFocusCard({
       {loading ? (
         <div className="relative mt-5 grid gap-3 md:grid-cols-3">
           {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-36 rounded-2xl bg-violet-900/40" />
+            <Skeleton key={i} className="h-44 rounded-2xl bg-violet-900/40" />
           ))}
         </div>
       ) : (

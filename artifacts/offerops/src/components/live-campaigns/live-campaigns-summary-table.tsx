@@ -1,30 +1,27 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 /**
  * Live Campaigns — compact summary table (Sketch 3).
  */
 
 import type { AlertRulesConfig } from "@workspace/alert-rules";
 import {
-  evaluateCampaignMonitoringHealth,
   type ReviewCampaignInput,
 } from "@/lib/campaign-review/heuristics";
 import type { MonitoringCampaign, DailyMetricRow } from "@/components/live-campaigns/live-campaigns-monitoring-table";
 import {
   campaignTypeBadgeClass,
   campaignTypeLabel,
-  platformBadgeClass,
 } from "@/components/live-campaigns/live-campaign-labels";
 import {
   deriveSummaryHealth,
-  deriveTrafficPacing,
   metricTone,
   metricToneClass,
-  pacingBadgeClass,
   roiPercent,
   summaryHealthBadgeClass,
 } from "@/components/live-campaigns/live-campaign-health";
-import { formatVisitsDisplay } from "@/components/live-campaigns/live-campaign-visits";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -42,11 +39,13 @@ import { cn } from "@/lib/utils";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { sortRows, useTableSort } from "@/lib/use-table-sort";
 
+const TABLE_COLS = 11;
+
 function fmtMoney(v: string | number | null | undefined): string {
   if (v == null || v === "") return "—";
   const n = typeof v === "number" ? v : Number(v);
   if (!Number.isFinite(n)) return "—";
-  return `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  return `$${Math.round(n).toLocaleString()}`;
 }
 
 function fmtPct(v: number | null): string {
@@ -118,6 +117,8 @@ export function LiveCampaignsSummaryTable({
   onSelectCampaign: (campaign: MonitoringCampaign) => void;
 }) {
   const sort = useTableSort("visits");
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+
   const sortedCampaigns = useMemo(
     () =>
       sortRows(
@@ -135,49 +136,101 @@ export function LiveCampaignsSummaryTable({
           if (col === "conversions") return range?.conversions ?? Number(c.conversions ?? 0);
           if (col === "offerCount") return c.offerCount ?? (c.batchId != null ? offersPerBatch.get(c.batchId) ?? 0 : 0);
           if (col === "campaignName") return c.campaignName;
+          if (col === "geo") return c.batchGeo ?? "";
           return 0;
         },
       ),
     [campaigns, metricsByCampaignId, offersPerBatch, sort.col, sort.dir],
   );
+
+  const visibleIds = useMemo(() => sortedCampaigns.map((c) => c.id), [sortedCampaigns]);
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [campaigns]);
+
+  const allVisibleSelected =
+    visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const someVisibleSelected = visibleIds.some((id) => selectedIds.has(id));
+
+  function toggleAllVisible(checked: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) {
+        for (const id of visibleIds) next.add(id);
+      } else {
+        for (const id of visibleIds) next.delete(id);
+      }
+      return next;
+    });
+  }
+
+  function toggleOne(id: number, checked: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  const selectedCount = selectedIds.size;
+
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200/90 bg-white shadow-sm ring-1 ring-slate-100">
-      <div className="border-b border-slate-100 bg-gradient-to-r from-slate-50/90 to-white px-4 py-3.5">
-        <p className="text-sm font-bold tracking-tight text-slate-900">
-          Performance · {performanceRangeLabel}
-        </p>
-        <p className="mt-0.5 text-xs text-slate-500">
-          Click a row for details. Action Required shows what needs attention in this range.
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-gradient-to-r from-slate-50/90 to-white px-4 py-3.5">
+        <div>
+          <p className="text-sm font-bold tracking-tight text-slate-900">
+            Performance · {performanceRangeLabel}
+          </p>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Click a row for details. Action Required shows what needs attention in this range.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {selectedCount > 0 && (
+            <span className="rounded-full bg-violet-100 px-2.5 py-1 text-xs font-bold text-violet-800">
+              {selectedCount} selected
+            </span>
+          )}
+          <Button type="button" variant="outline" size="sm" disabled className="text-xs">
+            Bulk actions
+          </Button>
+        </div>
       </div>
-      <div className="overflow-x-auto">
-        <Table className="min-w-[980px]">
+      <div className="w-full overflow-x-auto">
+        <Table className="w-full table-fixed">
           <TableHeader>
             <TableRow className="bg-slate-50/90 hover:bg-slate-50/90">
+              <TableHead className="w-10 px-2">
+                <Checkbox
+                  checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false}
+                  onCheckedChange={(v) => toggleAllVisible(v === true)}
+                  aria-label="Select all visible campaigns"
+                  disabled={visibleIds.length === 0 || isLoading}
+                />
+              </TableHead>
               <SortableTableHead
-                className="sticky left-0 z-20 min-w-[200px] bg-slate-50/95 text-xs font-bold uppercase tracking-wide text-slate-500"
+                className="w-[22%] text-xs font-bold uppercase tracking-wide text-slate-500"
                 label="Campaign"
                 col="campaignName"
                 sort={sort}
               />
-              <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                Campaign Type
+              <TableHead className="w-[9%] text-xs font-bold uppercase tracking-wide text-slate-500">
+                Type
               </TableHead>
-              <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                OS
-              </TableHead>
-              <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                Source
-              </TableHead>
-              <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                Network / GEO
-              </TableHead>
-              <SortableTableHead label="Visits" col="visits" sort={sort} align="right" />
-              <SortableTableHead label="Offer Count" col="offerCount" sort={sort} align="right" />
-              <SortableTableHead label="ROI" col="roi" sort={sort} align="right" />
-              <SortableTableHead label="Profit" col="profit" sort={sort} align="right" />
-              <SortableTableHead label="Conv" col="conversions" sort={sort} align="right" />
-              <TableHead className="min-w-[108px] text-xs font-bold uppercase tracking-wide text-slate-500">
+              <SortableTableHead
+                className="w-[7%] text-xs font-bold uppercase tracking-wide text-slate-500"
+                label="GEO"
+                col="geo"
+                sort={sort}
+              />
+              <SortableTableHead label="Visits" col="visits" sort={sort} align="right" className="w-[9%]" />
+              <SortableTableHead label="Conversion" col="conversions" sort={sort} align="right" className="w-[9%]" />
+              <SortableTableHead label="Profit" col="profit" sort={sort} align="right" className="w-[9%]" />
+              <SortableTableHead label="ROI" col="roi" sort={sort} align="right" className="w-[8%]" />
+              <SortableTableHead label="Offer count" col="offerCount" sort={sort} align="right" className="w-[9%]" />
+              <TableHead className="w-[12%] text-xs font-bold uppercase tracking-wide text-slate-500">
                 Action Required
               </TableHead>
               <TableHead className="w-8" />
@@ -185,10 +238,10 @@ export function LiveCampaignsSummaryTable({
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRowsSkeleton rows={6} cols={12} />
+              <TableRowsSkeleton rows={6} cols={TABLE_COLS} />
             ) : isError ? (
               <TableSectionState
-                colSpan={12}
+                colSpan={TABLE_COLS}
                 variant="error"
                 title="Couldn't load live campaigns"
                 description={loadErrorMessage}
@@ -198,7 +251,7 @@ export function LiveCampaignsSummaryTable({
               />
             ) : campaigns.length === 0 ? (
               <TableSectionState
-                colSpan={12}
+                colSpan={TABLE_COLS}
                 variant="empty"
                 title="No campaigns match these filters"
                 description="Adjust filters or import Voluum metrics for the selected range."
@@ -209,42 +262,38 @@ export function LiveCampaignsSummaryTable({
                 const range = toRangeSnapshot(daily);
                 const offerCount = c.offerCount ?? (c.batchId != null ? offersPerBatch.get(c.batchId) ?? 0 : 0);
                 const reviewInput = toReviewInput(c);
-                const monitoring = evaluateCampaignMonitoringHealth(reviewInput, offerCount, rules);
                 const health = deriveSummaryHealth(range, reviewInput, offerCount, rules);
-                const pacing = deriveTrafficPacing(
-                  Number(c.clicks ?? 0),
-                  monitoring.targetPct,
-                  offerCount,
-                );
                 const roi = range?.roi ?? null;
                 const profit = range?.profit ?? null;
                 const conv = range?.conversions ?? null;
-                const lifetimeVisits = Number(c.clicks ?? 0);
-                const visitsDisplay = formatVisitsDisplay(
-                  range,
-                  lifetimeVisits,
-                  offerCount,
-                  monitoring.targetPct,
-                  rules,
-                );
+                const visits = range?.visits ?? Number(c.clicks ?? 0);
+                const checked = selectedIds.has(c.id);
 
                 return (
                   <TableRow
                     key={c.id}
-                    className="cursor-pointer align-middle hover:bg-slate-50/80"
+                    className={cn(
+                      "cursor-pointer align-middle hover:bg-slate-50/80",
+                      checked && "bg-violet-50/40",
+                    )}
                     onClick={() => onSelectCampaign(c)}
                   >
-                    <TableCell className="sticky left-0 z-10 max-w-[280px] bg-white py-3 group-hover:bg-slate-50/80">
+                    <TableCell
+                      className="px-2 py-3"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={(v) => toggleOne(c.id, v === true)}
+                        aria-label={`Select ${c.campaignName}`}
+                      />
+                    </TableCell>
+                    <TableCell className="max-w-0 py-3">
                       <p
                         className="line-clamp-2 text-sm font-semibold leading-snug text-slate-900"
                         title={c.campaignName}
                       >
                         {c.campaignName}
-                      </p>
-                      <p className="mt-0.5 truncate text-[11px] text-slate-500">
-                        {[c.batchGeo, c.batchId != null ? `#${c.batchId}` : null, c.batchName]
-                          .filter(Boolean)
-                          .join(" · ") || `ID ${c.id}`}
                       </p>
                     </TableCell>
                     <TableCell className="py-3">
@@ -255,62 +304,14 @@ export function LiveCampaignsSummaryTable({
                         {campaignTypeLabel(c.campaignPurpose)}
                       </Badge>
                     </TableCell>
-                    <TableCell className="py-3">
-                      <Badge
-                        variant="outline"
-                        className={cn("uppercase text-[10px] font-semibold", platformBadgeClass(c.platform))}
-                      >
-                        {c.platform}
-                      </Badge>
+                    <TableCell className="py-3 text-xs font-semibold uppercase tabular-nums text-slate-700">
+                      {c.batchGeo ?? "—"}
                     </TableCell>
-                    <TableCell className="max-w-[110px] truncate py-3 text-xs text-slate-700">
-                      {c.trafficSourceName ?? "—"}
-                    </TableCell>
-                    <TableCell className="py-3 text-xs leading-snug text-slate-700">
-                      <div className="truncate">{c.batchAffiliateNetwork ?? "—"}</div>
-                      <div className="text-slate-500">{c.batchGeo ?? "—"}</div>
-                    </TableCell>
-                    <TableCell className="min-w-[120px] py-3">
-                      <div className="flex items-center gap-2">
-                        <div className="min-w-0 flex-1">
-                          <p
-                            className={cn(
-                              "text-xs tabular-nums font-medium",
-                              visitsDisplay.hasRangeData ? "text-slate-800" : "text-slate-400",
-                            )}
-                          >
-                            {visitsDisplay.primary}
-                          </p>
-                          <p className="text-[10px] text-slate-500">{visitsDisplay.secondary}</p>
-                          {offerCount > 0 && visitsDisplay.hasRangeData && (
-                            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
-                              <div
-                                className="h-full rounded-full bg-violet-500 transition-all"
-                                style={{ width: `${Math.min(100, monitoring.targetPct)}%` }}
-                              />
-                            </div>
-                          )}
-                        </div>
-                        {visitsDisplay.hasRangeData && (
-                          <Badge
-                            variant="outline"
-                            className={cn("shrink-0 text-[9px] font-semibold", pacingBadgeClass(pacing.pacing))}
-                          >
-                            {pacing.label}
-                          </Badge>
-                        )}
-                      </div>
+                    <TableCell className="py-3 text-right text-sm tabular-nums text-slate-800">
+                      {visits.toLocaleString()}
                     </TableCell>
                     <TableCell className="py-3 text-right text-sm tabular-nums text-slate-700">
-                      {offerCount > 0 ? offerCount.toLocaleString() : "Missing offer count"}
-                    </TableCell>
-                    <TableCell
-                      className={cn(
-                        "py-3 text-right text-sm font-semibold tabular-nums",
-                        metricToneClass(metricTone(roi, "roi")),
-                      )}
-                    >
-                      {fmtPct(roi)}
+                      {conv == null ? "—" : conv.toLocaleString()}
                     </TableCell>
                     <TableCell
                       className={cn(
@@ -320,13 +321,28 @@ export function LiveCampaignsSummaryTable({
                     >
                       {profit == null ? "—" : fmtMoney(profit)}
                     </TableCell>
+                    <TableCell
+                      className={cn(
+                        "py-3 text-right text-sm font-semibold tabular-nums",
+                        metricToneClass(metricTone(roi, "roi")),
+                      )}
+                    >
+                      {fmtPct(roi)}
+                    </TableCell>
                     <TableCell className="py-3 text-right text-sm tabular-nums text-slate-700">
-                      {conv == null ? "—" : conv.toLocaleString()}
+                      {offerCount > 0 ? (
+                        offerCount.toLocaleString()
+                      ) : (
+                        <Badge variant="outline" className="text-[10px] font-semibold text-slate-700">
+                          Missing
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell className="py-3">
                       <Badge
                         variant="outline"
-                        className={cn("text-[11px] font-semibold", summaryHealthBadgeClass(health.status))}
+                        className={cn("max-w-full truncate text-[10px] font-semibold", summaryHealthBadgeClass(health.status))}
+                        title={health.label}
                       >
                         {health.label}
                       </Badge>
