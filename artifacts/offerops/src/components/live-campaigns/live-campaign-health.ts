@@ -15,9 +15,13 @@ export type RangeMetricSnapshot = {
 
 export type SummaryHealthStatus =
   | "healthy"
+  | "missing_offer_count"
   | "needs_traffic"
   | "no_data"
   | "losing"
+  | "behind_target"
+  | "off_target"
+  | "on_target"
   | "winner_candidate"
   | "watch";
 
@@ -29,8 +33,12 @@ export type SummaryHealth = {
 
 const HEALTH_LABELS: Record<SummaryHealthStatus, string> = {
   healthy: "Healthy",
+  missing_offer_count: "Missing offer count",
   needs_traffic: "Needs Traffic",
   no_data: "No Data",
+  behind_target: "Behind target",
+  off_target: "Off target",
+  on_target: "On target",
   losing: "Losing",
   winner_candidate: "Winner Candidate",
   watch: "Watch",
@@ -45,6 +53,14 @@ export function summaryHealthBadgeClass(status: SummaryHealthStatus): string {
   switch (status) {
     case "healthy":
       return `${base} border-emerald-300 bg-emerald-50 text-emerald-800 ring-emerald-200/80`;
+    case "on_target":
+      return `${base} border-emerald-300 bg-emerald-50 text-emerald-800 ring-emerald-200/80`;
+    case "behind_target":
+      return `${base} border-amber-300 bg-amber-50 text-amber-900 ring-amber-200/80`;
+    case "off_target":
+      return `${base} border-orange-300 bg-orange-50 text-orange-900 ring-orange-200/80`;
+    case "missing_offer_count":
+      return `${base} border-slate-300 bg-slate-100 text-slate-700 ring-slate-200/80`;
     case "winner_candidate":
       return `${base} border-violet-300 bg-violet-50 text-violet-800 ring-violet-200/80`;
     case "losing":
@@ -73,6 +89,37 @@ export function deriveSummaryHealth(
 ): SummaryHealth {
   const monitoring = evaluateCampaignMonitoringHealth(campaign, offerCount, rules);
   const lifetimeVisits = campaign.clicks ?? 0;
+  if (offerCount <= 0) {
+    return {
+      status: "missing_offer_count",
+      label: HEALTH_LABELS.missing_offer_count,
+      reason: "Set Offer count to enable visits-per-offer pacing.",
+    };
+  }
+  const visitsPerOffer = lifetimeVisits / offerCount;
+  const targetVisitsPerOffer = rules.testing.visitsPerOffer;
+  const pacingRatio = targetVisitsPerOffer > 0 ? (visitsPerOffer / targetVisitsPerOffer) : 0;
+  if (pacingRatio >= 1) {
+    return {
+      status: "on_target",
+      label: HEALTH_LABELS.on_target,
+      reason: "Visits per offer reached target.",
+    };
+  }
+  if (pacingRatio >= 0.7) {
+    return {
+      status: "behind_target",
+      label: HEALTH_LABELS.behind_target,
+      reason: "Visits per offer is below target pace.",
+    };
+  }
+  if (pacingRatio > 0) {
+    return {
+      status: "off_target",
+      label: HEALTH_LABELS.off_target,
+      reason: "Visits per offer is significantly below target.",
+    };
+  }
 
   if (!range || (range.cost === 0 && range.revenue === 0 && range.visits === 0)) {
     return {
@@ -101,6 +148,13 @@ export function deriveSummaryHealth(
 
   if (roi != null && roi > 0 && range.conversions > 0) {
     if (monitoring.health === "winner_candidate" || roi >= 15) {
+      if (campaign.campaignPurpose === "working") {
+        return {
+          status: "healthy",
+          label: HEALTH_LABELS.healthy,
+          reason: "Working campaign is profitable in selected range.",
+        };
+      }
       return {
         status: "winner_candidate",
         label: HEALTH_LABELS.winner_candidate,
@@ -136,7 +190,7 @@ export function deriveTrafficPacing(
   targetPct: number,
   offerCount: number,
 ): { pacing: TrafficPacing; label: string } {
-  if (offerCount <= 0) return { pacing: "no_target", label: "No Target" };
+  if (offerCount <= 0) return { pacing: "no_target", label: "Missing offer count" };
   if (visits === 0) return { pacing: "no_traffic", label: "No Traffic" };
   if (targetPct >= 75) return { pacing: "good", label: "Good" };
   return { pacing: "low", label: "Low" };

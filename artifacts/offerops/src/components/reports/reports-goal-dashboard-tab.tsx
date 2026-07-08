@@ -56,12 +56,14 @@ function GoalPerformanceCard({
   metric,
   current,
   target,
+  monthKey,
   selected,
   onSelect,
 }: {
   metric: GoalMetric;
   current: number;
   target: number;
+  monthKey: string;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -70,7 +72,7 @@ function GoalPerformanceCard({
   const unitLabel = unitForMetric(metric);
   const pct = target > 0 ? progressPct(current, target) : 0;
   const remaining = target > 0 ? gapRemaining(current, target) : 0;
-  const pace = evaluatePace(current, target);
+  const pace = evaluatePace(current, target, monthKey);
 
   return (
     <button
@@ -293,6 +295,7 @@ export function ReportsGoalDashboardTab({
               metric={metric}
               current={m.current}
               target={m.target}
+              monthKey={monthKey}
               selected={selectedMetric === metric}
               onSelect={() => setSelectedMetric(metric)}
             />

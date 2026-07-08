@@ -485,13 +485,60 @@ function GoLiveForm({ task, onDone, onCancel }: { task: TodoTask; onDone: () => 
     wsQueryOpts(activeWorkspaceId, getListCampaignsQueryKey(listParams ?? { workspace_id: 0, batch_id: 0 }), { enabled: !!listParams }),
   );
   const goLive = useCampaignsGoLive();
+  const [offerCount, setOfferCount] = useState("");
+  const [offerCountKnown, setOfferCountKnown] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadBatchOfferCount() {
+      if (!batchId) return;
+      try {
+        const batch = await authedJson<{ numberOfOffers?: number | null }>(`/api/testing-batches/${batchId}`);
+        if (cancelled) return;
+        const existingOffers = Number(batch?.numberOfOffers ?? 0);
+        if (Number.isFinite(existingOffers) && existingOffers > 0) {
+          setOfferCountKnown(existingOffers);
+          setOfferCount(String(existingOffers));
+        } else {
+          setOfferCountKnown(null);
+          setOfferCount("");
+        }
+      } catch {
+        if (!cancelled) {
+          setOfferCountKnown(null);
+          setOfferCount("");
+        }
+      }
+    }
+    void loadBatchOfferCount();
+    return () => {
+      cancelled = true;
+    };
+  }, [batchId]);
 
   async function submit() {
     if (!batchId) {
       toast({ title: "No batch linked", variant: "destructive" });
       return;
     }
+    const parsedOffers = Number(offerCount);
+    if (!Number.isInteger(parsedOffers) || parsedOffers <= 0) {
+      toast({
+        title: "Offer count is required",
+        description: "Set a positive offer count before moving campaigns live.",
+        variant: "destructive",
+      });
+      return;
+    }
     try {
+      // Batch go-live requires a positive batch-level offer count so
+      // downstream traffic-per-offer pacing is defined.
+      if (offerCountKnown == null || offerCountKnown !== parsedOffers) {
+        await authedJson(`/api/testing-batches/${batchId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ numberOfOffers: parsedOffers }),
+        });
+      }
       // Phase-5 atomic go-live: stamps batch.live_at and flips both
       // campaigns ready->live in one transaction. The drawer then
       // PATCHes the task DONE; the engine TaskCompleted GO_LIVE rule
@@ -527,6 +574,18 @@ function GoLiveForm({ task, onDone, onCancel }: { task: TodoTask; onDone: () => 
             </div>
           ))
         )}
+      </div>
+      <div>
+        <Label className="text-xs">Offer count *</Label>
+        <Input
+          className="mt-1 h-9"
+          value={offerCount}
+          onChange={(e) => setOfferCount(e.target.value.replace(/[^\d]/g, ""))}
+          placeholder="e.g. 3"
+        />
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          Required before go-live so visits-per-offer pacing can be computed.
+        </p>
       </div>
       <div className="flex justify-end gap-2 pt-2">
         <Button variant="outline" size="sm" onClick={onCancel} disabled={goLive.isPending}>Cancel</Button>

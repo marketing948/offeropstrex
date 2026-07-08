@@ -32,6 +32,7 @@ export type CreateProductionLiveCampaignInput = {
   geoId?: number | null;
   geo?: string | null;
   parentCampaignId?: number | null;
+  offerCount?: number | null;
   notes?: string | null;
 };
 
@@ -47,6 +48,7 @@ export type ResolvedProductionLiveCampaign = {
   geoId: number;
   geo: string;
   parentCampaignId: number | null;
+  offerCount: number | null;
   notes: string | null;
 };
 
@@ -139,6 +141,7 @@ export async function resolveProductionLiveCampaign(
       geoId: parent.geoId,
       geo: parent.geo ?? "",
       parentCampaignId: parent.id,
+      offerCount: input.offerCount ?? null,
       notes: input.notes?.trim() || null,
     };
   }
@@ -226,6 +229,7 @@ export async function resolveProductionLiveCampaign(
     geoId: geoRow.id,
     geo: normalizeGeoCode(geoRow.code),
     parentCampaignId: null,
+    offerCount: input.offerCount ?? null,
     notes: input.notes?.trim() || null,
   };
 }
@@ -233,23 +237,26 @@ export async function resolveProductionLiveCampaign(
 export async function assertProductionLiveCampaignPrerequisites(
   input: CreateProductionLiveCampaignInput,
   client: Db = db,
+  options?: { skipVoluumUniqCheck?: boolean; allowExistingCampaignId?: number | null },
 ): Promise<ResolvedProductionLiveCampaign> {
   const resolved = await resolveProductionLiveCampaign(input, client);
 
-  const [existingVoluum] = await client
-    .select({ id: campaignsTable.id })
-    .from(campaignsTable)
-    .where(
-      and(
-        eq(campaignsTable.workspaceId, resolved.workspaceId),
-        eq(campaignsTable.voluumCampaignId, resolved.voluumCampaignId),
-      ),
-    )
-    .limit(1);
-  if (existingVoluum) {
-    throw new Error(
-      `Voluum campaign ID "${resolved.voluumCampaignId}" is already linked to another campaign in this workspace`,
-    );
+  if (!options?.skipVoluumUniqCheck) {
+    const [existingVoluum] = await client
+      .select({ id: campaignsTable.id })
+      .from(campaignsTable)
+      .where(
+        and(
+          eq(campaignsTable.workspaceId, resolved.workspaceId),
+          eq(campaignsTable.voluumCampaignId, resolved.voluumCampaignId),
+        ),
+      )
+      .limit(1);
+    if (existingVoluum) {
+      throw new Error(
+        `Voluum campaign ID "${resolved.voluumCampaignId}" is already linked to another campaign in this workspace`,
+      );
+    }
   }
 
   if (resolved.campaignPurpose === "working") {
@@ -269,6 +276,9 @@ export async function assertProductionLiveCampaignPrerequisites(
       )
       .limit(1);
     if (existingSlot) {
+      if (options?.allowExistingCampaignId != null && existingSlot.id === options.allowExistingCampaignId) {
+        return resolved;
+      }
       throw new Error(
         "A live working campaign already exists for this affiliate network, GEO, traffic source, and platform",
       );
@@ -306,6 +316,7 @@ export async function insertProductionLiveCampaign(
       affiliateNetworkId: resolved.affiliateNetworkId,
       geoId: resolved.geoId,
       geo: resolved.geo,
+      offerCount: resolved.offerCount,
       notes: resolved.notes,
       createdByEmployeeId,
       liveStartedAt: now,

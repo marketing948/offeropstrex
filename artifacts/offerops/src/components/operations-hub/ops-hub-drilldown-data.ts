@@ -71,6 +71,7 @@ export type OpsCampaignRow = {
   roi?: number | string | null;
   conversions?: number | null;
   clicks?: number | null;
+  offerCount?: number | null;
   liveStartedAt?: string | null;
   updatedAt?: string | null;
 };
@@ -381,6 +382,7 @@ export function buildGoalCards(
   campaigns: OpsCampaignRow[],
   batches: TestingBatch[],
   networkGroups: NetworkGroup[],
+  monthKey: string,
   peGoals: {
     revenue: { current: number; target: number };
     testing: { current: number; target: number };
@@ -403,7 +405,7 @@ export function buildGoalCards(
       actual: revenueActual,
       target: revenueT.target,
       gap: gapRemaining(revenueActual, revenueT.target),
-      pace: evaluatePace(revenueActual, revenueT.target),
+      pace: evaluatePace(revenueActual, revenueT.target, monthKey),
       format: "currency",
       supportsGeoDrilldown: true,
       networkRows: networkRowsForGoal(
@@ -421,7 +423,7 @@ export function buildGoalCards(
       actual: testingCount,
       target: testingT.target,
       gap: gapRemaining(testingCount, testingT.target),
-      pace: evaluatePace(testingCount, testingT.target),
+      pace: evaluatePace(testingCount, testingT.target, monthKey),
       format: "count",
       supportsGeoDrilldown: false,
       networkRows: networkRowsForGoal(
@@ -439,7 +441,7 @@ export function buildGoalCards(
       actual: workingCount,
       target: workingT.target,
       gap: gapRemaining(workingCount, workingT.target),
-      pace: evaluatePace(workingCount, workingT.target),
+      pace: evaluatePace(workingCount, workingT.target, monthKey),
       format: "count",
       supportsGeoDrilldown: false,
       networkRows: networkRowsForGoal(
@@ -902,6 +904,7 @@ export function useOpsDrilldownData(
   const cfg = cfgRaw ?? DEFAULT_CONFIG;
   const {
     isWorker,
+    monthKey,
     peGoals,
     isLoading: peGoalsLoading,
   } = useMonthlyGoalsScope(scopeEmployeeId);
@@ -1012,8 +1015,8 @@ export function useOpsDrilldownData(
         testing: { current: 0, target: 0 },
         working: { current: 0, target: 0 },
       } as const);
-    return buildGoalCards(mtdRevenue, enrichedCampaigns, batches, networkGroups, pe);
-  }, [mtdRevenue, enrichedCampaigns, batches, networkGroups, workerPe]);
+    return buildGoalCards(mtdRevenue, enrichedCampaigns, batches, networkGroups, monthKey, pe);
+  }, [mtdRevenue, enrichedCampaigns, batches, networkGroups, monthKey, workerPe]);
 
   const hasAnyActivity = networkGroups.some((g) => g.hasActivity) || mtdRevenue > 0;
 

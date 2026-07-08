@@ -20,6 +20,7 @@ import {
   deriveCampaignSignals,
   deriveHealthStatus,
 } from "@/lib/campaign-review/heuristics";
+import { deriveSummaryHealth } from "@/components/live-campaigns/live-campaign-health";
 import type { OpsCampaignRow } from "@/components/operations-hub/ops-hub-drilldown-data";
 import {
   ACTIVE_TESTING_STATUSES,
@@ -87,7 +88,10 @@ export type TestingOfferRow = {
 export type WorkingHighlight =
   | "Scaling Well"
   | "Performance Dropping"
-  | "No Recent Conversions";
+  | "No Recent Conversions"
+  | "Missing offer count"
+  | "Behind target"
+  | "Off target";
 
 export type WorkingCampaignRow = {
   id: number;
@@ -233,6 +237,7 @@ function classifyWorkingRow(
   const conversions = num(c.conversions);
   const visits = num(c.clicks);
   const daysLive = daysSince(c.liveStartedAt ?? null);
+  const offerCount = Number(c.offerCount ?? 0);
 
   const signals = deriveCampaignSignals(
     {
@@ -257,6 +262,28 @@ function classifyWorkingRow(
     rules,
   );
   const health = signals.length === 0 ? "healthy" : deriveHealthStatus(signals);
+  const pacingHealth = deriveSummaryHealth(
+    null,
+    {
+      id: c.id ?? 0,
+      campaignName: c.campaignName ?? "Campaign",
+      batchId: null,
+      batchName: null,
+      employeeId: null,
+      employeeName: null,
+      platform: "ios",
+      campaignPurpose: c.campaignPurpose ?? "working",
+      status: c.status,
+      liveStartedAt: c.liveStartedAt ?? null,
+      clicks: visits,
+      conversions,
+      revenue,
+      cost,
+      roi,
+    },
+    offerCount,
+    rules,
+  );
 
   if (roi >= rules.scaling.minRoiPercentForPositiveSignal && conversions > 0) {
     highlights.push("Scaling Well");
@@ -272,10 +299,21 @@ function classifyWorkingRow(
   if (conversions === 0 || signals.some((s) => s.kind === "zero_conversions")) {
     highlights.push("No Recent Conversions");
   }
+  if (pacingHealth.status === "missing_offer_count") {
+    highlights.push("Missing offer count");
+  } else if (pacingHealth.status === "behind_target") {
+    highlights.push("Behind target");
+  } else if (pacingHealth.status === "off_target") {
+    highlights.push("Off target");
+  }
 
   const tags = tagsFromHighlights([], {
     ready_to_scale: highlights.includes("Scaling Well"),
-    requires_attention: highlights.includes("Performance Dropping"),
+    requires_attention:
+      highlights.includes("Performance Dropping")
+      || highlights.includes("Missing offer count")
+      || highlights.includes("Behind target")
+      || highlights.includes("Off target"),
     no_conversions: highlights.includes("No Recent Conversions"),
     target_reached:
       roi >= rules.scaling.minRoiPercentForPositiveSignal &&

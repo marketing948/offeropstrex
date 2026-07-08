@@ -13,11 +13,12 @@
 // CampaignStatusChanged → rule → executor.
 
 import { Router, type IRouter, type Response } from "express";
-import { and, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import {
   affiliateNetworksTable,
   db,
   campaignsTable,
+  campaignDailyMetricsTable,
   testingBatchesTable,
   workspaceTrafficSourcesTable,
   employeesTable,
@@ -91,6 +92,7 @@ const patchBodySchema = z.object({
   status: z.enum(VALID_STATUSES).optional(),
   /** Beta: manual visits/clicks for testing `live` campaigns; can trigger traffic-target winner review. */
   clicks: z.number().int().nonnegative().nullable().optional(),
+  offerCount: z.number().int().positive().nullable().optional(),
 });
 
 const productionLiveBodySchema = z
@@ -106,6 +108,9 @@ const productionLiveBodySchema = z
     geoId: z.number().int().positive().optional(),
     geo: z.string().trim().min(1).optional(),
     parentCampaignId: z.number().int().positive().optional(),
+    offerCount: z.number().int().positive().optional(),
+    overrideExistingCampaignId: z.number().int().positive().optional(),
+    confirmOverride: z.boolean().optional(),
     notes: z.string().nullable().optional(),
   })
   .superRefine((data, ctx) => {
@@ -147,6 +152,13 @@ const productionLiveBodySchema = z
         path: ["platform"],
       });
     }
+    if (data.offerCount == null) {
+      ctx.addIssue({
+        code: "custom",
+        message: "offerCount is required for working campaigns",
+        path: ["offerCount"],
+      });
+    }
   });
 
 function serialize(row: typeof campaignsTable.$inferSelect) {
@@ -155,6 +167,18 @@ function serialize(row: typeof campaignsTable.$inferSelect) {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+function parseLiveCampaignSort(raw: unknown): { col: "visits" | "revenue" | "live_started_at"; dir: "asc" | "desc" } {
+  const fallback = { col: "visits" as const, dir: "desc" as const };
+  if (typeof raw !== "string" || raw.trim() === "") return fallback;
+  const [colRaw, dirRaw] = raw.split(":");
+  const col = (colRaw ?? "").trim().toLowerCase();
+  const dir = (dirRaw ?? "desc").trim().toLowerCase() === "asc" ? "asc" : "desc";
+  if (col === "visits" || col === "revenue" || col === "live_started_at") {
+    return { col, dir };
+  }
+  return fallback;
 }
 
 function parsePositiveIntegerQuery(
@@ -323,7 +347,7 @@ router.patch("/campaigns/:id", async (req, res): Promise<void> => {
     });
     return;
   }
-  const { campaignName, trafficSourceId, campaignUrl, status, clicks: clicksPatch } = parsed.data;
+  const { campaignName, trafficSourceId, campaignUrl, status, clicks: clicksPatch, offerCount } = parsed.data;
   const fieldUpdates: Partial<typeof campaignsTable.$inferInsert> = {
     updatedAt: new Date(),
   };
@@ -331,12 +355,14 @@ router.patch("/campaigns/:id", async (req, res): Promise<void> => {
   if (trafficSourceId !== undefined) fieldUpdates.trafficSourceId = trafficSourceId;
   if (campaignUrl !== undefined) fieldUpdates.campaignUrl = campaignUrl;
   if (clicksPatch !== undefined) fieldUpdates.clicks = clicksPatch;
+  if (offerCount !== undefined) fieldUpdates.offerCount = offerCount;
 
   const hasFieldUpdates =
     campaignName !== undefined
     || trafficSourceId !== undefined
     || campaignUrl !== undefined
-    || clicksPatch !== undefined;
+    || clicksPatch !== undefined
+    || offerCount !== undefined;
   const statusChanging = status !== undefined && status !== existing.status;
 
   if (existing.campaignPurpose !== "testing" && statusChanging) {
@@ -550,6 +576,7 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
   if (res.headersSent) return;
   const dateTo = parseDateQuery(req.query["date_to"], "date_to", res);
   if (res.headersSent) return;
+  const sort = parseLiveCampaignSort(req.query["sort"]);
   const limit = parseLimit(req.query["limit"], res);
   if (limit === null) return;
   const offset = parseOffset(req.query["offset"], res);
@@ -636,6 +663,21 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
     eq(campaignsTable.batchId, testingBatchesTable.id),
     eq(testingBatchesTable.workspaceId, wsId),
   );
+  const metricsWhere = [
+    eq(campaignDailyMetricsTable.workspaceId, wsId),
+  ];
+  if (dateFrom) metricsWhere.push(gte(campaignDailyMetricsTable.metricDate, dateFrom));
+  if (dateTo) metricsWhere.push(lte(campaignDailyMetricsTable.metricDate, dateTo));
+  const metricsByCampaign = db
+    .select({
+      campaignId: campaignDailyMetricsTable.campaignId,
+      visits: sql<number>`coalesce(sum(${campaignDailyMetricsTable.visits}), 0)::int`.as("visits"),
+      revenue: sql<number>`coalesce(sum(${campaignDailyMetricsTable.revenue}), 0)::numeric`.as("revenue"),
+    })
+    .from(campaignDailyMetricsTable)
+    .where(and(...metricsWhere))
+    .groupBy(campaignDailyMetricsTable.campaignId)
+    .as("metrics_by_campaign");
 
   const where = and(...conditions);
   const [totalRow] = await db
@@ -680,8 +722,22 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
         eq(affiliateNetworksTable.workspaceId, wsId),
       ),
     )
+    .leftJoin(metricsByCampaign, eq(metricsByCampaign.campaignId, campaignsTable.id))
     .where(where)
-    .orderBy(sql`${campaignsTable.liveStartedAt} desc nulls last`, desc(campaignsTable.id))
+    .orderBy(
+      sort.col === "visits"
+        ? (sort.dir === "asc"
+          ? sql`coalesce(${metricsByCampaign.visits}, 0) asc nulls last`
+          : sql`coalesce(${metricsByCampaign.visits}, 0) desc nulls last`)
+        : sort.col === "revenue"
+          ? (sort.dir === "asc"
+            ? sql`coalesce(${metricsByCampaign.revenue}, 0) asc nulls last`
+            : sql`coalesce(${metricsByCampaign.revenue}, 0) desc nulls last`)
+          : (sort.dir === "asc"
+            ? sql`${campaignsTable.liveStartedAt} asc nulls last`
+            : sql`${campaignsTable.liveStartedAt} desc nulls last`),
+      desc(campaignsTable.id),
+    )
     .limit(limit)
     .offset(offset);
 
@@ -696,6 +752,7 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
       batchAffiliateNetwork: row.batchAffiliateNetwork,
       employeeName: row.employeeName,
       trafficSourceName: row.trafficSourceName,
+      sortContext: sort.col,
     })),
     pagination: {
       limit,
@@ -724,33 +781,133 @@ router.post("/production-live-campaigns", async (req, res): Promise<void> => {
   const creatorEmployeeId = access.employee.id;
 
   try {
-    const resolved = await assertProductionLiveCampaignPrerequisites(body);
-    const row = await insertProductionLiveCampaign(resolved, creatorEmployeeId);
+    const [existingVoluum] = await db
+      .select({
+        id: campaignsTable.id,
+        workspaceId: campaignsTable.workspaceId,
+        batchId: campaignsTable.batchId,
+        campaignName: campaignsTable.campaignName,
+        campaignPurpose: campaignsTable.campaignPurpose,
+        status: campaignsTable.status,
+        liveStartedAt: campaignsTable.liveStartedAt,
+        offerCount: campaignsTable.offerCount,
+        createdAt: campaignsTable.createdAt,
+        createdByEmployeeId: campaignsTable.createdByEmployeeId,
+        employeeName: employeesTable.name,
+        affiliateNetworkName: affiliateNetworksTable.name,
+        geo: campaignsTable.geo,
+      })
+      .from(campaignsTable)
+      .leftJoin(employeesTable, eq(campaignsTable.createdByEmployeeId, employeesTable.id))
+      .leftJoin(
+        affiliateNetworksTable,
+        and(
+          eq(campaignsTable.affiliateNetworkId, affiliateNetworksTable.id),
+          eq(affiliateNetworksTable.workspaceId, body.workspaceId),
+        ),
+      )
+      .where(
+        and(
+          eq(campaignsTable.workspaceId, body.workspaceId),
+          eq(campaignsTable.voluumCampaignId, body.voluumCampaignId),
+        ),
+      )
+      .limit(1);
+
+    if (existingVoluum) {
+      const isAdmin = access.employee.role === "admin";
+      const ownedByRequester = existingVoluum.createdByEmployeeId === creatorEmployeeId;
+      const ownerless = existingVoluum.createdByEmployeeId == null;
+      const isBatchLinked = existingVoluum.batchId != null;
+      const canOverride = isAdmin || (!isBatchLinked && (ownedByRequester || ownerless));
+      const overrideRequiresAdmin = isBatchLinked || (!isAdmin && !(ownedByRequester || ownerless));
+      const strongReason = isBatchLinked
+        ? "Existing campaign is batch-linked and requires admin override."
+        : "You can only override campaigns you own or ownerless campaigns.";
+
+      if (!body.confirmOverride || body.overrideExistingCampaignId !== existingVoluum.id || !canOverride) {
+        res.status(409).json({
+          code: "CAMPAIGN_ALREADY_LINKED",
+          message: `Voluum campaign ID "${body.voluumCampaignId}" is already linked to another campaign in this workspace`,
+          existingCampaign: {
+            id: existingVoluum.id,
+            name: existingVoluum.campaignName,
+            employee: existingVoluum.employeeName,
+            affiliateNetwork: existingVoluum.affiliateNetworkName,
+            geo: existingVoluum.geo,
+            status: existingVoluum.status,
+            campaignPurpose: existingVoluum.campaignPurpose,
+            liveStartedAt: existingVoluum.liveStartedAt?.toISOString() ?? null,
+            offerCount: existingVoluum.offerCount,
+            batchId: existingVoluum.batchId,
+            createdAt: existingVoluum.createdAt.toISOString(),
+          },
+          canOverride,
+          overrideRequiresAdmin,
+          reason: canOverride ? undefined : strongReason,
+        });
+        return;
+      }
+    }
+
+    const resolved = await assertProductionLiveCampaignPrerequisites(body, db, {
+      skipVoluumUniqCheck: !!existingVoluum,
+      allowExistingCampaignId: existingVoluum?.id ?? null,
+    });
+
+    const row = existingVoluum
+      ? (await db
+          .update(campaignsTable)
+          .set({
+            campaignName: resolved.campaignName,
+            campaignPurpose: resolved.campaignPurpose,
+            platform: resolved.platform,
+            trafficSourceId: resolved.trafficSourceId,
+            campaignUrl: resolved.campaignUrl,
+            affiliateNetworkId: resolved.affiliateNetworkId,
+            geoId: resolved.geoId,
+            geo: resolved.geo,
+            parentCampaignId: resolved.parentCampaignId,
+            offerCount: resolved.offerCount,
+            notes: resolved.notes,
+            status: "live",
+            createdByEmployeeId: creatorEmployeeId,
+            liveStartedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(campaignsTable.id, existingVoluum.id))
+          .returning())[0]!
+      : await insertProductionLiveCampaign(resolved, creatorEmployeeId);
 
     await recordOperationalEvent({
       workspaceId: body.workspaceId,
       entityType: "campaign",
       entityId: row.id,
-      eventType: "PRODUCTION_LIVE_CAMPAIGN_CREATED",
+      eventType: existingVoluum
+        ? "manual_campaign_override_existing_voluum_id"
+        : "PRODUCTION_LIVE_CAMPAIGN_CREATED",
       actorType: "employee",
       actorId: creatorEmployeeId,
       source: "routes.campaigns",
       payloadJson: {
+        action: existingVoluum ? "override_existing" : "create",
         campaignPurpose: resolved.campaignPurpose,
         platform: resolved.platform,
         trafficSourceId: resolved.trafficSourceId,
         affiliateNetworkId: resolved.affiliateNetworkId,
         geoId: resolved.geoId,
+        offerCount: resolved.offerCount,
         voluumCampaignId: row.voluumCampaignId,
         parentCampaignId: resolved.parentCampaignId,
         createdByEmployeeId: creatorEmployeeId,
         creatorRole: access.employee.role,
+        existingCampaignId: existingVoluum?.id ?? null,
       },
     });
 
     void appendOperationalActivity(db, {
       workspaceId: body.workspaceId,
-      eventType: "campaign_created",
+      eventType: existingVoluum ? "campaign_updated" : "campaign_created",
       entityType: "campaign",
       entityId: row.id,
       actorEmployeeId: creatorEmployeeId,
@@ -760,10 +917,18 @@ router.post("/production-live-campaigns", async (req, res): Promise<void> => {
           platform: row.platform,
         }),
       ),
-      metadata: { campaignPurpose: resolved.campaignPurpose },
+      metadata: {
+        campaignPurpose: resolved.campaignPurpose,
+        offerCount: resolved.offerCount,
+        overrideExistingCampaignId: existingVoluum?.id ?? null,
+      },
     });
 
-    res.status(201).json(serialize(row));
+    res.status(existingVoluum ? 200 : 201).json({
+      ...serialize(row),
+      overrideApplied: !!existingVoluum,
+      overriddenCampaignId: existingVoluum?.id ?? null,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const code = (err as { code?: string; cause?: { code?: string } })?.code
@@ -783,6 +948,7 @@ router.post("/production-live-campaigns", async (req, res): Promise<void> => {
       message === "geoId is required for working campaigns" ||
       message === "trafficSourceId is required for working campaigns" ||
       message === "platform is required for working campaigns" ||
+      message === "offerCount is required for working campaigns" ||
       message === "trafficSourceId does not belong to this workspace" ||
       message === "affiliateNetworkId does not belong to this workspace" ||
       message === "geoId does not belong to this workspace" ||
