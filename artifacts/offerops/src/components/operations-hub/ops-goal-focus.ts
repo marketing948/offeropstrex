@@ -33,6 +33,14 @@ export type GoalCardModel = {
   supportsGeoDrilldown?: boolean;
 };
 
+export type MissionCategory =
+  | "testing"
+  | "working"
+  | "scaling"
+  | "fixes"
+  | "revenue"
+  | "admin";
+
 export type FocusItemContext = {
   network?: string;
   geo?: string;
@@ -55,6 +63,14 @@ export type FocusItemContext = {
   employeeName?: string;
   allocationLines?: string[];
   campaignIds?: number[];
+  /** Daily Mission Board — actionable units for this row (capped). */
+  dailyTargetUnits?: number;
+  completedTodayUnits?: number;
+  missionCategory?: MissionCategory;
+  completionSource?: "createdAt" | "updatedAt" | "none" | "advisory";
+  completionLabel?: string;
+  /** False when we cannot reliably measure today-completion. */
+  canTrackCompletion?: boolean;
 };
 
 export type FocusItem = {
@@ -78,6 +94,7 @@ export type OpsCampaignRowLite = {
   offerCount?: number | null;
   liveStartedAt?: string | null;
   createdAt?: string | null;
+  updatedAt?: string | null;
   revenue?: number | string | null;
   cost?: number | string | null;
   roi?: number | string | null;
@@ -296,13 +313,9 @@ export function buildTestingFocusAction(
       ? `${alloc[0].network} / ${alloc[0].geo}`
       : alloc[0].network
     : null;
-  const text = who
-    ? `${who} is ${formatOpsMetric(behindUnits, "count")} testing campaign${behindUnits === 1 ? "" : "s"} behind pace${topWhere ? ` on ${topWhere}` : ""}.${
-        lines.length > 1 ? `\n${lines.map((l) => `• ${l}`).join("\n")}` : ""
-      }`
-    : lines.length > 0
-      ? `Create ${catchUp} testing campaign${catchUp === 1 ? "" : "s"} today:\n${lines.map((l) => `• ${l}`).join("\n")}`
-      : `Create ${catchUp} testing campaign${catchUp === 1 ? "" : "s"} today to get back on pace.`;
+  const primarySentence = who
+    ? `${who} needs ${catchUp} testing campaign${catchUp === 1 ? "" : "s"}${topWhere ? ` on ${topWhere}` : ""}`
+    : `Create ${catchUp} testing campaign${catchUp === 1 ? "" : "s"} today${topWhere ? ` for ${topWhere}` : ""}`;
 
   return {
     score,
@@ -310,14 +323,12 @@ export function buildTestingFocusAction(
       tier: "primary",
       emoji: "🧪",
       title: "Testing focus",
-      text,
-      reason: who
-        ? `Intervention: ${who} needs testing catch-up.`
-        : `You are ${formatOpsMetric(behindUnits, "count")} testing campaigns behind pace.`,
+      text: primarySentence,
+      reason: lines.length > 1 ? lines.map((l) => `• ${l}`).join("\n") : undefined,
       context: {
         kind: "testing",
         actionType: "testing_action",
-        actionLabel: "Create testing campaigns",
+        actionLabel: "Create campaigns",
         todayTarget: formatOpsMetric(card.pace.dailyExpected, "count"),
         currentValue: formatOpsMetric(card.actual, "count"),
         expectedByNow: formatOpsMetric(card.pace.expectedByNow, "count"),
@@ -330,6 +341,8 @@ export function buildTestingFocusAction(
         suggestedAction: "Open Testing Batches and create the allocated network/GEO tests.",
         network: alloc[0]?.network,
         geo: alloc[0]?.geo ?? undefined,
+        dailyTargetUnits: catchUp,
+        missionCategory: "testing",
       },
     },
   };
@@ -355,10 +368,8 @@ export function buildWorkingFocusAction(
       : alloc[0].network
     : null;
   const text = who
-    ? `${who} is ${formatOpsMetric(behindUnits, "count")} working campaign${behindUnits === 1 ? "" : "s"} behind pace${topWhere ? ` on ${topWhere}` : ""}.`
-    : lines.length > 0
-      ? `Move/launch ${catchUp} working campaign${catchUp === 1 ? "" : "s"}:\n${lines.map((l) => `• ${l}`).join("\n")}`
-      : `Move/launch ${catchUp} working campaign${catchUp === 1 ? "" : "s"} to get back on pace.`;
+    ? `${who} needs ${catchUp} working campaign${catchUp === 1 ? "" : "s"}${topWhere ? ` on ${topWhere}` : ""}`
+    : `Launch/move ${catchUp} working campaign${catchUp === 1 ? "" : "s"}${topWhere ? ` for ${topWhere}` : ""}`;
 
   return {
     score: behindUnits * 8 + (alloc[0]?.score ?? 0),
@@ -367,13 +378,11 @@ export function buildWorkingFocusAction(
       emoji: "📡",
       title: "Working focus",
       text,
-      reason: who
-        ? `Intervention: ${who} needs working catch-up.`
-        : `You are ${formatOpsMetric(behindUnits, "count")} working campaigns behind pace.`,
+      reason: lines.length > 1 ? lines.map((l) => `• ${l}`).join("\n") : undefined,
       context: {
         kind: "working",
         actionType: "working_action",
-        actionLabel: "Launch/move working campaigns",
+        actionLabel: "Launch/move campaigns",
         todayTarget: formatOpsMetric(card.pace.dailyExpected, "count"),
         currentValue: formatOpsMetric(card.actual, "count"),
         expectedByNow: formatOpsMetric(card.pace.expectedByNow, "count"),
@@ -386,6 +395,8 @@ export function buildWorkingFocusAction(
         suggestedAction: "Promote tested winners to working live campaigns.",
         network: alloc[0]?.network,
         geo: alloc[0]?.geo ?? undefined,
+        dailyTargetUnits: catchUp,
+        missionCategory: "working",
       },
     },
   };
@@ -430,8 +441,8 @@ export function buildRevenueRescueAction(
       emoji: "💵",
       title: "Revenue rescue",
       text: who
-        ? `${who} revenue is severely behind pace on ${where}.`
-        : `Revenue is behind pace on ${where}. Review top profit/ROI campaigns.`,
+        ? `${who} revenue is severely behind pace on ${where}`
+        : `Revenue is behind pace on ${where}`,
       reason: `Pace ${card.pace.paceVariancePct.toFixed(1)}% vs expected (${behindAmt} gap).`,
       context: {
         kind: "revenue",
@@ -448,6 +459,11 @@ export function buildRevenueRescueAction(
         network: top?.network,
         geo: top?.geo ?? undefined,
         suggestedAction: "Open Live Campaigns and prioritize highest profit/ROI rows.",
+        dailyTargetUnits: 1,
+        missionCategory: "revenue",
+        canTrackCompletion: false,
+        completionSource: "advisory",
+        completionLabel: "Advisory — check revenue drivers",
       },
     },
   };
@@ -472,9 +488,9 @@ export function buildMissingOfferCountAction(
       emoji: "🧩",
       title: "Campaign health",
       text: who
-        ? `${who} has ${missing.length} campaign${missing.length === 1 ? "" : "s"} missing offer count.`
-        : `Review ${missing.length} campaign${missing.length === 1 ? "" : "s"} missing offer count.`,
-      reason: "Offer count is required for visits-per-offer pacing and Action Required.",
+        ? `${who} has ${missing.length} campaign${missing.length === 1 ? "" : "s"} missing offer count`
+        : `Add offer count to ${missing.length} campaign${missing.length === 1 ? "" : "s"}`,
+      reason: "Required for visits-per-offer pacing.",
       context: {
         kind: "action",
         actionType: "campaign_health",
@@ -487,6 +503,8 @@ export function buildMissingOfferCountAction(
         employeeName: opts.employeeName ?? undefined,
         navigationPath: "/live-campaigns",
         suggestedAction: "Open Live Campaigns and set offer count on each flagged row.",
+        dailyTargetUnits: missing.length,
+        missionCategory: "fixes",
       },
     },
   };
@@ -517,13 +535,13 @@ export function buildScalingOpportunityAction(
       emoji: "📈",
       title: "Scaling opportunities",
       text: who
-        ? `${who} has ${scaling.length} scaling opportunit${scaling.length === 1 ? "y" : "ies"} ready for review.`
-        : `Review ${scaling.length} scaling opportunit${scaling.length === 1 ? "y" : "ies"} with positive ROI.`,
-      reason: "Working campaigns live ≥2 days with profit > 0 and ROI > 0.",
+        ? `${who} has ${scaling.length} scaling opportunit${scaling.length === 1 ? "y" : "ies"} ready`
+        : `Review ${scaling.length} scaling opportunit${scaling.length === 1 ? "y" : "ies"}`,
+      reason: "Working · profit > 0 · ROI > 0 · live ≥ 2 days.",
       context: {
         kind: "scaling",
         actionType: "scaling_opportunity",
-        actionLabel: "Review scaling opportunities",
+        actionLabel: "Review scaling",
         progressPct: 100,
         progressLabel: "Ready for review",
         metricLabel: "Scaling opportunities",
@@ -532,6 +550,11 @@ export function buildScalingOpportunityAction(
         employeeName: opts.employeeName ?? undefined,
         navigationPath: "/live-campaigns",
         suggestedAction: "Open Live Campaigns Working rows and review Scaling Opportunities.",
+        dailyTargetUnits: scaling.length,
+        missionCategory: "scaling",
+        canTrackCompletion: false,
+        completionSource: "advisory",
+        completionLabel: "Review recommended",
       },
     },
   };

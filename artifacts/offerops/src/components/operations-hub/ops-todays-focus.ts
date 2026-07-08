@@ -28,6 +28,7 @@ export type {
   FocusActionType,
   MetricSliceBundle,
   NetworkGeoSlice,
+  MissionCategory,
 } from "@/components/operations-hub/ops-goal-focus";
 
 export {
