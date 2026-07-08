@@ -18,6 +18,7 @@ import {
   evaluateWorkingDayPace,
   remainingWorkingDaysInMonth,
 } from "./ops-v2-metrics.ts";
+import { DEFAULT_ALERT_RULES } from "@workspace/alert-rules";
 
 const NOW = new Date("2026-07-08T12:00:00");
 const MONTH = "2026-07";
@@ -392,6 +393,125 @@ describe("buildDailyActionPlan", () => {
     const fr = plan.testingNetworks[0]?.geos.find((g) => g.geo === "FR");
     assert.equal(fr?.doneToday ?? 0, 0);
     assert.equal(plan.summary.testsDone, 0);
+  });
+});
+
+describe("settings-driven scale & optimize thresholds", () => {
+  const scaleCampaign = {
+    id: 20,
+    status: "live",
+    campaignPurpose: "working",
+    offerCount: 2,
+    revenue: 150,
+    cost: 50,
+    roi: 20,
+    liveStartedAt: "2026-07-06T00:00:00", // 2 days live by Jul 8
+    affiliateNetworkName: "N",
+    geo: "US",
+  };
+
+  test("network plan exposes monthlyGoal for the simplified row", () => {
+    const plans = buildTestingNetworkPlans(
+      [
+        { network: "BlueAffiliate CBV", geo: "GB", current: 0, target: 20 },
+        { network: "BlueAffiliate CBV", geo: "US", current: 0, target: 28 },
+      ],
+      [],
+      MONTH,
+      NOW,
+    );
+    assert.equal(plans[0]!.monthlyGoal, 48);
+  });
+
+  test("scale group honors settings thresholds (min revenue gates it out)", () => {
+    const strict = {
+      ...DEFAULT_ALERT_RULES,
+      scaling: { ...DEFAULT_ALERT_RULES.scaling, minRevenueForScale: 200 },
+    };
+    const included = buildDailyActionPlan({
+      monthKey: MONTH,
+      now: NOW,
+      testingSlices: [],
+      campaigns: [scaleCampaign],
+    });
+    assert.equal(included.scalingCandidates.length, 1);
+
+    const excluded = buildDailyActionPlan({
+      monthKey: MONTH,
+      now: NOW,
+      testingSlices: [],
+      campaigns: [scaleCampaign],
+      rules: strict, // revenue 150 < 200 → not a scale candidate
+    });
+    assert.equal(excluded.scalingCandidates.length, 0);
+  });
+
+  test("scale group honors settings min live days", () => {
+    const strictDays = {
+      ...DEFAULT_ALERT_RULES,
+      scaling: { ...DEFAULT_ALERT_RULES.scaling, minLiveDaysForScale: 30 },
+    };
+    const plan = buildDailyActionPlan({
+      monthKey: MONTH,
+      now: NOW,
+      testingSlices: [],
+      campaigns: [scaleCampaign],
+      rules: strictDays,
+    });
+    assert.equal(plan.scalingCandidates.length, 0);
+  });
+
+  test("optimize group proactively flags underperforming working campaigns", () => {
+    const plan = buildDailyActionPlan({
+      monthKey: MONTH,
+      now: NOW,
+      testingSlices: [],
+      campaigns: [
+        {
+          id: 30,
+          status: "live",
+          campaignPurpose: "working",
+          offerCount: 3,
+          clicks: 60_000, // ratio ~1.3 (>= target) so not off/behind
+          revenue: 100,
+          cost: 120,
+          roi: -16, // weak (< weakRoiPercent 5)
+          liveStartedAt: "2026-07-01T00:00:00", // 7 days live (>= 3)
+          affiliateNetworkName: "N",
+          geo: "US",
+        },
+      ],
+    });
+    assert.ok(plan.optimizations.some((g) => g.issueType === "underperforming"));
+  });
+
+  test("a scale candidate is NOT also flagged as underperforming", () => {
+    const plan = buildDailyActionPlan({
+      monthKey: MONTH,
+      now: NOW,
+      testingSlices: [],
+      campaigns: [scaleCampaign],
+    });
+    assert.ok(!plan.optimizations.some((g) => g.issueType === "underperforming"));
+    assert.equal(plan.scalingCandidates.length, 1);
+  });
+
+  test("optimize behind/off bands respect settings ratios", () => {
+    // clicks 10 / offerCount 2 = VPO 5; target 15000 → ratio ~0.0003 → off target
+    const campaigns = [
+      {
+        id: 40,
+        status: "live",
+        campaignPurpose: "working",
+        offerCount: 2,
+        clicks: 10,
+        affiliateNetworkName: "N",
+        geo: "US",
+      },
+    ];
+    const plan = buildDailyActionPlan({ monthKey: MONTH, now: NOW, testingSlices: [], campaigns });
+    assert.ok(plan.optimizations.some((g) => g.issueType === "off_target"));
+    assert.ok(!plan.optimizations.some((g) => g.issueType === "behind_target"));
   });
 });
 

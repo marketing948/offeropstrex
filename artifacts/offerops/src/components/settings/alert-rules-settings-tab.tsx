@@ -26,12 +26,14 @@ function NumberField({
   value,
   onChange,
   disabled,
+  step,
 }: {
   label: string;
   hint?: string;
   value: number;
   onChange: (n: number) => void;
   disabled?: boolean;
+  step?: number;
 }) {
   const safe = Number.isFinite(value) ? value : 0;
   return (
@@ -40,6 +42,7 @@ function NumberField({
       {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
       <Input
         type="number"
+        step={step}
         className="h-8 text-sm"
         value={safe}
         disabled={disabled}
@@ -392,6 +395,93 @@ export function AlertRulesSettingsTab() {
                 ...draft,
                 scaling: { ...draft.scaling, minRevenueForStrongSignal: n },
               })
+            }
+            disabled={formDisabled}
+          />
+        </div>
+      </RuleSection>
+
+      <RuleSection
+        title="Scale Today suggestions"
+        description="Thresholds for the Operations Hub “Campaigns We Should Scale Today” group."
+        disabled={formDisabled}
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          <NumberField
+            label="Min live days for scale"
+            value={draft.scaling.minLiveDaysForScale}
+            onChange={(n) =>
+              setDraft({ ...draft, scaling: { ...draft.scaling, minLiveDaysForScale: n } })
+            }
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="Min profit for scale"
+            value={draft.scaling.minProfitForScale}
+            onChange={(n) =>
+              setDraft({ ...draft, scaling: { ...draft.scaling, minProfitForScale: n } })
+            }
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="Min ROI % for scale"
+            value={draft.scaling.minRoiPercentForScale}
+            onChange={(n) =>
+              setDraft({ ...draft, scaling: { ...draft.scaling, minRoiPercentForScale: n } })
+            }
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="Min revenue for scale"
+            value={draft.scaling.minRevenueForScale}
+            onChange={(n) =>
+              setDraft({ ...draft, scaling: { ...draft.scaling, minRevenueForScale: n } })
+            }
+            disabled={formDisabled}
+          />
+        </div>
+      </RuleSection>
+
+      <RuleSection
+        title="Optimize Today suggestions"
+        description="Thresholds for the Operations Hub “Campaigns We Should Optimize Today” group."
+        disabled={formDisabled}
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          <NumberField
+            label="Off-target VPO ratio (below = off target)"
+            value={draft.optimization.offTargetRatio}
+            step={0.05}
+            onChange={(n) =>
+              setDraft({ ...draft, optimization: { ...draft.optimization, offTargetRatio: n } })
+            }
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="Behind-target VPO ratio (below = behind)"
+            value={draft.optimization.behindTargetRatio}
+            step={0.05}
+            onChange={(n) =>
+              setDraft({ ...draft, optimization: { ...draft.optimization, behindTargetRatio: n } })
+            }
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="Min live days before optimize review"
+            value={draft.optimization.minLiveDaysForReview}
+            onChange={(n) =>
+              setDraft({
+                ...draft,
+                optimization: { ...draft.optimization, minLiveDaysForReview: n },
+              })
+            }
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="Weak ROI % (below = optimize candidate)"
+            value={draft.optimization.weakRoiPercent}
+            onChange={(n) =>
+              setDraft({ ...draft, optimization: { ...draft.optimization, weakRoiPercent: n } })
             }
             disabled={formDisabled}
           />

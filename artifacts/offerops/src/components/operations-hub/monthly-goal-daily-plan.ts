@@ -11,7 +11,7 @@ import {
   evaluateWorkingDayPace,
   remainingWorkingDaysInMonth,
 } from "./ops-v2-metrics.ts";
-import { isScalingOpportunity } from "./scaling-opportunity.ts";
+import { daysLiveForCampaign, isScalingOpportunity } from "./scaling-opportunity.ts";
 import {
   countTestingCreatedToday,
   isSameLocalDay,
@@ -19,7 +19,7 @@ import {
   type MissionCampaignRow,
 } from "./daily-mission-board.ts";
 import type { NetworkGeoSlice, OpsCampaignRowLite } from "./ops-goal-focus.ts";
-import { DEFAULT_ALERT_RULES } from "@workspace/alert-rules";
+import { DEFAULT_ALERT_RULES, type AlertRulesConfig } from "@workspace/alert-rules";
 
 export type TestingGeoAction = {
   geo: string;
@@ -36,6 +36,8 @@ export type TestingGeoAction = {
 export type TestingNetworkPlan = {
   network: string;
   todayRequired: number;
+  /** Network monthly testing goal (sum of GEO targets). Shown on the simplified row. */
+  monthlyGoal: number;
   geoCount: number;
   doneToday: number;
   paceStatus: "behind" | "on_pace" | "completed";
@@ -45,7 +47,8 @@ export type TestingNetworkPlan = {
 export type OptimizationIssueType =
   | "missing_offer_count"
   | "behind_target"
-  | "off_target";
+  | "off_target"
+  | "underperforming";
 
 export type OptimizationCampaignRef = {
   id: number;
@@ -207,6 +210,11 @@ function campaignRoi(c: OpsCampaignRowLite | MissionCampaignRow): number {
 function campaignClicks(c: OpsCampaignRowLite): number {
   const n = Number(c.clicks ?? 0);
   return Number.isFinite(n) ? Math.max(0, n) : 0;
+}
+
+function campaignRevenue(c: OpsCampaignRowLite | MissionCampaignRow): number {
+  const n = Number((c as OpsCampaignRowLite).revenue ?? 0);
+  return Number.isFinite(n) ? n : 0;
 }
 
 /**
@@ -411,6 +419,7 @@ export function buildTestingNetworkPlans(
     plans.push({
       network,
       todayRequired: todayNeededNetwork,
+      monthlyGoal: networkTarget,
       geoCount: geosWithWork.filter((g) => g.geo !== "ALL").length || geosWithWork.length,
       doneToday,
       paceStatus: allDoneMonth ? "completed" : anyBehind ? "behind" : "on_pace",
@@ -478,17 +487,24 @@ export function buildOptimizationGroups(
   opts: {
     now?: Date;
     visitsPerOfferTarget?: number;
+    rules?: AlertRulesConfig;
   } = {},
 ): OptimizationGroup[] {
   const now = opts.now ?? new Date();
+  const rules = opts.rules ?? DEFAULT_ALERT_RULES;
   const vpoTarget =
-    opts.visitsPerOfferTarget ?? DEFAULT_ALERT_RULES.testing.visitsPerOffer;
+    opts.visitsPerOfferTarget ?? rules.testing.visitsPerOffer;
+  const offTargetRatio = rules.optimization.offTargetRatio;
+  const behindTargetRatio = rules.optimization.behindTargetRatio;
+  const minLiveDaysForReview = rules.optimization.minLiveDaysForReview;
+  const weakRoiPercent = rules.optimization.weakRoiPercent;
   const rows = toMissionCampaignRows(campaigns);
   const byId = new Map(rows.map((r) => [r.id, r]));
 
   const missing: OptimizationCampaignRef[] = [];
   const behind: OptimizationCampaignRef[] = [];
   const off: OptimizationCampaignRef[] = [];
+  const underperforming: OptimizationCampaignRef[] = [];
 
   for (const c of campaigns) {
     const purpose = (c.campaignPurpose ?? "").toLowerCase();
@@ -515,9 +531,43 @@ export function buildOptimizationGroups(
     const clicks = campaignClicks(c);
     const visitsPerOffer = clicks / Math.max(1, offerCount);
     const ratio = vpoTarget > 0 ? visitsPerOffer / vpoTarget : 0;
-    if (ratio <= 0) continue; // no traffic yet — don't invent a task
-    if (ratio < 0.7) off.push(ref);
-    else if (ratio < 1) behind.push(ref);
+    if (ratio > 0 && ratio < offTargetRatio) {
+      off.push(ref);
+      continue;
+    }
+    if (ratio >= offTargetRatio && ratio < behindTargetRatio) {
+      behind.push(ref);
+      continue;
+    }
+
+    // Proactive: campaigns live long enough with weak ROI deserve optimization,
+    // as long as they are not already a Scale Today candidate.
+    const roi = campaignRoi(c);
+    const daysLive = daysLiveForCampaign(c.liveStartedAt, c.createdAt, now);
+    const isScale = isScalingOpportunity({
+      campaignPurpose: c.campaignPurpose,
+      status: c.status,
+      profit: campaignProfit(c),
+      roi,
+      revenue: campaignRevenue(c),
+      liveStartedAt: c.liveStartedAt,
+      createdAt: c.createdAt,
+      now,
+      thresholds: {
+        minLiveDays: rules.scaling.minLiveDaysForScale,
+        minProfit: rules.scaling.minProfitForScale,
+        minRoiPercent: rules.scaling.minRoiPercentForScale,
+        minRevenue: rules.scaling.minRevenueForScale,
+      },
+    });
+    if (
+      !isScale &&
+      daysLive != null &&
+      daysLive >= minLiveDaysForReview &&
+      roi < weakRoiPercent
+    ) {
+      underperforming.push(ref);
+    }
   }
 
   const groups: OptimizationGroup[] = [];
@@ -567,13 +617,24 @@ export function buildOptimizationGroups(
     });
   }
 
+  if (underperforming.length > 0) {
+    groups.push({
+      issueType: "underperforming",
+      label: `Review ${underperforming.length} underperforming campaign${underperforming.length === 1 ? "" : "s"}`,
+      campaigns: underperforming,
+      required: underperforming.length,
+      doneToday: 0,
+      canTrackCompletion: false,
+    });
+  }
+
   return groups;
 }
 
 /** Conservative MVP: testing live with profit/ROI > 0 and enough data. */
 export function isMoveToWorkingCandidate(
   c: OpsCampaignRowLite,
-  opts: { now?: Date; visitsPerOfferTarget?: number } = {},
+  opts: { now?: Date; visitsPerOfferTarget?: number; rules?: AlertRulesConfig } = {},
 ): boolean {
   if ((c.campaignPurpose ?? "").toLowerCase() !== "testing") return false;
   if (c.status !== "live") return false;
@@ -583,7 +644,9 @@ export function isMoveToWorkingCandidate(
   const offerCount = c.offerCount != null ? Number(c.offerCount) : 0;
   if (!(offerCount > 0)) return false;
   const vpoTarget =
-    opts.visitsPerOfferTarget ?? DEFAULT_ALERT_RULES.testing.visitsPerOffer;
+    opts.visitsPerOfferTarget ??
+    opts.rules?.testing.visitsPerOffer ??
+    DEFAULT_ALERT_RULES.testing.visitsPerOffer;
   const clicks = campaignClicks(c);
   const visitsPerOffer = clicks / offerCount;
   const conversions = Number((c as OpsCampaignRowLite).conversions ?? 0);
@@ -593,9 +656,16 @@ export function isMoveToWorkingCandidate(
 
 export function buildScalingCandidates(
   campaigns: OpsCampaignRowLite[],
-  opts: { now?: Date; visitsPerOfferTarget?: number } = {},
+  opts: { now?: Date; visitsPerOfferTarget?: number; rules?: AlertRulesConfig } = {},
 ): { scaling: ScalingCandidate[]; moveToWorking: ScalingCandidate[] } {
   const now = opts.now ?? new Date();
+  const rules = opts.rules ?? DEFAULT_ALERT_RULES;
+  const scaleThresholds = {
+    minLiveDays: rules.scaling.minLiveDaysForScale,
+    minProfit: rules.scaling.minProfitForScale,
+    minRoiPercent: rules.scaling.minRoiPercentForScale,
+    minRevenue: rules.scaling.minRevenueForScale,
+  };
   const rows = toMissionCampaignRows(campaigns);
   const byId = new Map(rows.map((r) => [r.id, r]));
   const scaling: ScalingCandidate[] = [];
@@ -618,9 +688,11 @@ export function buildScalingCandidates(
         status: c.status,
         profit: campaignProfit(c),
         roi: campaignRoi(c),
+        revenue: campaignRevenue(c),
         liveStartedAt: c.liveStartedAt,
         createdAt: c.createdAt,
         now,
+        thresholds: scaleThresholds,
       })
     ) {
       scaling.push({
@@ -691,8 +763,10 @@ export function buildDailyActionPlan(input: {
   campaigns?: OpsCampaignRowLite[];
   now?: Date;
   visitsPerOfferTarget?: number;
+  rules?: AlertRulesConfig;
 }): DailyActionPlan {
   const now = input.now ?? new Date();
+  const rules = input.rules ?? DEFAULT_ALERT_RULES;
   const campaigns = input.campaigns ?? [];
   const testingNetworks = buildTestingNetworkPlans(
     input.testingSlices,
@@ -703,10 +777,12 @@ export function buildDailyActionPlan(input: {
   const optimizations = buildOptimizationGroups(campaigns, {
     now,
     visitsPerOfferTarget: input.visitsPerOfferTarget,
+    rules,
   });
   const { scaling, moveToWorking } = buildScalingCandidates(campaigns, {
     now,
     visitsPerOfferTarget: input.visitsPerOfferTarget,
+    rules,
   });
   const summary = summarizePlan(
     testingNetworks,
@@ -756,6 +832,7 @@ export function buildTeamDailyPlans(
   }[],
   monthKey: string,
   now = new Date(),
+  rules?: AlertRulesConfig,
 ): WorkerDailyPlanSummary[] {
   const out: WorkerDailyPlanSummary[] = [];
   for (const w of workers) {
@@ -764,6 +841,7 @@ export function buildTeamDailyPlans(
       testingSlices: w.testingSlices,
       campaigns: w.campaigns,
       now,
+      rules,
     });
     if (plan.summary.total <= 0) continue;
     out.push({
