@@ -24,6 +24,20 @@ export const alertRulesSchema = z.object({
     negativeRoiDays: z.number().int().positive(),
     minRevenueForStrongSignal: z.number().nonnegative(),
     minRoiPercentForPositiveSignal: z.number(),
+    // Today Focus "Campaigns We Should Scale Today" suggestion thresholds.
+    minLiveDaysForScale: z.number().int().nonnegative(),
+    minProfitForScale: z.number().nonnegative(),
+    minRoiPercentForScale: z.number().nonnegative(),
+    minRevenueForScale: z.number().nonnegative(),
+  }),
+  optimization: z.object({
+    // VPO ratio (visits-per-offer / target) below which a live campaign needs review.
+    // Below offTargetRatio → "off target"; between it and 1.0 → "behind target".
+    behindTargetRatio: z.number().min(0).max(1),
+    offTargetRatio: z.number().min(0).max(1),
+    // Proactive weak/underperforming working campaign review.
+    minLiveDaysForReview: z.number().int().nonnegative(),
+    weakRoiPercent: z.number(),
   }),
   review: z.object({
     ignoredSignalEscalationHours: z.number().int().positive(),
@@ -67,6 +81,17 @@ export const DEFAULT_ALERT_RULES: AlertRulesConfig = {
     negativeRoiDays: 7,
     minRevenueForStrongSignal: 200,
     minRoiPercentForPositiveSignal: 15,
+    minLiveDaysForScale: 2,
+    minProfitForScale: 0,
+    minRoiPercentForScale: 0,
+    minRevenueForScale: 0,
+  },
+  optimization: {
+    // ratio < offTargetRatio → "off target"; offTargetRatio ≤ ratio < behindTargetRatio → "behind".
+    offTargetRatio: 0.7,
+    behindTargetRatio: 1,
+    minLiveDaysForReview: 3,
+    weakRoiPercent: 5,
   },
   review: {
     ignoredSignalEscalationHours: 4,
@@ -102,6 +127,7 @@ export function mergeAlertRules(raw: unknown): AlertRulesConfig {
     testing: mergeSection(DEFAULT_ALERT_RULES.testing, input.testing),
     winners: mergeSection(DEFAULT_ALERT_RULES.winners, input.winners),
     scaling: mergeSection(DEFAULT_ALERT_RULES.scaling, input.scaling),
+    optimization: mergeSection(DEFAULT_ALERT_RULES.optimization, input.optimization),
     review: mergeSection(DEFAULT_ALERT_RULES.review, input.review),
     operationalScoring: mergeSection(
       DEFAULT_ALERT_RULES.operationalScoring,
