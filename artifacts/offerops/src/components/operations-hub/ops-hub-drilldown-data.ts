@@ -736,7 +736,7 @@ export function useOpsDrilldownData(
   const interventionWorkers = useMemo(() => {
     if (isWorker || focusEmployeeId != null) return [];
     return (monthlyGoalsDashboard?.workers ?? [])
-      .filter((w) => w.testing.target > 0 || w.working.target > 0 || w.revenue.target > 0)
+      .filter((w) => w.testing.target > 0 || w.working.target > 0)
       .slice(0, 12);
   }, [isWorker, focusEmployeeId, monthlyGoalsDashboard?.workers]);
 
@@ -766,8 +766,7 @@ export function useOpsDrilldownData(
       const batchEmployeeById = new Map(batches.map((b) => [b.id, b.employeeId] as const));
       const adminWorkers: AdminWorkerFocusInput[] = workers
         .filter(
-          (w) =>
-            w.testing.target > 0 || w.working.target > 0 || w.revenue.target > 0,
+          (w) => w.testing.target > 0 || w.working.target > 0,
         )
         .slice(0, 12)
         .map((w) => {
@@ -882,14 +881,80 @@ export function useOpsDrilldownData(
 
   const healthLoading = healthQueries.some((q) => q.isLoading);
 
+  /** Per-worker Monthly Goal testing slices + campaigns for Team Daily Focus. */
+  const focusTeamWorkers = useMemo(() => {
+    if (isWorker || focusEmployeeId != null) return [];
+    const workers = monthlyGoalsDashboard?.workers ?? [];
+    const batchEmployeeById = new Map(batches.map((b) => [b.id, b.employeeId] as const));
+    return workers
+      .filter((w) => w.testing.target > 0 || w.working.target > 0)
+      .slice(0, 12)
+      .map((w) => {
+        const idx = workers.findIndex((x) => x.employeeId === w.employeeId);
+        const base = idx >= 0 ? idx * 3 : -1;
+        const tData =
+          base >= 0
+            ? (interventionQueries[base]?.data as MetricBreakdownResult | undefined)
+            : undefined;
+        const testingSlices: NetworkGeoSlice[] = (() => {
+          if (!tData) return [];
+          const out: NetworkGeoSlice[] = [];
+          for (const net of tData.networks) {
+            for (const g of net.geos ?? []) {
+              if (!(g.target > 0)) continue;
+              out.push({
+                network: net.label,
+                geo: g.label,
+                current: g.current,
+                target: g.target,
+              });
+            }
+          }
+          if (out.length > 0) return out;
+          return tData.networks
+            .filter((n) => n.target > 0)
+            .map((n) => ({
+              network: n.label,
+              geo: null,
+              current: n.current,
+              target: n.target,
+            }));
+        })();
+        const workerCampaigns = enrichedCampaigns.filter((c) => {
+          const empId =
+            c.employeeId ??
+            (c.batchId != null ? batchEmployeeById.get(c.batchId) : null) ??
+            null;
+          return empId === w.employeeId;
+        });
+        return {
+          employeeId: w.employeeId,
+          employeeName: w.name,
+          testingSlices,
+          campaigns: workerCampaigns,
+        };
+      });
+  }, [
+    isWorker,
+    focusEmployeeId,
+    monthlyGoalsDashboard,
+    batches,
+    enrichedCampaigns,
+    interventionQueryDataKey,
+    interventionQueries,
+  ]);
+
   return {
     monthLabel: monthLabel(),
+    monthKey: monthKey || currentMonthKey(),
     daysRemaining: daysRemainingInMonth(),
     dateFrom,
     dateTo,
     goalCards,
     networkGroups,
     focus,
+    focusTestingSlices: focusSlices.testing,
+    focusTeamWorkers,
     mtdRevenue,
     attributedRevenueMtd,
     unattributedRevenueMtd: Math.max(0, mtdRevenue - attributedRevenueMtd),

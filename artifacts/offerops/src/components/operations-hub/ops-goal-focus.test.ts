@@ -162,21 +162,17 @@ describe("buildDailyFocusActions", () => {
     assert.ok(items.some((i) => i.context?.actionType === "working_action"));
   });
 
-  test("revenue behind does not appear unless below threshold", () => {
-    // Mildly behind — not enough for revenue rescue
+  test("revenue actions are never returned in Today Focus", () => {
     const mild = makeCard("revenue", 55, 60);
-    assert.ok(mild.pace.paceVariancePct > REVENUE_BEHIND_THRESHOLD_PCT);
-    const items = buildDailyFocusActions({
+    const itemsMild = buildDailyFocusActions({
       monthKey: MONTH,
       now: NOW,
       goalCards: [mild, makeCard("testing", 230, 230), makeCard("working", 98, 98)],
       slices: { testing: [], working: [], revenue: [{ network: "A", current: 55, target: 60 }] },
     });
-    assert.equal(items.some((i) => i.context?.actionType === "revenue_rescue"), false);
-  });
+    assert.equal(itemsMild.some((i) => i.context?.actionType === "revenue_rescue"), false);
 
-  test("severe revenue behind appears but lower priority than testing when both behind", () => {
-    const items = buildDailyFocusActions({
+    const itemsSevere = buildDailyFocusActions({
       monthKey: MONTH,
       now: NOW,
       goalCards: [
@@ -190,8 +186,9 @@ describe("buildDailyFocusActions", () => {
         revenue: [{ network: "Y", geo: "GB", current: 10_000, target: 100_000, profit: 1 }],
       },
     });
-    assert.ok(items[0]?.context?.actionType === "testing_action");
-    assert.ok(items.some((i) => i.context?.actionType === "revenue_rescue"));
+    assert.ok(itemsSevere[0]?.context?.actionType === "testing_action");
+    assert.equal(itemsSevere.some((i) => i.context?.actionType === "revenue_rescue"), false);
+    assert.equal(itemsSevere.some((i) => /revenue/i.test(i.title)), false);
   });
 
   test("missing offer count produces campaign health action", () => {

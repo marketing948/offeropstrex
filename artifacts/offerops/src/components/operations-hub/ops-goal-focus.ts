@@ -90,8 +90,11 @@ export type TodaysFocus = {
 export type OpsCampaignRowLite = {
   id?: number;
   status: string;
+  campaignName?: string | null;
   campaignPurpose?: string | null;
   offerCount?: number | null;
+  clicks?: number | null;
+  conversions?: number | null;
   liveStartedAt?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -587,8 +590,8 @@ export function collectFocusCandidates(
   const cards = options.goalCards;
   const testing = cards.find((c) => c.kind === "testing");
   const working = cards.find((c) => c.kind === "working");
-  const revenue = cards.find((c) => c.kind === "revenue");
-  const hasAnyGoal = cards.some((c) => c.target > 0);
+  // Revenue is a result, not a daily Focus task — never include revenue_rescue.
+  const hasAnyGoal = cards.some((c) => c.kind !== "revenue" && c.target > 0);
 
   if (!hasAnyGoal) {
     return [
@@ -647,16 +650,6 @@ export function collectFocusCandidates(
   });
   if (scaling) candidates.push(scaling);
 
-  if (revenue) {
-    const a = buildRevenueRescueAction(revenue, options.slices.revenue, options.monthKey, {
-      employeeName: options.employeeName,
-      isAdmin: options.isAdmin,
-      now,
-      thresholdPct: options.revenueBehindThresholdPct,
-    });
-    if (a) candidates.push(a);
-  }
-
   return candidates;
 }
 
@@ -686,7 +679,7 @@ export function buildDailyFocusActions(options: FocusEngineOptions): FocusItem[]
         emoji: "✨",
         title: "On pace",
         text: "You’re on pace today. Keep monitoring working campaigns and scaling opportunities.",
-        reason: "No material testing/working/revenue gaps detected.",
+        reason: "No material testing gaps, optimizations, or scaling reviews detected.",
         context: {
           kind: "action",
           actionLabel: "Review campaigns",
@@ -823,6 +816,7 @@ export function suggestReportsAction(input: {
   if ((input.scalingCount ?? 0) > 0) {
     return `Review ${input.scalingCount} scaling opportunit${input.scalingCount === 1 ? "y" : "ies"}`;
   }
+  // Revenue suggestions stay for Reports standings only — not Today Focus.
   if (input.metric === "revenue" && pace.paceVariancePct <= REVENUE_BEHIND_THRESHOLD_PCT) {
     return "Review top profit/ROI campaigns";
   }
