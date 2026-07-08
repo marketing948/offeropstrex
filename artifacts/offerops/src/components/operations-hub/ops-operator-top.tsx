@@ -24,8 +24,8 @@ export function OpsOperatorTop({
   campaigns: OpsCampaignRow[];
   tasks: TodoTask[];
   loading?: boolean;
-  selectedMetric: GoalKind;
-  onSelectMetric: (kind: GoalKind) => void;
+  selectedMetric: GoalKind | null;
+  onSelectMetric: (kind: GoalKind | null) => void;
   scopeEmployeeId?: number | "" | null;
 }) {
   const data = useOpsDrilldownData(batches, campaigns, tasks, scopeEmployeeId);

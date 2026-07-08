@@ -1,7 +1,16 @@
 import { useState } from "react";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { ReportKpiCardsSkeleton } from "@/components/operational-state/operational-skeletons";
-import { evaluatePace, gapRemaining, progressPct } from "@/components/operations-hub/ops-v2-metrics";
+import {
+  evaluatePace,
+  formatOpsMetric,
+  gapRemaining,
+  progressPct,
+} from "@/components/operations-hub/ops-v2-metrics";
+import {
+  reportsPaceFields,
+  suggestReportsAction,
+} from "@/components/operations-hub/ops-goal-focus";
 import { goalKindToUnitLabel } from "@/components/operations-hub/operational-metric-dropdown";
 import type { MetricBreakdownKind, MetricBreakdownResult } from "@/lib/performance-engine/api";
 import type { PeGoalsTriple } from "@/lib/performance-engine/pe-goals";
@@ -47,14 +56,41 @@ function peMetric(peGoals: PeGoalsTriple, metric: GoalMetric) {
 }
 
 function fmtValue(value: number, format: "currency" | "count", unitLabel?: string) {
-  if (format === "currency") {
-    const rounded = Math.ceil(Number.isFinite(value) ? Math.max(0, value) : 0);
-    if (rounded >= 10_000) return `$${(rounded / 1000).toFixed(0)}K`;
-    if (rounded >= 1000) return `$${(rounded / 1000).toFixed(1)}K`;
-    return `$${rounded.toLocaleString()}`;
-  }
-  const count = Math.ceil(Number.isFinite(value) ? Math.max(0, value) : 0);
-  return unitLabel ? `${count.toLocaleString()} ${unitLabel}` : count.toLocaleString();
+  const formatted = formatOpsMetric(value, format);
+  if (format === "count" && unitLabel) return `${formatted} ${unitLabel}`;
+  return formatted;
+}
+
+function ActionCell({
+  metric,
+  current,
+  target,
+  monthKey,
+}: {
+  metric: GoalMetric;
+  current: number;
+  target: number;
+  monthKey: string;
+}) {
+  const pace = reportsPaceFields(current, target, monthKey);
+  const action = suggestReportsAction({
+    metric,
+    current,
+    target,
+    monthKey,
+  });
+  return (
+    <div className="space-y-0.5 text-right">
+      <p className="text-[11px] font-semibold text-slate-800">{action}</p>
+      {target > 0 && (
+        <p className="text-[10px] tabular-nums text-slate-500">
+          Today {fmtValue(pace.todayTarget, METRIC_META[metric].format)} · Exp{" "}
+          {fmtValue(pace.expectedByNow, METRIC_META[metric].format)} · Gap{" "}
+          {fmtValue(pace.paceGap, METRIC_META[metric].format)}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function GoalPerformanceCard({
@@ -124,9 +160,11 @@ function geoTargetConfigured(
 function BreakdownTables({
   metric,
   breakdown,
+  monthKey,
 }: {
   metric: GoalMetric;
   breakdown: MetricBreakdownResult | undefined;
+  monthKey: string;
 }) {
   const meta = METRIC_META[metric];
   const unitLabel = unitForMetric(metric);
@@ -138,6 +176,9 @@ function BreakdownTables({
       <Card className="overflow-hidden border border-slate-200/90 shadow-sm">
         <div className="border-b border-slate-100 bg-slate-50/90 px-3 py-2">
           <p className="text-xs font-bold uppercase tracking-wide text-slate-600">By Affiliate Network</p>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            Standings + what to do next (expected by now / today target / gap / action).
+          </p>
         </div>
         <div className="max-h-[28rem] overflow-auto">
           <table className="w-full text-sm">
@@ -147,7 +188,7 @@ function BreakdownTables({
                 <th className="px-3 py-2 text-right">Current</th>
                 <th className="px-3 py-2 text-right">Target</th>
                 <th className="px-3 py-2 text-right">Progress</th>
-                <th className="px-3 py-2 text-right">Remaining</th>
+                <th className="px-3 py-2 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -174,8 +215,13 @@ function BreakdownTables({
                     <td className="px-3 py-2 text-right tabular-nums text-xs">
                       {row.target > 0 ? `${row.percent}%` : "—"}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-xs text-slate-600">
-                      {row.target > 0 ? fmtValue(gapRemaining(row.current, row.target), meta.format, unitLabel) : "—"}
+                    <td className="px-3 py-2 align-top">
+                      <ActionCell
+                        metric={metric}
+                        current={row.current}
+                        target={row.target}
+                        monthKey={monthKey}
+                      />
                     </td>
                   </tr>
                 ))
@@ -188,6 +234,9 @@ function BreakdownTables({
       <Card className="overflow-hidden border border-slate-200/90 shadow-sm">
         <div className="border-b border-slate-100 bg-slate-50/90 px-3 py-2">
           <p className="text-xs font-bold uppercase tracking-wide text-slate-600">By GEO</p>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            GEO gaps with the same pacing + action guidance.
+          </p>
         </div>
         <div className="max-h-[28rem] overflow-auto">
           <table className="w-full text-sm">
@@ -198,14 +247,13 @@ function BreakdownTables({
                 <th className="px-3 py-2 text-right">Current</th>
                 <th className="px-3 py-2 text-right">Target</th>
                 <th className="px-3 py-2 text-right">Progress</th>
-                <th className="px-3 py-2 text-right">Remaining</th>
-                <th className="px-3 py-2 text-left">Source</th>
+                <th className="px-3 py-2 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {geos.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-3 py-6 text-center text-xs text-slate-500">
+                  <td colSpan={6} className="px-3 py-6 text-center text-xs text-slate-500">
                     No GEO targets configured for this metric.
                   </td>
                 </tr>
@@ -229,23 +277,13 @@ function BreakdownTables({
                     <td className="px-3 py-2 text-right tabular-nums text-xs">
                       {configured ? `${row.percent}%` : "—"}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-xs text-slate-600">
-                      {configured
-                        ? fmtValue(gapRemaining(row.current, row.target), meta.format, unitLabel)
-                        : "—"}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-slate-500">
-                      {row.targetSource === "custom" ? (
-                        <span className="rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-blue-600">
-                          Custom
-                        </span>
-                      ) : row.targetSource === "inherited" ? (
-                        <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-500">
-                          Inherited
-                        </span>
-                      ) : (
-                        "—"
-                      )}
+                    <td className="px-3 py-2 align-top">
+                      <ActionCell
+                        metric={metric}
+                        current={row.current}
+                        target={configured ? row.target : 0}
+                        monthKey={monthKey}
+                      />
                     </td>
                   </tr>
                   );
@@ -324,7 +362,11 @@ export function ReportsGoalDashboardTab({
             )}
           </p>
         </div>
-        <BreakdownTables metric={selectedMetric} breakdown={breakdownByMetric[selectedMetric]} />
+        <BreakdownTables
+          metric={selectedMetric}
+          breakdown={breakdownByMetric[selectedMetric]}
+          monthKey={monthKey}
+        />
       </section>
     </div>
   );

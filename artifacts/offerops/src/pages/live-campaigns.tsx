@@ -25,6 +25,7 @@ import {
 } from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useAlertRules } from "@/hooks/use-alert-rules";
+import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal-surfaces";
 import type { MonitoringCampaign } from "@/components/live-campaigns/live-campaigns-monitoring-table";
 import { LiveCampaignsSummaryTable } from "@/components/live-campaigns/live-campaigns-summary-table";
 import { LiveCampaignDrawer } from "@/components/live-campaigns/live-campaign-drawer";
@@ -449,6 +450,7 @@ export default function LiveCampaigns() {
         onCampaignUpdated={() => {
           void queryClient.invalidateQueries({ queryKey: ["live-campaigns"] });
           void queryClient.invalidateQueries({ queryKey: ["live-campaign-filter-options"] });
+          if (activeWorkspaceId) invalidateGoalSurfaces(queryClient, activeWorkspaceId);
         }}
       />
 

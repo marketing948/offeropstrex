@@ -14,8 +14,8 @@ export function GoalProgressHub({
 }: {
   goalCards: GoalCardModel[];
   loading?: boolean;
-  selectedMetric: GoalKind;
-  onSelectMetric: (kind: GoalKind) => void;
+  selectedMetric: GoalKind | null;
+  onSelectMetric: (kind: GoalKind | null) => void;
 }) {
   return (
     <section className="space-y-4" aria-labelledby="ops-monthly-goals">
@@ -30,7 +30,9 @@ export function GoalProgressHub({
                 key={card.kind}
                 card={card}
                 selected={selectedMetric === card.kind}
-                onSelect={() => onSelectMetric(card.kind)}
+                onSelect={() =>
+                  onSelectMetric(selectedMetric === card.kind ? null : card.kind)
+                }
               />
             ))}
       </div>

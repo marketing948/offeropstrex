@@ -43,6 +43,7 @@ import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { authedJson } from "@/lib/api-fetch";
+import { isScalingOpportunity } from "@/components/operations-hub/scaling-opportunity";
 
 function fmtMoney(v: string | number | null | undefined): string {
   if (v == null || v === "") return "—";
@@ -147,8 +148,20 @@ export function LiveCampaignDrawer({
   const pacing = deriveTrafficPacing(Number(campaign.clicks ?? 0), monitoring.targetPct, offerCount);
   const lifetimeRoi = roiPercent(campaign.roi);
   const visitsPerOffer = offerCount > 0 ? Number(campaign.clicks ?? 0) / offerCount : null;
+  const rangeProfit = range?.profit ?? null;
+  const lifetimeProfit =
+    Number(campaign.revenue ?? 0) - Number(campaign.cost ?? 0);
+  const scaling = isScalingOpportunity({
+    campaignPurpose: campaign.campaignPurpose,
+    status: campaign.status,
+    profit: rangeProfit ?? lifetimeProfit,
+    roi: range?.roi ?? lifetimeRoi,
+    liveStartedAt: campaign.liveStartedAt,
+  });
 
   async function saveOfferCount() {
+    const target = campaign;
+    if (!target) return;
     const parsed = Number(offerCountDraft);
     if (!Number.isInteger(parsed) || parsed <= 0) {
       toast({
@@ -159,7 +172,7 @@ export function LiveCampaignDrawer({
     }
     try {
       setSavingOfferCount(true);
-      await authedJson(`/api/campaigns/${campaign.id}`, {
+      await authedJson(`/api/campaigns/${target.id}`, {
         method: "PATCH",
         body: JSON.stringify({ offerCount: parsed }),
       });
@@ -346,9 +359,24 @@ export function LiveCampaignDrawer({
           </h3>
           <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-3">
             {campaign.campaignPurpose === "working" ? (
-              <p className="text-sm text-slate-600">
-                This campaign is already working. Use performance trends to decide whether to scale.
-              </p>
+              scaling ? (
+                <>
+                  <Badge
+                    variant="outline"
+                    className="border-emerald-300 bg-emerald-50 text-[11px] font-semibold text-emerald-800"
+                  >
+                    Scaling Opportunity
+                  </Badge>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Profit and ROI are positive with at least 2 days live. Review whether to scale spend.
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-slate-600">
+                  This campaign is already working. It is not a scaling opportunity yet (needs profit &gt; 0,
+                  ROI &gt; 0, and ≥2 days live).
+                </p>
+              )
             ) : (
               <>
                 <Badge

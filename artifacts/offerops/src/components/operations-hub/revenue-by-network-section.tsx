@@ -22,7 +22,6 @@ import {
   fetchMetricBreakdown,
   type MetricBreakdownKind,
 } from "@/lib/performance-engine/api";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   BarChart3,
@@ -312,7 +311,7 @@ export function RevenueByNetworkSection({
   loading,
   scopeEmployeeId,
 }: {
-  selectedMetric: GoalKind;
+  selectedMetric: GoalKind | null;
   goalCards: GoalCardModel[];
   mtdRevenue: number;
   attributedRevenueMtd: number;
@@ -324,7 +323,9 @@ export function RevenueByNetworkSection({
   const { activeWorkspaceId } = useWorkspace();
   const isWorker = currentEmployee?.role !== "admin";
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const [viewOpen, setViewOpen] = useState(true);
+  /** Closed until user selects a metric card; open while a metric is selected. */
+  const viewOpen = selectedMetric != null;
+  const activeMetric: GoalKind = selectedMetric ?? "revenue";
 
   const breakdownEmployeeId =
     isWorker
@@ -334,14 +335,14 @@ export function RevenueByNetworkSection({
         : undefined;
 
   const breakdownQ = useQuery({
-    queryKey: ["ops-metric-breakdown", activeWorkspaceId, selectedMetric, breakdownEmployeeId ?? "team", currentMonthKey()],
-    enabled: !!activeWorkspaceId && !!currentEmployee,
+    queryKey: ["ops-metric-breakdown", activeWorkspaceId, activeMetric, breakdownEmployeeId ?? "team", currentMonthKey()],
+    enabled: !!activeWorkspaceId && !!currentEmployee && viewOpen,
     staleTime: 60_000,
     queryFn: () =>
       fetchMetricBreakdown(
         activeWorkspaceId!,
         currentMonthKey(),
-        metricKindForGoal(selectedMetric),
+        metricKindForGoal(activeMetric),
         breakdownEmployeeId,
       ),
   });
@@ -349,19 +350,23 @@ export function RevenueByNetworkSection({
   const breakdown = breakdownQ.data;
   const usePeBreakdown = breakdownQ.isSuccess && !!breakdown;
 
-  const activeCard = goalCards.find((c) => c.kind === selectedMetric);
+  const activeCard = goalCards.find((c) => c.kind === activeMetric);
 
-  const theme = METRIC_THEMES[selectedMetric];
+  const theme = METRIC_THEMES[activeMetric];
   const SectionIcon = theme.Icon;
-  const sectionTitle = goalKindToSectionTitle(selectedMetric);
-  const viewLabel = goalKindToViewButtonLabel(selectedMetric);
-  const emptyMessage = goalKindToEmptyMessage(selectedMetric);
-  const unitLabel = goalKindToUnitLabel(selectedMetric);
+  const sectionTitle = goalKindToSectionTitle(activeMetric);
+  const viewLabel = goalKindToViewButtonLabel(activeMetric);
+  const emptyMessage = goalKindToEmptyMessage(activeMetric);
+  const unitLabel = goalKindToUnitLabel(activeMetric);
   const format = activeCard?.format ?? "currency";
 
   useEffect(() => {
     setExpanded(new Set());
   }, [selectedMetric]);
+
+  if (!viewOpen) {
+    return null;
+  }
 
   const breakdownNetworks = breakdown?.networks ?? [];
   const breakdownHasRows = breakdownNetworks.length > 0 || (breakdown?.summary.target ?? 0) > 0;
@@ -406,18 +411,12 @@ export function RevenueByNetworkSection({
             <p className="mt-0.5 text-sm text-slate-500">Monthly target vs current (MTD)</p>
           </div>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className={`rounded-lg px-4 text-xs font-bold shadow-sm ${theme.button}`}
-          onClick={() => setViewOpen((v) => !v)}
+        <div
+          className={`inline-flex items-center rounded-lg border px-4 py-2 text-xs font-bold shadow-sm ${theme.button}`}
         >
           {viewLabel}
-          <ChevronDown
-            className={`ml-1.5 h-3.5 w-3.5 transition-transform ${viewOpen ? "rotate-180" : ""}`}
-          />
-        </Button>
+          <ChevronDown className="ml-1.5 h-3.5 w-3.5 rotate-180" />
+        </div>
       </div>
 
       {loading || breakdownQ.isLoading ? (
@@ -425,7 +424,7 @@ export function RevenueByNetworkSection({
           <Skeleton className="h-16 w-full rounded-xl" />
           <Skeleton className="h-16 w-full rounded-xl" />
         </div>
-      ) : !viewOpen ? null : breakdownQ.isError ? (
+      ) : breakdownQ.isError ? (
         <p className="mt-5 text-sm text-red-600">
           Could not load goal breakdown.{" "}
           <button

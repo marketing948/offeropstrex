@@ -34,6 +34,7 @@ import {
 import { PerformanceRangePicker } from "@/components/live-campaigns/performance-range-picker";
 import { ReportsSummaryCards } from "@/components/reports/reports-summary-cards";
 import { ReportsGoalDashboardTab } from "@/components/reports/reports-goal-dashboard-tab";
+import { ReportsNetworksGeosActionTab } from "@/components/reports/reports-networks-geos-action-tab";
 import { ReportsInsightPill } from "@/components/reports/reports-insight-pill";
 import {
   deriveReportInsight,
@@ -949,14 +950,18 @@ export default function Reports() {
       )}
 
       {/* ══════════════════════════════════════
-          NETWORKS & GEOs TAB
+          NETWORKS & GEOs TAB — action standings + performance
       ══════════════════════════════════════ */}
       {tab === "networks" && (
         <div className="space-y-5">
+          <ReportsNetworksGeosActionTab dashboard={peGoalDashboard} />
+
           {netChartData.length > 0 && (
             <Card className="border border-border shadow-sm">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold">Profit by Network / GEO</CardTitle>
+                <CardTitle className="text-sm font-semibold">
+                  Profit by Network / GEO (selected date range)
+                </CardTitle>
               </CardHeader>
               <CardContent className="pt-0">
                 <ResponsiveContainer width="100%" height={200}>
@@ -977,7 +982,9 @@ export default function Reports() {
           )}
 
           <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">{sortedNet.length} combination{sortedNet.length !== 1 ? "s" : ""}</p>
+            <p className="text-sm text-muted-foreground">
+              Range performance · {sortedNet.length} combination{sortedNet.length !== 1 ? "s" : ""}
+            </p>
             <button
               onClick={() => exportCSV(
                 "network-geo-report.csv",
