@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   type MissionCompletionState,
+  completeGeo as completeGeoPure,
+  completeExtraGeo as completeExtraGeoPure,
   emptyCompletion,
   isDone as isDonePure,
   normalizeForToday,
+  recordGeoUsage as recordGeoUsagePure,
   toggleDone as toggleDonePure,
 } from "./daily-mission-completion.ts";
 
@@ -78,5 +81,48 @@ export function useDailyMissionCompletion(
 
   const isDone = useCallback((key: string) => isDonePure(state, key), [state]);
 
-  return { state, isDone, toggle, enabled };
+  /**
+   * Focus-card ✔: one-way GEO completion. Marks the GEO done for today AND
+   * increments its usage counter so the queue auto-advances and the reuse
+   * fallback favors variety. Never un-completes (no accidental dead state).
+   */
+  const completeGeo = useCallback(
+    (network: string, geo: string) => {
+      if (!enabled) return;
+      setState((prev) => {
+        const next = completeGeoPure(prev, network, geo);
+        saveState(wsId, empId, next);
+        return next;
+      });
+    },
+    [enabled, wsId, empId],
+  );
+
+  /** Bonus work ✔ — usage only, never affects daily target progress. */
+  const completeExtraGeo = useCallback(
+    (network: string, geo: string) => {
+      if (!enabled) return;
+      setState((prev) => {
+        const next = completeExtraGeoPure(prev, network, geo);
+        saveState(wsId, empId, next);
+        return next;
+      });
+    },
+    [enabled, wsId, empId],
+  );
+
+  /** Increment a GEO's usage counter without marking it done. */
+  const recordGeoUsage = useCallback(
+    (network: string, geo: string) => {
+      if (!enabled) return;
+      setState((prev) => {
+        const next = recordGeoUsagePure(prev, network, geo);
+        saveState(wsId, empId, next);
+        return next;
+      });
+    },
+    [enabled, wsId, empId],
+  );
+
+  return { state, isDone, toggle, completeGeo, completeExtraGeo, recordGeoUsage, enabled };
 }

@@ -459,11 +459,11 @@ describe("POST /production-live-campaigns", { concurrency: false }, () => {
     assert.ok(overrideEvents.length >= 1);
   });
 
-  test("worker cannot override another worker campaign", async () => {
+  test("worker can override another worker campaign in same workspace", async () => {
     const seed = await seedWorkspaceWithSource();
     const otherWorker = await createEmployee("employee");
     await assign(otherWorker, seed.workspaceId);
-    const voluumId = `vc-override-denied-${Date.now()}`;
+    const voluumId = `vc-override-cross-${Date.now()}`;
     const first = await request(
       "POST",
       "/production-live-campaigns",
@@ -472,21 +472,35 @@ describe("POST /production-live-campaigns", { concurrency: false }, () => {
     );
     assert.equal(first.response.status, 201);
 
-    const denied = await request(
+    // First attempt without confirmOverride always surfaces the override prompt.
+    const prompt = await request(
+      "POST",
+      "/production-live-campaigns",
+      seed.workerId,
+      workingBody(seed, voluumId),
+    );
+    assert.equal(prompt.response.status, 409);
+    assert.equal(prompt.json?.code, "CAMPAIGN_ALREADY_LINKED");
+    assert.equal((prompt.json?.canOverride as boolean), true);
+
+    // Confirmed override succeeds even though the campaign is owned by another worker.
+    const overridden = await request(
       "POST",
       "/production-live-campaigns",
       seed.workerId,
       {
         ...workingBody(seed, voluumId),
+        campaignName: `Cross override ${Date.now()}`,
         confirmOverride: true,
         overrideExistingCampaignId: first.json?.id,
       },
     );
-    assert.equal(denied.response.status, 409);
-    assert.equal((denied.json?.canOverride as boolean), false);
+    assert.equal(overridden.response.status, 200);
+    assert.equal(overridden.json?.id, first.json?.id);
+    assert.equal(overridden.json?.overrideApplied, true);
   });
 
-  test("batch-linked duplicate requires admin override", async () => {
+  test("worker can override batch-linked duplicate in same workspace (no admin required)", async () => {
     const seed = await seedWorkspaceWithSource();
     const voluumId = `vc-batch-linked-${Date.now()}`;
     const [batch] = await db
@@ -521,24 +535,67 @@ describe("POST /production-live-campaigns", { concurrency: false }, () => {
       })
       .returning({ id: campaignsTable.id });
 
+    // Worker sees the override prompt and can override without admin.
+    const prompt = await request("POST", "/production-live-campaigns", seed.workerId, {
+      ...workingBody(seed, voluumId),
+    });
+    assert.equal(prompt.response.status, 409);
+    assert.equal((prompt.json?.canOverride as boolean), true);
+    assert.equal((prompt.json?.overrideRequiresAdmin as boolean), false);
+
     const workerAttempt = await request("POST", "/production-live-campaigns", seed.workerId, {
       ...workingBody(seed, voluumId),
+      campaignName: "Worker override batch linked",
       confirmOverride: true,
       overrideExistingCampaignId: existing.id,
     });
-    assert.equal(workerAttempt.response.status, 409);
-    assert.equal((workerAttempt.json?.overrideRequiresAdmin as boolean), true);
-    assert.equal((workerAttempt.json?.canOverride as boolean), false);
+    assert.equal(workerAttempt.response.status, 200);
+    assert.equal(workerAttempt.json?.id, existing.id);
+    assert.equal(workerAttempt.json?.overrideApplied, true);
+  });
 
-    const adminAttempt = await request("POST", "/production-live-campaigns", seed.adminId, {
-      ...workingBody(seed, voluumId),
-      campaignName: "Admin override batch linked",
-      confirmOverride: true,
-      overrideExistingCampaignId: existing.id,
-    });
-    assert.equal(adminAttempt.response.status, 200);
-    assert.equal(adminAttempt.json?.id, existing.id);
-    assert.equal(adminAttempt.json?.overrideApplied, true);
+  test("old (closed) campaign Voluum ID does not block reuse via override", async () => {
+    const seed = await seedWorkspaceWithSource();
+    const voluumId = `vc-reuse-closed-${Date.now()}`;
+    const first = await request(
+      "POST",
+      "/production-live-campaigns",
+      seed.workerId,
+      workingBody(seed, voluumId),
+    );
+    assert.equal(first.response.status, 201);
+
+    // Simulate a dead/closed campaign still holding the Voluum ID.
+    await db
+      .update(campaignsTable)
+      .set({ status: "closed" })
+      .where(eq(campaignsTable.id, first.json?.id as number));
+
+    // Reusing the same Voluum ID surfaces the prompt and then succeeds via override.
+    const prompt = await request(
+      "POST",
+      "/production-live-campaigns",
+      seed.workerId,
+      workingBody(seed, voluumId),
+    );
+    assert.equal(prompt.response.status, 409);
+    assert.equal((prompt.json?.canOverride as boolean), true);
+
+    const reused = await request(
+      "POST",
+      "/production-live-campaigns",
+      seed.workerId,
+      {
+        ...workingBody(seed, voluumId),
+        campaignName: `Reused ${Date.now()}`,
+        confirmOverride: true,
+        overrideExistingCampaignId: first.json?.id,
+      },
+    );
+    assert.equal(reused.response.status, 200);
+    assert.equal(reused.json?.id, first.json?.id);
+    assert.equal(reused.json?.status, "live");
+    assert.equal(reused.json?.overrideApplied, true);
   });
 
   test("no CampaignOps tasks or batch run mutations", async () => {

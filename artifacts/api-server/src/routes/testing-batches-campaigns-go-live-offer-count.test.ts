@@ -175,4 +175,77 @@ describe("POST /testing-batches/:id/campaigns-go-live", () => {
       );
     assert.equal(liveCampaigns.length, 2);
   });
+
+  test("go-live backfills offerCount from batch.numberOfOffers", async () => {
+    const seed = await seedBatchWithReadyCampaigns(10);
+    const { response } = await request(
+      "POST",
+      `/testing-batches/${seed.batchId}/campaigns-go-live`,
+      seed.adminId,
+    );
+    assert.equal(response.status, 200);
+
+    // Campaigns were seeded WITHOUT offerCount — go-live must populate it from
+    // the batch so Live Campaigns / Health / VPO never see a missing count.
+    const campaigns = await db
+      .select({ id: campaignsTable.id, offerCount: campaignsTable.offerCount })
+      .from(campaignsTable)
+      .where(
+        and(
+          eq(campaignsTable.workspaceId, seed.workspaceId),
+          eq(campaignsTable.batchId, seed.batchId),
+        ),
+      );
+    assert.equal(campaigns.length, 2);
+    for (const c of campaigns) {
+      assert.equal(c.offerCount, 10);
+    }
+  });
+
+  test("GET /campaigns backfills offerCount from batch when missing", async () => {
+    const seed = await seedBatchWithReadyCampaigns(7);
+
+    // Simulate a legacy campaign that went live WITHOUT offerCount by clearing
+    // it after go-live, then confirm the read path repopulates it.
+    await request(
+      "POST",
+      `/testing-batches/${seed.batchId}/campaigns-go-live`,
+      seed.adminId,
+    );
+    await db
+      .update(campaignsTable)
+      .set({ offerCount: null })
+      .where(
+        and(
+          eq(campaignsTable.workspaceId, seed.workspaceId),
+          eq(campaignsTable.batchId, seed.batchId),
+        ),
+      );
+
+    const { response, json } = await request(
+      "GET",
+      `/campaigns?workspace_id=${seed.workspaceId}&batch_id=${seed.batchId}`,
+      seed.adminId,
+    );
+    assert.equal(response.status, 200);
+    const list = json as unknown as { id: number; offerCount: number | null }[];
+    assert.equal(list.length, 2);
+    for (const c of list) {
+      assert.equal(c.offerCount, 7);
+    }
+
+    // And the read-time backfill persisted the value to the DB.
+    const persisted = await db
+      .select({ offerCount: campaignsTable.offerCount })
+      .from(campaignsTable)
+      .where(
+        and(
+          eq(campaignsTable.workspaceId, seed.workspaceId),
+          eq(campaignsTable.batchId, seed.batchId),
+        ),
+      );
+    for (const c of persisted) {
+      assert.equal(c.offerCount, 7);
+    }
+  });
 });

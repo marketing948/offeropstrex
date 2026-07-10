@@ -485,6 +485,128 @@ export function AlertRulesSettingsTab() {
             }
             disabled={formDisabled}
           />
+          <NumberField
+            label="Min days live (ROI review)"
+            value={draft.optimization.minDaysLive}
+            onChange={(n) =>
+              setDraft({ ...draft, optimization: { ...draft.optimization, minDaysLive: n } })
+            }
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="ROI floor % (below = optimize)"
+            value={draft.optimization.roiMinThreshold}
+            onChange={(n) =>
+              setDraft({ ...draft, optimization: { ...draft.optimization, roiMinThreshold: n } })
+            }
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="ROI drop threshold (pts)"
+            hint="Percentage-point ROI decline that flags a campaign"
+            value={draft.optimization.roiDropThreshold}
+            onChange={(n) =>
+              setDraft({ ...draft, optimization: { ...draft.optimization, roiDropThreshold: n } })
+            }
+            disabled={formDisabled}
+          />
+        </div>
+      </RuleSection>
+
+      <RuleSection
+        title="Traffic rules"
+        description="Volume / anomaly thresholds used by alerts and Optimize suggestions."
+        disabled={formDisabled}
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          <NumberField
+            label="Spike increase %"
+            value={draft.traffic.spikeIncreasePct}
+            onChange={(n) =>
+              setDraft({ ...draft, traffic: { ...draft.traffic, spikeIncreasePct: n } })
+            }
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="Spike decrease %"
+            value={draft.traffic.spikeDecreasePct}
+            onChange={(n) =>
+              setDraft({ ...draft, traffic: { ...draft.traffic, spikeDecreasePct: n } })
+            }
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="Max expected visits per offer"
+            value={draft.traffic.maxExpectedVisitsPerOffer}
+            onChange={(n) =>
+              setDraft({ ...draft, traffic: { ...draft.traffic, maxExpectedVisitsPerOffer: n } })
+            }
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="Min expected visits per offer"
+            value={draft.traffic.minExpectedVisitsPerOffer}
+            onChange={(n) =>
+              setDraft({ ...draft, traffic: { ...draft.traffic, minExpectedVisitsPerOffer: n } })
+            }
+            disabled={formDisabled}
+          />
+        </div>
+      </RuleSection>
+
+      <RuleSection
+        title="Winning rule (Scale Today)"
+        description="Campaigns passing all three are flagged WINNER and surfaced in Scale Today."
+        disabled={formDisabled}
+      >
+        <div className="grid gap-3 sm:grid-cols-3">
+          <NumberField
+            label="Min conversions"
+            value={draft.winning.minConversions}
+            onChange={(n) => setDraft({ ...draft, winning: { ...draft.winning, minConversions: n } })}
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="Min revenue"
+            value={draft.winning.minRevenue}
+            onChange={(n) => setDraft({ ...draft, winning: { ...draft.winning, minRevenue: n } })}
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="Min ROI %"
+            value={draft.winning.minROI}
+            onChange={(n) => setDraft({ ...draft, winning: { ...draft.winning, minROI: n } })}
+            disabled={formDisabled}
+          />
+        </div>
+      </RuleSection>
+
+      <RuleSection
+        title="Shutdown rule (Stop Today)"
+        description="Long-running, low-performance campaigns are surfaced in “Campaigns We Should STOP”."
+        disabled={formDisabled}
+      >
+        <div className="grid gap-3 sm:grid-cols-3">
+          <NumberField
+            label="Min days live"
+            value={draft.shutdown.minDaysLive}
+            onChange={(n) => setDraft({ ...draft, shutdown: { ...draft.shutdown, minDaysLive: n } })}
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="Max conversions (low)"
+            value={draft.shutdown.maxConversions}
+            onChange={(n) =>
+              setDraft({ ...draft, shutdown: { ...draft.shutdown, maxConversions: n } })
+            }
+            disabled={formDisabled}
+          />
+          <NumberField
+            label="Max revenue (low)"
+            value={draft.shutdown.maxRevenue}
+            onChange={(n) => setDraft({ ...draft, shutdown: { ...draft.shutdown, maxRevenue: n } })}
+            disabled={formDisabled}
+          />
         </div>
       </RuleSection>
 

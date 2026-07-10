@@ -593,6 +593,7 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
           id: campaignsTable.id,
           status: campaignsTable.status,
           platform: campaignsTable.platform,
+          offerCount: campaignsTable.offerCount,
         })
         .from(campaignsTable)
         .where(
@@ -612,7 +613,7 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
         throw new Error("All batch campaigns must be ready before going live");
       }
 
-      await tx
+      const [batchRow] = await tx
         .update(testingBatchesTable)
         .set({ liveAt: sql`coalesce(${testingBatchesTable.liveAt}, now())` })
         .where(
@@ -620,7 +621,26 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
             eq(testingBatchesTable.id, action.batchId),
             eq(testingBatchesTable.workspaceId, action.workspaceId),
           ),
-        );
+        )
+        .returning({ numberOfOffers: testingBatchesTable.numberOfOffers });
+
+      // Backfill offer count from the batch so campaigns created before the
+      // offer-count wiring (or via legacy paths) surface a count once live.
+      const batchOfferCount = batchRow?.numberOfOffers ?? null;
+      if (batchOfferCount != null) {
+        for (const campaign of batchCampaigns) {
+          if (campaign.offerCount != null) continue;
+          await tx
+            .update(campaignsTable)
+            .set({ offerCount: batchOfferCount, updatedAt: new Date() })
+            .where(
+              and(
+                eq(campaignsTable.id, campaign.id),
+                eq(campaignsTable.workspaceId, action.workspaceId),
+              ),
+            );
+        }
+      }
 
       for (const campaign of batchCampaigns) {
         if (campaign.status !== "ready") continue;
@@ -746,6 +766,7 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
               affiliateNetworkId: testingBatchesTable.affiliateNetworkId,
               geoId: testingBatchesTable.geoId,
               geo: testingBatchesTable.geo,
+              numberOfOffers: testingBatchesTable.numberOfOffers,
             })
             .from(testingBatchesTable)
             .where(
@@ -775,6 +796,9 @@ export async function applyAction(action: Action, tx: Tx): Promise<void> {
               affiliateNetworkId: batchRow.affiliateNetworkId,
               geoId: batchRow.geoId,
               geo: batchRow.geo?.trim().toUpperCase() ?? null,
+              // Batch → Campaign offer count flows at creation so Live
+              // Campaigns / Health / VPO / Alerts never see a missing count.
+              offerCount: batchRow.numberOfOffers ?? null,
             })
             .returning({ id: campaignsTable.id });
           resolvedCampaignId = campaign.id;

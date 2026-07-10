@@ -12,6 +12,7 @@ import {
   type Performance,
   type TestingBatch,
 } from "@workspace/api-client-react";
+import { DEFAULT_ALERT_RULES, type AlertRulesConfig } from "@workspace/alert-rules";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { DEFAULT_CONFIG, useGoalsConfig } from "@/lib/goals-config";
@@ -190,6 +191,7 @@ function classifyTestingRow(
   batch: TestingBatch,
   perf: MetricTotals,
   offer: Offer,
+  rules: AlertRulesConfig = DEFAULT_ALERT_RULES,
 ): { highlights: TestingHighlight[]; tags: ActionTag[] } {
   const highlights: TestingHighlight[] = [];
   const clicks = perf.visits;
@@ -201,12 +203,15 @@ function classifyTestingRow(
   if (
     batch.status === "LIVE_TESTS" &&
     threshold > 0 &&
-    clicks / threshold >= 0.7 &&
-    clicks / threshold < 1
+    clicks / threshold >= rules.optimization.offTargetRatio &&
+    clicks / threshold < rules.optimization.behindTargetRatio
   ) {
     highlights.push("Near Threshold");
   }
-  if (batch.status === "LIVE_TESTS" && daysSince(batch.liveAt ?? batch.testStartDate) > 14) {
+  if (
+    batch.status === "LIVE_TESTS" &&
+    daysSince(batch.liveAt ?? batch.testStartDate) > rules.review.staleCampaignDays
+  ) {
     highlights.push("Stuck Testing");
   }
   if (perf.conversions === 0 && perf.visits > 0) {
@@ -455,6 +460,7 @@ export function buildTestingDrilldown(
   batches: TestingBatch[],
   offers: Offer[],
   perf: Performance[],
+  rules: AlertRulesConfig = DEFAULT_ALERT_RULES,
 ): TestingOfferRow[] {
   const activeBatches = batches.filter(
     (b) =>
@@ -488,6 +494,7 @@ export function buildTestingDrilldown(
           status: "testing",
           createdAt: batch.createdAt,
         },
+        rules,
       );
 
       rows.push({
@@ -597,8 +604,8 @@ export function useOpsActionDrilldown(
 
   const testing = useMemo(() => {
     if (!network) return [];
-    return buildTestingDrilldown(network, batches, offersSource, perf);
-  }, [network, batches, offersSource, perf]);
+    return buildTestingDrilldown(network, batches, offersSource, perf, rules);
+  }, [network, batches, offersSource, perf, rules]);
 
   const working = useMemo(() => {
     if (!network) return [];

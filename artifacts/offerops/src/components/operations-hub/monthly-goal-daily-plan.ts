@@ -19,7 +19,14 @@ import {
   type MissionCampaignRow,
 } from "./daily-mission-board.ts";
 import type { NetworkGeoSlice, OpsCampaignRowLite } from "./ops-goal-focus.ts";
-import { DEFAULT_ALERT_RULES, type AlertRulesConfig } from "@workspace/alert-rules";
+import {
+  DEFAULT_ALERT_RULES,
+  evaluateCampaign,
+  USE_NEW_ALERT_ENGINE,
+  type AlertRulesConfig,
+  type OptimizeReason,
+} from "@workspace/alert-rules";
+import { logAlertDecision } from "../../lib/alert-decision-log.ts";
 
 export type TestingGeoAction = {
   geo: string;
@@ -48,13 +55,17 @@ export type OptimizationIssueType =
   | "missing_offer_count"
   | "behind_target"
   | "off_target"
-  | "underperforming";
+  | "underperforming"
+  | "abnormal_traffic";
 
 export type OptimizationCampaignRef = {
   id: number;
   name: string;
   network: string;
   geo: string;
+  /** Impact/urgency signals for the priority engine (optional). */
+  profit?: number;
+  roi?: number;
 };
 
 export type OptimizationGroup = {
@@ -76,7 +87,22 @@ export type ScalingCandidate = {
   kind: "scaling" | "move_to_working";
   profit: number;
   roi: number;
+  revenue: number;
   visitsPerOffer: number | null;
+  /** Meets the winning rule (conversions + revenue + ROI). */
+  isWinner: boolean;
+};
+
+/** Long-running + low-performance campaign the shutdown rule flags to STOP. */
+export type ShutdownCandidate = {
+  id: number;
+  name: string;
+  network: string;
+  geo: string;
+  daysLive: number;
+  conversions: number;
+  revenue: number;
+  roi: number;
 };
 
 export type DailyActionPlanSummary = {
@@ -85,6 +111,7 @@ export type DailyActionPlanSummary = {
   optimizationsRequired: number;
   optimizationsDone: number;
   scalingAdvisory: number;
+  shutdownAdvisory: number;
   completed: number;
   total: number;
   progressPct: number;
@@ -95,6 +122,7 @@ export type DailyActionPlan = {
   optimizations: OptimizationGroup[];
   scalingCandidates: ScalingCandidate[];
   moveToWorkingCandidates: ScalingCandidate[];
+  shutdownCandidates: ShutdownCandidate[];
   summary: DailyActionPlanSummary;
 };
 
@@ -215,6 +243,144 @@ function campaignClicks(c: OpsCampaignRowLite): number {
 function campaignRevenue(c: OpsCampaignRowLite | MissionCampaignRow): number {
   const n = Number((c as OpsCampaignRowLite).revenue ?? 0);
   return Number.isFinite(n) ? n : 0;
+}
+
+function campaignConversions(c: OpsCampaignRowLite | MissionCampaignRow): number {
+  const n = Number((c as OpsCampaignRowLite).conversions ?? 0);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+}
+
+/** Winning rule: enough conversions + revenue + ROI → flag as WINNER. */
+function isWinningCampaign(c: OpsCampaignRowLite, rules: AlertRulesConfig): boolean {
+  return (
+    campaignConversions(c) >= rules.winning.minConversions &&
+    campaignRevenue(c) >= rules.winning.minRevenue &&
+    campaignRoi(c) >= rules.winning.minROI
+  );
+}
+
+function campaignCost(c: OpsCampaignRowLite): number {
+  const n = Number((c as OpsCampaignRowLite).cost ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+type BoardDecision = {
+  isWinner: boolean;
+  isScaling: boolean;
+  isShutdown: boolean;
+  optimizeReason: OptimizeReason;
+};
+
+function withVpoTarget(rules: AlertRulesConfig, vpo: number): AlertRulesConfig {
+  return { ...rules, testing: { ...rules.testing, visitsPerOffer: vpo } };
+}
+
+/**
+ * Single decision point for a campaign's alert flags. When the new alert engine
+ * flag is on it delegates to the shared `evaluateCampaign` (one brain); the
+ * legacy branch preserves the pre-unification logic verbatim for safe rollout.
+ * Both branches are settings-driven — no hardcoded thresholds.
+ */
+function campaignDecision(
+  c: OpsCampaignRowLite,
+  offerCount: number | null,
+  rules: AlertRulesConfig,
+  vpoTarget: number,
+  now: Date,
+): BoardDecision {
+  if (USE_NEW_ALERT_ENGINE) {
+    const out = evaluateCampaign(
+      {
+        purpose: c.campaignPurpose,
+        status: c.status,
+        liveStartedAt: c.liveStartedAt,
+        createdAt: c.createdAt,
+      },
+      {
+        revenue: campaignRevenue(c),
+        cost: campaignCost(c),
+        // Raw ROI; the evaluator normalizes fractions→percent internally.
+        roi: Number((c as OpsCampaignRowLite).roi ?? 0),
+        conversions: campaignConversions(c),
+        clicks: campaignClicks(c),
+        offerCount,
+      },
+      withVpoTarget(rules, vpoTarget),
+      now,
+    );
+    logAlertDecision(c.id, "mission-board", out);
+    return {
+      isWinner: out.isWinner,
+      isScaling: out.isScaling,
+      isShutdown: out.isShutdown,
+      optimizeReason: out.optimizeReason,
+    };
+  }
+
+  // ----- legacy (pre-unification) decision — preserved behind the flag -----
+  const isWinner = isWinningCampaign(c, rules);
+  const isScaling = isScalingOpportunity({
+    campaignPurpose: c.campaignPurpose,
+    status: c.status,
+    profit: campaignProfit(c),
+    roi: campaignRoi(c),
+    revenue: campaignRevenue(c),
+    liveStartedAt: c.liveStartedAt,
+    createdAt: c.createdAt,
+    now,
+    thresholds: {
+      minLiveDays: rules.scaling.minLiveDaysForScale,
+      minProfit: rules.scaling.minProfitForScale,
+      minRoiPercent: rules.scaling.minRoiPercentForScale,
+      minRevenue: rules.scaling.minRevenueForScale,
+    },
+  });
+
+  const purpose = (c.campaignPurpose ?? "").toLowerCase();
+  const managed = purpose === "working" || purpose === "scaling";
+  const live = daysLiveForCampaign(c.liveStartedAt, c.createdAt, now);
+
+  let isShutdown = false;
+  if (managed && c.status === "live" && !isWinner) {
+    isShutdown =
+      live != null &&
+      live >= rules.shutdown.minDaysLive &&
+      campaignConversions(c) <= rules.shutdown.maxConversions &&
+      campaignRevenue(c) <= rules.shutdown.maxRevenue;
+  }
+
+  let optimizeReason: OptimizeReason = null;
+  if (managed && c.status === "live") {
+    if (offerCount == null || offerCount <= 0) {
+      optimizeReason = "missing_offer_count";
+    } else {
+      const vpo = campaignClicks(c) / Math.max(1, offerCount);
+      const ratio = vpoTarget > 0 ? vpo / vpoTarget : 0;
+      const maxExpectedVpo = rules.traffic.maxExpectedVisitsPerOffer;
+      if (ratio > 0 && ratio < rules.optimization.offTargetRatio) {
+        optimizeReason = "off_target";
+      } else if (
+        ratio >= rules.optimization.offTargetRatio &&
+        ratio < rules.optimization.behindTargetRatio
+      ) {
+        optimizeReason = "behind_target";
+      } else if (maxExpectedVpo > 0 && vpo > maxExpectedVpo) {
+        optimizeReason = "abnormal_traffic";
+      } else {
+        const roi = campaignRoi(c);
+        if (
+          !isScaling &&
+          live != null &&
+          live >= rules.optimization.minDaysLive &&
+          roi < rules.optimization.roiMinThreshold
+        ) {
+          optimizeReason = "underperforming";
+        }
+      }
+    }
+  }
+
+  return { isWinner, isScaling, isShutdown, optimizeReason };
 }
 
 /**
@@ -494,10 +660,6 @@ export function buildOptimizationGroups(
   const rules = opts.rules ?? DEFAULT_ALERT_RULES;
   const vpoTarget =
     opts.visitsPerOfferTarget ?? rules.testing.visitsPerOffer;
-  const offTargetRatio = rules.optimization.offTargetRatio;
-  const behindTargetRatio = rules.optimization.behindTargetRatio;
-  const minLiveDaysForReview = rules.optimization.minLiveDaysForReview;
-  const weakRoiPercent = rules.optimization.weakRoiPercent;
   const rows = toMissionCampaignRows(campaigns);
   const byId = new Map(rows.map((r) => [r.id, r]));
 
@@ -505,6 +667,7 @@ export function buildOptimizationGroups(
   const behind: OptimizationCampaignRef[] = [];
   const off: OptimizationCampaignRef[] = [];
   const underperforming: OptimizationCampaignRef[] = [];
+  const abnormal: OptimizationCampaignRef[] = [];
 
   for (const c of campaigns) {
     const purpose = (c.campaignPurpose ?? "").toLowerCase();
@@ -520,54 +683,42 @@ export function buildOptimizationGroups(
       name: campaignName(adapted ?? c),
       network,
       geo,
+      profit: campaignProfit(c),
+      roi: campaignRoi(c),
     };
 
     const offerCount = adapted?.offerCount ?? (c.offerCount != null ? Number(c.offerCount) : null);
-    if (offerCount == null || offerCount <= 0) {
-      missing.push(ref);
-      continue;
+    const reason = campaignDecision(c, offerCount, rules, vpoTarget, now).optimizeReason;
+    switch (reason) {
+      case "missing_offer_count":
+        missing.push(ref);
+        break;
+      case "off_target":
+        off.push(ref);
+        break;
+      case "behind_target":
+        behind.push(ref);
+        break;
+      case "abnormal_traffic":
+        abnormal.push(ref);
+        break;
+      case "underperforming":
+        underperforming.push(ref);
+        break;
+      default:
+        break;
     }
+  }
 
-    const clicks = campaignClicks(c);
-    const visitsPerOffer = clicks / Math.max(1, offerCount);
-    const ratio = vpoTarget > 0 ? visitsPerOffer / vpoTarget : 0;
-    if (ratio > 0 && ratio < offTargetRatio) {
-      off.push(ref);
-      continue;
-    }
-    if (ratio >= offTargetRatio && ratio < behindTargetRatio) {
-      behind.push(ref);
-      continue;
-    }
-
-    // Proactive: campaigns live long enough with weak ROI deserve optimization,
-    // as long as they are not already a Scale Today candidate.
-    const roi = campaignRoi(c);
-    const daysLive = daysLiveForCampaign(c.liveStartedAt, c.createdAt, now);
-    const isScale = isScalingOpportunity({
-      campaignPurpose: c.campaignPurpose,
-      status: c.status,
-      profit: campaignProfit(c),
-      roi,
-      revenue: campaignRevenue(c),
-      liveStartedAt: c.liveStartedAt,
-      createdAt: c.createdAt,
-      now,
-      thresholds: {
-        minLiveDays: rules.scaling.minLiveDaysForScale,
-        minProfit: rules.scaling.minProfitForScale,
-        minRoiPercent: rules.scaling.minRoiPercentForScale,
-        minRevenue: rules.scaling.minRevenueForScale,
-      },
-    });
-    if (
-      !isScale &&
-      daysLive != null &&
-      daysLive >= minLiveDaysForReview &&
-      roi < weakRoiPercent
-    ) {
-      underperforming.push(ref);
-    }
+  // Priority engine: within each group, highest impact (profit) first, then
+  // urgency (lower ROI first).
+  const byImpactThenUrgency = (a: OptimizationCampaignRef, b: OptimizationCampaignRef) => {
+    const pd = (b.profit ?? 0) - (a.profit ?? 0);
+    if (pd !== 0) return pd;
+    return (a.roi ?? 0) - (b.roi ?? 0);
+  };
+  for (const list of [missing, behind, off, underperforming, abnormal]) {
+    list.sort(byImpactThenUrgency);
   }
 
   const groups: OptimizationGroup[] = [];
@@ -628,6 +779,17 @@ export function buildOptimizationGroups(
     });
   }
 
+  if (abnormal.length > 0) {
+    groups.push({
+      issueType: "abnormal_traffic",
+      label: `Review ${abnormal.length} campaign${abnormal.length === 1 ? "" : "s"} with abnormal traffic`,
+      campaigns: abnormal,
+      required: abnormal.length,
+      doneToday: 0,
+      canTrackCompletion: false,
+    });
+  }
+
   return groups;
 }
 
@@ -660,12 +822,7 @@ export function buildScalingCandidates(
 ): { scaling: ScalingCandidate[]; moveToWorking: ScalingCandidate[] } {
   const now = opts.now ?? new Date();
   const rules = opts.rules ?? DEFAULT_ALERT_RULES;
-  const scaleThresholds = {
-    minLiveDays: rules.scaling.minLiveDaysForScale,
-    minProfit: rules.scaling.minProfitForScale,
-    minRoiPercent: rules.scaling.minRoiPercentForScale,
-    minRevenue: rules.scaling.minRevenueForScale,
-  };
+  const vpoTarget = opts.visitsPerOfferTarget ?? rules.testing.visitsPerOffer;
   const rows = toMissionCampaignRows(campaigns);
   const byId = new Map(rows.map((r) => [r.id, r]));
   const scaling: ScalingCandidate[] = [];
@@ -682,19 +839,11 @@ export function buildScalingCandidates(
     const visitsPerOffer =
       offerCount != null && offerCount > 0 ? clicks / offerCount : null;
 
-    if (
-      isScalingOpportunity({
-        campaignPurpose: c.campaignPurpose,
-        status: c.status,
-        profit: campaignProfit(c),
-        roi: campaignRoi(c),
-        revenue: campaignRevenue(c),
-        liveStartedAt: c.liveStartedAt,
-        createdAt: c.createdAt,
-        now,
-        thresholds: scaleThresholds,
-      })
-    ) {
+    const decision = campaignDecision(c, offerCount, rules, vpoTarget, now);
+    const winner = decision.isWinner;
+    const scaleReady = decision.isScaling;
+    // Winners always surface in Scale Today even if they miss the scale bar.
+    if (scaleReady || winner) {
       scaling.push({
         id,
         name: campaignName(adapted ?? c),
@@ -703,7 +852,9 @@ export function buildScalingCandidates(
         kind: "scaling",
         profit: campaignProfit(c),
         roi: campaignRoi(c),
+        revenue: campaignRevenue(c),
         visitsPerOffer,
+        isWinner: winner,
       });
       continue;
     }
@@ -717,18 +868,71 @@ export function buildScalingCandidates(
         kind: "move_to_working",
         profit: campaignProfit(c),
         roi: campaignRoi(c),
+        revenue: campaignRevenue(c),
         visitsPerOffer,
+        isWinner: false,
       });
     }
   }
 
+  // Priority engine: winners first, then highest impact (profit, then revenue).
+  const byScalePriority = (a: ScalingCandidate, b: ScalingCandidate) => {
+    if (a.isWinner !== b.isWinner) return a.isWinner ? -1 : 1;
+    if (b.profit !== a.profit) return b.profit - a.profit;
+    return b.revenue - a.revenue;
+  };
+  scaling.sort(byScalePriority);
+  moveToWorking.sort(byScalePriority);
+
   return { scaling, moveToWorking };
+}
+
+/**
+ * Shutdown rule → long-running working/scaling campaigns with low performance
+ * (few conversions, low revenue) that should be stopped. Winners are excluded.
+ */
+export function buildShutdownCandidates(
+  campaigns: OpsCampaignRowLite[],
+  opts: { now?: Date; rules?: AlertRulesConfig } = {},
+): ShutdownCandidate[] {
+  const now = opts.now ?? new Date();
+  const rules = opts.rules ?? DEFAULT_ALERT_RULES;
+  const vpoTarget = rules.testing.visitsPerOffer;
+  const rows = toMissionCampaignRows(campaigns);
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const out: ShutdownCandidate[] = [];
+
+  for (const c of campaigns) {
+    const id = c.id;
+    if (id == null) continue;
+    const offerCount = c.offerCount != null ? Number(c.offerCount) : null;
+    if (!campaignDecision(c, offerCount, rules, vpoTarget, now).isShutdown) continue;
+    const daysLive = daysLiveForCampaign(c.liveStartedAt, c.createdAt, now) ?? 0;
+    const conversions = campaignConversions(c);
+    const revenue = campaignRevenue(c);
+    const adapted = byId.get(id);
+    out.push({
+      id,
+      name: campaignName(adapted ?? c),
+      network: adapted?.network?.trim() || "(unset)",
+      geo: adapted?.geo?.trim() || "—",
+      daysLive,
+      conversions,
+      revenue,
+      roi: campaignRoi(c),
+    });
+  }
+
+  // Most wasted first: longest live, then lowest revenue.
+  out.sort((a, b) => (b.daysLive - a.daysLive) || (a.revenue - b.revenue));
+  return out;
 }
 
 function summarizePlan(
   testingNetworks: TestingNetworkPlan[],
   optimizations: OptimizationGroup[],
   scalingCount: number,
+  shutdownCount: number,
 ): DailyActionPlanSummary {
   const testsRequired = testingNetworks.reduce((s, n) => s + n.todayRequired, 0);
   const testsDone = testingNetworks.reduce((s, n) => s + n.doneToday, 0);
@@ -737,9 +941,10 @@ function summarizePlan(
     (s, g) => s + (g.canTrackCompletion ? Math.min(g.required, g.doneToday) : 0),
     0,
   );
-  // Scaling is advisory — counts toward total visibility but not completed
+  // Scaling + shutdown are advisory — visible in total but not "completed".
   const scalingAdvisory = scalingCount;
-  const total = testsRequired + optimizationsRequired + scalingAdvisory;
+  const shutdownAdvisory = shutdownCount;
+  const total = testsRequired + optimizationsRequired + scalingAdvisory + shutdownAdvisory;
   const completed = Math.min(total, testsDone + optimizationsDone);
   const progressPct =
     total <= 0 ? 100 : Math.min(100, Math.round((completed / total) * 100));
@@ -750,6 +955,7 @@ function summarizePlan(
     optimizationsRequired,
     optimizationsDone: Math.min(optimizationsDone, optimizationsRequired),
     scalingAdvisory,
+    shutdownAdvisory,
     completed,
     total,
     progressPct,
@@ -784,10 +990,12 @@ export function buildDailyActionPlan(input: {
     visitsPerOfferTarget: input.visitsPerOfferTarget,
     rules,
   });
+  const shutdownCandidates = buildShutdownCandidates(campaigns, { now, rules });
   const summary = summarizePlan(
     testingNetworks,
     optimizations,
     scaling.length + moveToWorking.length,
+    shutdownCandidates.length,
   );
 
   return {
@@ -795,6 +1003,7 @@ export function buildDailyActionPlan(input: {
     optimizations,
     scalingCandidates: scaling,
     moveToWorkingCandidates: moveToWorking,
+    shutdownCandidates,
     summary,
   };
 }

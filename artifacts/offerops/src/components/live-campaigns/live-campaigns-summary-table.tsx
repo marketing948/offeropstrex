@@ -16,6 +16,7 @@ import {
   deriveSummaryHealth,
   metricTone,
   metricToneClass,
+  resolveCampaignOfferCount,
   roiPercent,
   summaryHealthBadgeClass,
 } from "@/components/live-campaigns/live-campaign-health";
@@ -93,6 +94,7 @@ export function LiveCampaignsSummaryTable({
   campaigns,
   metricsByCampaignId,
   offersPerBatch,
+  onOfferCountBackfill,
   performanceRangeLabel,
   rules,
   isLoading,
@@ -106,6 +108,7 @@ export function LiveCampaignsSummaryTable({
   campaigns: MonitoringCampaign[];
   metricsByCampaignId: Map<number, DailyMetricRow>;
   offersPerBatch: Map<number, number>;
+  onOfferCountBackfill?: (campaignId: number, offerCount: number) => void;
   performanceRangeLabel: string;
   rules: AlertRulesConfig;
   isLoading: boolean;
@@ -134,13 +137,18 @@ export function LiveCampaignsSummaryTable({
           if (col === "profit") return range?.profit ?? (Number(c.revenue ?? 0) - Number(c.cost ?? 0));
           if (col === "roi") return range?.roi ?? roiPercent(c.roi);
           if (col === "conversions") return range?.conversions ?? Number(c.conversions ?? 0);
-          if (col === "offerCount") return c.offerCount ?? (c.batchId != null ? offersPerBatch.get(c.batchId) ?? 0 : 0);
+          if (col === "offerCount") {
+            return resolveCampaignOfferCount(c, {
+              offersPerBatch,
+              onBackfillPersist: onOfferCountBackfill,
+            });
+          }
           if (col === "campaignName") return c.campaignName;
           if (col === "geo") return c.batchGeo ?? "";
           return 0;
         },
       ),
-    [campaigns, metricsByCampaignId, offersPerBatch, sort.col, sort.dir],
+    [campaigns, metricsByCampaignId, offersPerBatch, onOfferCountBackfill, sort.col, sort.dir],
   );
 
   const visibleIds = useMemo(() => sortedCampaigns.map((c) => c.id), [sortedCampaigns]);
@@ -260,7 +268,10 @@ export function LiveCampaignsSummaryTable({
               sortedCampaigns.map((c) => {
                 const daily = metricsByCampaignId.get(c.id);
                 const range = toRangeSnapshot(daily);
-                const offerCount = c.offerCount ?? (c.batchId != null ? offersPerBatch.get(c.batchId) ?? 0 : 0);
+                const offerCount = resolveCampaignOfferCount(c, {
+                  offersPerBatch,
+                  onBackfillPersist: onOfferCountBackfill,
+                });
                 const reviewInput = toReviewInput(c);
                 const health = deriveSummaryHealth(range, reviewInput, offerCount, rules);
                 const roi = range?.roi ?? null;

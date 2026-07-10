@@ -24,7 +24,9 @@ import {
   getListOffersQueryKey,
 } from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
+import { resolveCampaignOfferCount } from "@/components/live-campaigns/live-campaign-health";
 import { useAlertRules } from "@/hooks/use-alert-rules";
+import { persistOfferCountBackfill } from "@/lib/offer-count-persist";
 import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal-surfaces";
 import type { MonitoringCampaign } from "@/components/live-campaigns/live-campaigns-monitoring-table";
 import { LiveCampaignsSummaryTable } from "@/components/live-campaigns/live-campaigns-summary-table";
@@ -227,6 +229,18 @@ export default function LiveCampaigns() {
     return m;
   }, [offers]);
 
+  const onOfferCountBackfill = useMemo(
+    () => (campaignId: number, offerCount: number) => {
+      persistOfferCountBackfill(campaignId, offerCount, async (id, count) => {
+        await authedJson(`/api/campaigns/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ offerCount: count }),
+        });
+      });
+    },
+    [],
+  );
+
   const trafficSourceOptions = useMemo(
     () =>
       Array.from(
@@ -285,9 +299,12 @@ export default function LiveCampaigns() {
     "Some filter options could not be loaded.",
   );
 
-  const selectedOfferCount =
-    selectedCampaign?.offerCount
-      ?? (selectedCampaign?.batchId != null ? offersPerBatch.get(selectedCampaign.batchId) ?? 0 : 0);
+  const selectedOfferCount = selectedCampaign
+    ? resolveCampaignOfferCount(selectedCampaign, {
+        offersPerBatch,
+        onBackfillPersist: onOfferCountBackfill,
+      })
+    : 1;
 
   return (
     <div className="space-y-5">
@@ -423,6 +440,7 @@ export default function LiveCampaigns() {
         campaigns={filtered}
         metricsByCampaignId={metricsByCampaignId}
         offersPerBatch={offersPerBatch}
+        onOfferCountBackfill={onOfferCountBackfill}
         performanceRangeLabel={performanceRangeLabel}
         rules={rules}
         isLoading={isLoading}

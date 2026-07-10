@@ -1,6 +1,8 @@
 import {
   DEFAULT_ALERT_RULES,
+  evaluateCampaign,
   milestoneFractions,
+  USE_NEW_ALERT_ENGINE,
   type AlertRulesConfig,
 } from "@workspace/alert-rules";
 import type {
@@ -9,6 +11,7 @@ import type {
   TodoTask,
 } from "@workspace/api-client-react";
 import type { DashboardBreakdownRow } from "@workspace/api-client-react";
+import { logAlertDecision } from "./alert-decision-log.ts";
 
 /** @deprecated Use alert rules `testing.visitsPerOffer` via useAlertRules(). */
 export const VISITS_PER_OFFER_TARGET = DEFAULT_ALERT_RULES.testing.visitsPerOffer;
@@ -93,6 +96,63 @@ function daysSince(iso: string | null | undefined): number {
 function hoursSince(iso: string | null | undefined): number {
   if (!iso) return 0;
   return Math.floor((Date.now() - new Date(iso).getTime()) / MS_PER_HOUR);
+}
+
+type LiveCampaignAlertFacts = {
+  trafficPct: number;
+  milestoneReached: number | null;
+  zeroConvScale: boolean;
+};
+
+/**
+ * Campaign-level alert predicates. Flag-gated: the shared evaluator (one brain)
+ * when enabled, else the legacy inline computation. Alert objects are still
+ * built by the callers below — only the decisions are centralized.
+ */
+function liveCampaignAlertFacts(
+  c: LiveCampaignRow,
+  offerCount: number,
+  rules: AlertRulesConfig,
+): LiveCampaignAlertFacts {
+  const visits = c.clicks ?? 0;
+  const conv = c.conversions ?? 0;
+  if (USE_NEW_ALERT_ENGINE) {
+    const out = evaluateCampaign(
+      { purpose: c.campaignPurpose, status: c.status, liveStartedAt: c.liveStartedAt },
+      { roi: c.roi, conversions: conv, clicks: visits, offerCount },
+      rules,
+    );
+    logAlertDecision(c.id, "dashboard", out);
+    return {
+      trafficPct: out.facts.trafficPct,
+      milestoneReached: out.facts.milestoneReached,
+      zeroConvScale:
+        c.campaignPurpose !== "testing" && c.status === "live" && out.isZeroConversion,
+    };
+  }
+  const target = Math.max(offerCount, 1) * rules.testing.visitsPerOffer;
+  const trafficPct = target > 0 ? visits / target : 0;
+  let milestoneReached: number | null = null;
+  if (
+    c.campaignPurpose === "testing" &&
+    c.status === "live" &&
+    rules.testing.zeroConversionAtMilestoneEnabled &&
+    conv === 0
+  ) {
+    for (const m of milestoneFractions(rules).sort((a, b) => b - a)) {
+      if (trafficPct >= m) {
+        milestoneReached = m;
+        break;
+      }
+    }
+  }
+  const hrs = hoursSince(c.liveStartedAt);
+  const zeroConvScale =
+    c.campaignPurpose !== "testing" &&
+    c.status === "live" &&
+    conv === 0 &&
+    hrs >= rules.scaling.noConversionsAfterHours;
+  return { trafficPct, milestoneReached, zeroConvScale };
 }
 
 export function offersByBatch(offers: Offer[]): Map<number, Offer[]> {
@@ -180,34 +240,26 @@ export function buildExecutiveAlerts(input: {
   }
 
   const offerMap = offersByBatch(offers);
+  const sortedMilestones = milestoneFractions(rules).sort((a, b) => b - a);
   for (const c of campaigns) {
     if (c.campaignPurpose !== "testing" || c.status !== "live") continue;
     const batchOffers = c.batchId != null ? offerMap.get(c.batchId)?.length ?? 0 : 0;
-    const target = Math.max(batchOffers, 1) * rules.testing.visitsPerOffer;
     const visits = c.clicks ?? 0;
     const conv = c.conversions ?? 0;
-    const pct = target > 0 ? visits / target : 0;
     if (conv > 0) continue;
     if (!rules.testing.zeroConversionAtMilestoneEnabled) continue;
-    const thresholds: { min: number; sev: AlertSeverity; label: string }[] = milestoneFractions(rules)
-      .sort((a, b) => b - a)
-      .map((min, i) => ({
-        min,
-        sev: (i === 0 ? "critical" : i === 1 ? "high" : "medium") as AlertSeverity,
-        label: `${Math.round(min * 100)}% of visit target with zero conversions`,
-      }));
-    for (const t of thresholds) {
-      if (pct >= t.min) {
-        alerts.push({
-          id: `burn-test-${c.id}-${t.min}`,
-          severity: t.sev,
-          title: "Testing campaign burn risk",
-          description: `${c.campaignName}: ${t.label}.`,
-          href: `/live-campaigns`,
-          meta: `${Math.round(pct * 100)}% of target · ${visits.toLocaleString()} visits`,
-        });
-        break;
-      }
+    const { trafficPct: pct, milestoneReached } = liveCampaignAlertFacts(c, batchOffers, rules);
+    if (milestoneReached != null) {
+      const i = sortedMilestones.indexOf(milestoneReached);
+      const sev: AlertSeverity = i === 0 ? "critical" : i === 1 ? "high" : "medium";
+      alerts.push({
+        id: `burn-test-${c.id}-${milestoneReached}`,
+        severity: sev,
+        title: "Testing campaign burn risk",
+        description: `${c.campaignName}: ${Math.round(milestoneReached * 100)}% of visit target with zero conversions.`,
+        href: `/live-campaigns`,
+        meta: `${Math.round(pct * 100)}% of target · ${visits.toLocaleString()} visits`,
+      });
     }
     if (pct >= 1 && conv === 0) {
       alerts.push({
@@ -223,9 +275,9 @@ export function buildExecutiveAlerts(input: {
   for (const c of campaigns) {
     if (c.campaignPurpose === "testing") continue;
     if (c.status !== "live") continue;
-    const conv = c.conversions ?? 0;
     const hrs = hoursSince(c.liveStartedAt);
-    if (conv === 0 && hrs >= rules.scaling.noConversionsAfterHours) {
+    const { zeroConvScale } = liveCampaignAlertFacts(c, 0, rules);
+    if (zeroConvScale) {
       alerts.push({
         id: `scale-no-conv-${c.id}`,
         severity: "high",
@@ -246,7 +298,7 @@ export function buildExecutiveAlerts(input: {
   }
 
   for (const b of liveTestBatches) {
-    if (daysSince(b.liveAt) > 14) {
+    if (daysSince(b.liveAt) > rules.review.staleCampaignDays) {
       alerts.push({
         id: `stuck-${b.id}`,
         severity: "medium",
@@ -468,9 +520,8 @@ export function countBurnRiskCampaigns(
   for (const c of campaigns) {
     if (c.campaignPurpose !== "testing" || c.status !== "live") continue;
     const batchOffers = c.batchId != null ? offerMap.get(c.batchId)?.length ?? 0 : 0;
-    const target = Math.max(batchOffers, 1) * rules.testing.visitsPerOffer;
-    const pct = target > 0 ? (c.clicks ?? 0) / target : 0;
-    if ((c.conversions ?? 0) === 0 && pct >= minMilestone) n += 1;
+    const { trafficPct } = liveCampaignAlertFacts(c, batchOffers, rules);
+    if ((c.conversions ?? 0) === 0 && trafficPct >= minMilestone) n += 1;
   }
   return n;
 }

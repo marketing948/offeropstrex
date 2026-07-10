@@ -6,6 +6,7 @@ import {
 } from "@/lib/campaign-review/heuristics";
 import type { CampaignHealthStatus } from "@/lib/campaign-review/types";
 import { CampaignHealthBadge } from "@/components/campaign-review/health-badge";
+import { resolveCampaignOfferCount } from "@/components/live-campaigns/live-campaign-health";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -249,7 +250,7 @@ export function LiveCampaignsMonitoringTable({
             ) : (
               campaigns.map((c) => {
                 const daily = metricsByCampaignId.get(c.id);
-                const offerCount = c.batchId != null ? offersPerBatch.get(c.batchId) ?? 0 : 0;
+                const offerCount = resolveCampaignOfferCount(c, { offersPerBatch });
                 const health = evaluateCampaignMonitoringHealth(
                   toReviewInput(c),
                   offerCount,

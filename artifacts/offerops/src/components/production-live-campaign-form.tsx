@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { AlertTriangle } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -340,26 +341,55 @@ export function ProductionLiveCampaignForm({
       <AlertDialog open={conflict != null} onOpenChange={(open) => !open && setConflict(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Voluum campaign already linked</AlertDialogTitle>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              You are about to update an existing campaign
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              {conflict?.existingCampaign
-                ? `ID #${conflict.existingCampaign.id} · ${conflict.existingCampaign.name ?? "Existing campaign"}`
-                : "This Voluum campaign ID already exists in this workspace."}
+              This Voluum campaign ID is already linked in this workspace. Confirming will
+              <strong> update the existing campaign</strong> — it is not deleted or recreated, and its
+              history is kept.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="text-xs text-muted-foreground">
-            {conflict?.reason ?? "You can update the existing campaign instead of creating a duplicate row."}
-          </div>
+          {conflict?.existingCampaign && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2.5 text-sm">
+              <dl className="space-y-1">
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">Campaign</dt>
+                  <dd className="truncate text-right font-semibold text-slate-900">
+                    {conflict.existingCampaign.name ?? `#${conflict.existingCampaign.id}`}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">Network / GEO</dt>
+                  <dd className="text-right font-medium text-slate-800">
+                    {conflict.existingCampaign.affiliateNetwork ?? "—"} /{" "}
+                    {conflict.existingCampaign.geo ?? "—"}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">Owner</dt>
+                  <dd className="text-right font-medium text-slate-800">
+                    {conflict.existingCampaign.employee ?? "No owner"}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          )}
+          {conflict?.reason && (
+            <div className="text-xs text-muted-foreground">{conflict.reason}</div>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               disabled={pending || !conflict?.canOverride}
+              className="bg-amber-600 hover:bg-amber-700 focus-visible:ring-amber-600"
               onClick={(e) => {
                 e.preventDefault();
                 void submitWithConflictHandling(true);
               }}
             >
-              Update existing campaign
+              {pending ? "Updating…" : "Confirm override"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
