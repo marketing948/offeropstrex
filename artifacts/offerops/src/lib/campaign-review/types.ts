@@ -70,6 +70,8 @@ export type ReviewQueueCampaign = {
   profit: number;
   firstSeenAt: string | null;
   escalated: boolean;
+  voluumCampaignId?: string | null;
+  reviewComment?: string | null;
   urgencyScore: number;
 };
 

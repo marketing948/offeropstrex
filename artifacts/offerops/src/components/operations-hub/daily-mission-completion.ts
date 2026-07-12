@@ -15,6 +15,11 @@ import type {
   ShutdownCandidate,
   TestingNetworkPlan,
 } from "./monthly-goal-daily-plan.ts";
+import type { OpsCampaignRowLite } from "./ops-goal-focus.ts";
+import {
+  isSameLocalDay,
+  toMissionCampaignRow,
+} from "./daily-mission-board.ts";
 
 type TestingGeo = TestingNetworkPlan["geos"][number];
 
@@ -86,10 +91,37 @@ export type MissionCompletionState = {
   geoUsageToday: GeoUsageToday;
   /** Optional-opportunity completions per network (bonus only, not progress). */
   extraCompletionsToday?: Record<string, number>;
+  /** GEO codes already surfaced in the UI today (rotation pool — not shuffle). */
+  seenGeosToday?: Record<string, string[]>;
+  /** Last few GEO codes shown per network (anti-repeat in reuse mode). */
+  recentGeos?: Record<string, string[]>;
 };
 
+/** Sliding memory of recently shown GEOs per network (reuse anti-repeat). */
+export const MAX_RECENT_GEOS = 3;
+
 export function emptyCompletion(now = new Date()): MissionCompletionState {
-  return { day: localDayKey(now), done: [], geoUsageToday: {}, extraCompletionsToday: {} };
+  return {
+    day: localDayKey(now),
+    done: [],
+    geoUsageToday: {},
+    extraCompletionsToday: {},
+    seenGeosToday: {},
+    recentGeos: {},
+  };
+}
+
+/** Admin / read-only views — never inherit worker local completion state. */
+export function createEmptyMissionState(now = new Date()): MissionCompletionState {
+  return emptyCompletion(now);
+}
+
+function coalesceState(
+  state: MissionCompletionState | null | undefined,
+  now = new Date(),
+): MissionCompletionState {
+  if (!state) return emptyCompletion(now);
+  return state;
 }
 
 /** Drop completions from a previous day so "done for today" never leaks over. */
@@ -99,15 +131,33 @@ export function normalizeForToday(
 ): MissionCompletionState {
   const today = localDayKey(now);
   if (!state || state.day !== today || !Array.isArray(state.done)) {
-    return { day: today, done: [], geoUsageToday: {}, extraCompletionsToday: {} };
+    return {
+      day: today,
+      done: [],
+      geoUsageToday: {},
+      extraCompletionsToday: {},
+      seenGeosToday: {},
+      recentGeos: {},
+    };
   }
   const usage = normalizeGeoUsage(state.geoUsageToday);
   const extra = state.extraCompletionsToday ?? {};
+  const seen = state.seenGeosToday ?? {};
+  const recent = state.recentGeos ?? {};
   return {
     day: today,
     done: [...new Set(state.done)],
     geoUsageToday: usage,
     extraCompletionsToday: { ...extra },
+    seenGeosToday: Object.fromEntries(
+      Object.entries(seen).map(([net, geos]) => [net, [...new Set(geos)]]),
+    ),
+    recentGeos: Object.fromEntries(
+      Object.entries(recent).map(([net, geos]) => [
+        net,
+        geos.slice(-MAX_RECENT_GEOS),
+      ]),
+    ),
   };
 }
 
@@ -122,9 +172,24 @@ export function toggleDone(
 ): MissionCompletionState {
   const base = normalizeForToday(state, now);
   const set = new Set(base.done);
-  if (set.has(key)) set.delete(key);
+  const wasDone = set.has(key);
+  if (wasDone) set.delete(key);
   else set.add(key);
-  return { day: base.day, done: [...set], geoUsageToday: base.geoUsageToday, extraCompletionsToday: base.extraCompletionsToday };
+  const seen = { ...(base.seenGeosToday ?? {}) };
+  const recent = { ...(base.recentGeos ?? {}) };
+  if (!wasDone && key.startsWith("t:net:")) {
+    const nk = key.slice("t:net:".length);
+    delete seen[nk];
+    delete recent[nk];
+  }
+  return {
+    day: base.day,
+    done: [...set],
+    geoUsageToday: base.geoUsageToday,
+    extraCompletionsToday: base.extraCompletionsToday,
+    seenGeosToday: seen,
+    recentGeos: recent,
+  };
 }
 
 function usageNetKey(network: string): string {
@@ -168,7 +233,7 @@ export function recordGeoUsage(
   const prev = net[gk] ?? { count: 0, lastUsedAt: 0 };
   net[gk] = { count: prev.count + 1, lastUsedAt: now.getTime() };
   usage[nk] = net;
-  return { ...base, geoUsageToday: usage };
+  return { ...base, geoUsageToday: usage, seenGeosToday: base.seenGeosToday ?? {}, recentGeos: base.recentGeos ?? {} };
 }
 
 /**
@@ -185,7 +250,12 @@ export function completeGeo(
   const withUsage = recordGeoUsage(state, network, geo, now);
   const key = testingGeoKey(network, geo);
   if (withUsage.done.includes(key)) return withUsage;
-  return { ...withUsage, done: [...withUsage.done, key] };
+  return {
+    ...withUsage,
+    done: [...withUsage.done, key],
+    seenGeosToday: withUsage.seenGeosToday ?? {},
+    recentGeos: withUsage.recentGeos ?? {},
+  };
 }
 
 /**
@@ -203,7 +273,12 @@ export function completeExtraGeo(
   const nk = usageNetKey(network);
   const extra = { ...(base.extraCompletionsToday ?? {}) };
   extra[nk] = (extra[nk] ?? 0) + 1;
-  return { ...base, extraCompletionsToday: extra };
+  return {
+    ...base,
+    extraCompletionsToday: extra,
+    seenGeosToday: base.seenGeosToday ?? {},
+    recentGeos: base.recentGeos ?? {},
+  };
 }
 
 /** Soft cap on optional opportunities per network per day. */
@@ -261,15 +336,16 @@ function testingNetworkEffectiveDone(
 /** How many of today's required tests are done for this network (manual + timestamp). */
 export function countCompletedGeosToday(
   net: TestingNetworkPlan,
-  state: MissionCompletionState,
+  state: MissionCompletionState | null | undefined,
 ): number {
-  return testingNetworkEffectiveDone(net, new Set(state.done));
+  const s = coalesceState(state);
+  return testingNetworkEffectiveDone(net, new Set(s.done));
 }
 
 /** Whether the worker hit today's test target for this network. */
 export function isTestingNetworkDailyTargetMet(
   net: TestingNetworkPlan,
-  state: MissionCompletionState,
+  state: MissionCompletionState | null | undefined,
 ): boolean {
   if (net.todayRequired <= 0) return true;
   return countCompletedGeosToday(net, state) >= net.todayRequired;
@@ -306,9 +382,10 @@ export function isTestingNetworkDismissed(
  */
 export function isTestingNetworkVisible(
   net: TestingNetworkPlan,
-  state: MissionCompletionState,
+  state: MissionCompletionState | null | undefined,
 ): boolean {
-  if (isTestingNetworkDismissed(net.network, state)) return false;
+  const s = coalesceState(state);
+  if (isTestingNetworkDismissed(net.network, s)) return false;
   return net.geos.some((g) => g.todayRequired > 0);
 }
 
@@ -449,6 +526,142 @@ function rotateGeosBySeed(geos: TestingGeo[], seed: number): TestingGeo[] {
   return [...geos.slice(offset), ...geos.slice(0, offset)];
 }
 
+/** GEO codes already shown in the mission UI for this network today. */
+export function getSeenGeosToday(
+  state: MissionCompletionState,
+  network: string,
+): Set<string> {
+  const list = state.seenGeosToday?.[usageNetKey(network)] ?? [];
+  return new Set(list);
+}
+
+export function isGeoSeenToday(
+  state: MissionCompletionState,
+  network: string,
+  geo: string,
+): boolean {
+  return getSeenGeosToday(state, network).has(usageGeoKey(geo));
+}
+
+/** Keep GEOs not yet surfaced today (real rotation pool). */
+export function filterUnseenGeos(
+  net: TestingNetworkPlan,
+  state: MissionCompletionState,
+  geos: TestingGeo[],
+): TestingGeo[] {
+  const seen = getSeenGeosToday(state, net.network);
+  return geos.filter((g) => !seen.has(usageGeoKey(g.geo)));
+}
+
+/** Last GEO codes shown for this network (newest last, max {@link MAX_RECENT_GEOS}). */
+export function getRecentGeos(
+  state: MissionCompletionState,
+  network: string,
+): string[] {
+  return state.recentGeos?.[usageNetKey(network)] ?? [];
+}
+
+/** Append shown GEOs to the recent buffer (FIFO trim). */
+export function appendRecentGeos(
+  state: MissionCompletionState,
+  network: string,
+  geos: string[],
+): MissionCompletionState {
+  if (geos.length === 0) return state;
+  const nk = usageNetKey(network);
+  const recent = { ...(state.recentGeos ?? {}) };
+  const queue = [...(recent[nk] ?? [])];
+  for (const g of geos) queue.push(usageGeoKey(g));
+  recent[nk] = queue.slice(-MAX_RECENT_GEOS);
+  return { ...state, recentGeos: recent };
+}
+
+/**
+ * Reuse pool minus recently shown GEOs. If that would empty the pool, fall back
+ * to the full pool (network has too few GEOs to avoid repeats).
+ */
+export function filterNotRecentGeos(
+  net: TestingNetworkPlan,
+  state: MissionCompletionState,
+  geos: TestingGeo[],
+): TestingGeo[] {
+  const recent = new Set(getRecentGeos(state, net.network));
+  if (recent.size === 0 || geos.length === 0) return geos;
+  const filtered = geos.filter((g) => !recent.has(usageGeoKey(g.geo)));
+  return filtered.length > 0 ? filtered : geos;
+}
+
+function selectFromReusePool(
+  net: TestingNetworkPlan,
+  state: MissionCompletionState,
+  pool: TestingGeo[],
+  limit: number,
+): TestingGeo[] {
+  if (pool.length === 0) return [];
+  const antiRepeat = filterNotRecentGeos(net, state, pool);
+  return uniqueGeosByCode(orderByLeastUsed(net, state, antiRepeat, 0)).slice(
+    0,
+    limit,
+  );
+}
+
+/** Record GEOs surfaced in the UI (anti-repeat memory only). */
+export function recordGeosShown(
+  state: MissionCompletionState,
+  network: string,
+  geos: string[],
+  now = new Date(),
+): MissionCompletionState {
+  return appendRecentGeos(normalizeForToday(state, now), network, geos);
+}
+
+/** Record GEOs returned to the UI so refresh advances to the next unseen batch. */
+export function markGeosSeen(
+  state: MissionCompletionState,
+  network: string,
+  geos: string[],
+  now = new Date(),
+): MissionCompletionState {
+  const base = normalizeForToday(state, now);
+  if (geos.length === 0) return base;
+  const nk = usageNetKey(network);
+  const seen = { ...(base.seenGeosToday ?? {}) };
+  const set = new Set(seen[nk] ?? []);
+  for (const g of geos) set.add(usageGeoKey(g));
+  seen[nk] = [...set];
+  return { ...base, seenGeosToday: seen };
+}
+
+export function clearSeenGeosForNetwork(
+  state: MissionCompletionState,
+  network: string,
+  now = new Date(),
+): MissionCompletionState {
+  const base = normalizeForToday(state, now);
+  const nk = usageNetKey(network);
+  const seen = { ...(base.seenGeosToday ?? {}) };
+  const recent = { ...(base.recentGeos ?? {}) };
+  delete seen[nk];
+  delete recent[nk];
+  return { ...base, seenGeosToday: seen, recentGeos: recent };
+}
+
+function pickUnseenThenFallback(
+  net: TestingNetworkPlan,
+  state: MissionCompletionState,
+  limit: number,
+  primary: TestingGeo[],
+  fallback: TestingGeo[],
+): TestingGeo[] {
+  const unseenPrimary = filterUnseenGeos(net, state, primary);
+  if (unseenPrimary.length > 0) {
+    return uniqueGeosByCode(orderGeosByTestingPriority(unseenPrimary, 0)).slice(0, limit);
+  }
+  const unseenFallback = filterUnseenGeos(net, state, fallback);
+  const pool = unseenFallback.length > 0 ? unseenFallback : fallback;
+  return selectFromReusePool(net, state, pool, limit);
+}
+
 /** GEOs with zero usage today — never opened in this session. */
 export function getUntouchedGeosToday(
   net: TestingNetworkPlan,
@@ -489,62 +702,71 @@ function pickExtraGeoPool(
 }
 
 /**
- * Optional opportunity after daily target: one GEO at a time.
- * Priority: historical performance → untouched → least-used.
+ * Optional opportunity after daily target: one unseen GEO at a time.
+ * Priority: historical performance → untouched → least-used reuse fallback.
  */
 export function selectExtraGeoForNetwork(
   net: TestingNetworkPlan,
   state: MissionCompletionState,
-  seed = 0,
+  _seed = 0,
 ): TestingGeo[] {
   if (!isTestingNetworkDailyTargetMet(net, state)) return [];
   if (isExtraLimitReached(net, state)) return [];
   const eligible = net.geos.filter((g) => g.todayRequired > 0);
   if (eligible.length === 0) return [];
 
-  const pool = pickExtraGeoPool(net, state, eligible);
-  const untouchedInPool = pool.filter(
-    (g) => geoUsageCount(state, net.network, g.geo) === 0,
+  const notCompleted = eligible.filter(
+    (g) => !isTestingGeoComplete(net.network, g, state),
   );
-  const ordered =
-    untouchedInPool.length > 0
-      ? orderGeosByTestingPriority(pool, seed)
-      : orderByLeastUsed(net, state, pool, seed);
-  const pick = rotateGeosBySeed(ordered, seed)[0];
+  const unseenActive = filterUnseenGeos(net, state, notCompleted);
+  if (unseenActive.length > 0) {
+    const pool = pickExtraGeoPool(net, state, unseenActive);
+    const ordered = orderGeosByHistoricalPerformance(pool);
+    return ordered[0] ? [ordered[0]] : [];
+  }
+
+  const unseenEligible = filterUnseenGeos(net, state, eligible);
+  const pool = unseenEligible.length > 0 ? unseenEligible : eligible;
+  const pick = selectFromReusePool(net, state, pool, 1)[0];
   return pick ? [pick] : [];
 }
 
 /**
- * Pick up to `limit` GEO tasks for a network — active pool first, reuse only
- * after every active GEO is exhausted. After daily target is met, auto-surfaces
- * one optional opportunity at a time (until soft extra limit).
+ * Pick up to `limit` GEO tasks for a network — unseen active pool first, reuse
+ * fallback only after every unseen active GEO is exhausted. After daily target
+ * is met, auto-surfaces one optional opportunity at a time (until soft limit).
  */
 export function selectTopGeosForNetwork(
   net: TestingNetworkPlan,
-  state: MissionCompletionState,
+  state: MissionCompletionState | null | undefined,
   limit = 3,
-  seed = 0,
+  _seed = 0,
 ): TestingGeo[] {
+  const s = coalesceState(state);
   const eligible = net.geos.filter((g) => g.todayRequired > 0);
   if (eligible.length === 0) return [];
-  if (isTestingNetworkDailyTargetMet(net, state)) {
-    return selectExtraGeoForNetwork(net, state, seed);
+  if (isTestingNetworkDailyTargetMet(net, s)) {
+    return selectExtraGeoForNetwork(net, s, 0);
   }
 
-  const active = getActiveGeos(net, state);
+  const active = getActiveGeos(net, s);
+  const reusePool = getReuseGeos(net, s);
+  return pickUnseenThenFallback(net, s, limit, active, reusePool);
+}
 
-  if (active.length >= limit) {
-    const ordered = orderGeosByTestingPriority(active, seed);
-    return rotateGeosBySeed(ordered, seed).slice(0, limit);
-  }
-
-  if (active.length > 0) {
-    return orderGeosByTestingPriority(active, seed).slice(0, limit);
-  }
-
-  const reusePool = getReuseGeos(net, state);
-  const ordered = orderByLeastUsed(net, state, reusePool, seed);
-  return uniqueGeosByCode(rotateGeosBySeed(ordered, seed)).slice(0, limit);
+/**
+ * Select GEOs and mark them seen in one step (call on refresh / after display commit).
+ */
+export function selectTopGeosForNetworkAndMarkSeen(
+  net: TestingNetworkPlan,
+  state: MissionCompletionState,
+  limit = 3,
+): { geos: TestingGeo[]; state: MissionCompletionState } {
+  const geos = selectTopGeosForNetwork(net, state, limit);
+  const codes = geos.map((g) => g.geo);
+  let next = markGeosSeen(state, net.network, codes);
+  next = recordGeosShown(next, net.network, codes);
+  return { geos, state: next };
 }
 
 /**
@@ -687,13 +909,14 @@ export type NextAction = {
  */
 export function selectNextAction(
   plan: DailyActionPlan,
-  state: MissionCompletionState,
+  state: MissionCompletionState | null | undefined,
 ): NextAction | null {
-  for (const net of orderTestingNetworksByPriority(plan.testingNetworks, state)) {
-    if (isTestingNetworkDailyTargetMet(net, state)) continue;
-    for (const g of orderTestingGeosByPriority(net, state)) {
+  const s = coalesceState(state);
+  for (const net of orderTestingNetworksByPriority(plan.testingNetworks, s)) {
+    if (isTestingNetworkDailyTargetMet(net, s)) continue;
+    for (const g of orderTestingGeosByPriority(net, s)) {
       if (g.todayRequired <= 0) continue;
-      if (isTestingGeoComplete(net.network, g, state)) continue;
+      if (isTestingGeoComplete(net.network, g, s)) continue;
       return {
         kind: "testing",
         key: testingGeoKey(net.network, g.geo),
@@ -705,8 +928,8 @@ export function selectNextAction(
     }
   }
 
-  const opt = orderActiveFirst(plan.optimizations, (g) => isOptimizationComplete(g, state)).find(
-    (g) => !isOptimizationComplete(g, state),
+  const opt = orderActiveFirst(plan.optimizations, (g) => isOptimizationComplete(g, s)).find(
+    (g) => !isOptimizationComplete(g, s),
   );
   if (opt) {
     return {
@@ -718,8 +941,8 @@ export function selectNextAction(
   }
 
   const scaleAll = [...plan.scalingCandidates, ...plan.moveToWorkingCandidates];
-  const sc = orderActiveFirst(scaleAll, (c) => isScalingComplete(c, state)).find(
-    (c) => !isScalingComplete(c, state),
+  const sc = orderActiveFirst(scaleAll, (c) => isScalingComplete(c, s)).find(
+    (c) => !isScalingComplete(c, s),
   );
   if (sc) {
     return {
@@ -762,9 +985,10 @@ export function missionStartSentence(
  */
 export function computeEffectiveSummary(
   plan: DailyActionPlan,
-  state: MissionCompletionState,
+  state: MissionCompletionState | null | undefined,
 ): EffectiveSummary {
-  const done = new Set(state.done);
+  const s = coalesceState(state);
+  const done = new Set(s.done);
 
   const testsRequired = plan.testingNetworks.reduce((s, n) => s + n.todayRequired, 0);
   const testsDone = Math.min(
@@ -812,5 +1036,435 @@ export function computeEffectiveSummary(
     completed,
     total,
     progressPct,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Campaign-backed plan selectors (single source of truth — no localStorage)
+// ---------------------------------------------------------------------------
+
+/** GEO done when today's testing campaigns meet the daily quota (from plan build). */
+export function isTestingGeoCompleteFromPlan(
+  geo: { todayRequired: number; doneToday: number },
+): boolean {
+  return geo.todayRequired > 0 && geo.doneToday >= geo.todayRequired;
+}
+
+/** Network progress from campaign timestamps embedded in the plan. */
+export function countCompletedGeosTodayFromPlan(net: TestingNetworkPlan): number {
+  let sum = 0;
+  for (const g of net.geos) {
+    if (g.todayRequired > 0) sum += Math.min(g.todayRequired, g.doneToday);
+  }
+  return Math.min(net.todayRequired, sum);
+}
+
+export function isTestingNetworkDailyTargetMetFromPlan(
+  net: TestingNetworkPlan,
+): boolean {
+  if (net.todayRequired <= 0) return true;
+  return countCompletedGeosTodayFromPlan(net) >= net.todayRequired;
+}
+
+export function isTestingNetworkVisibleFromPlan(net: TestingNetworkPlan): boolean {
+  return net.geos.some((g) => g.todayRequired > 0);
+}
+
+/** Performance + activity signals for smart GEO ranking. */
+export type GeoPerformanceMetrics = {
+  roi: number;
+  conversions: number;
+  lastWorkedAtMs: number | null;
+  hasActivityToday: boolean;
+};
+
+export type GeoSelectionContext = {
+  campaigns?: OpsCampaignRowLite[];
+  now?: Date;
+  /** Stable tiebreaker seed (defaults to per-GEO hash). */
+  seed?: number;
+};
+
+const RECENT_GEO_WORK_MS = 30 * 60 * 1000;
+
+export function minutesSince(
+  isoOrMs: string | number,
+  now = new Date(),
+): number {
+  const t =
+    typeof isoOrMs === "number" ? isoOrMs : new Date(isoOrMs).getTime();
+  if (!Number.isFinite(t)) return Number.POSITIVE_INFINITY;
+  return (now.getTime() - t) / 60_000;
+}
+
+function networkGeoMatches(
+  net: TestingNetworkPlan,
+  geoCode: string,
+  row: { network: string | null; geo: string | null },
+): boolean {
+  if (!row.network || !row.geo) return false;
+  return (
+    row.network.trim().toLowerCase() === net.network.trim().toLowerCase() &&
+    row.geo.trim().toLowerCase() === geoCode.trim().toLowerCase()
+  );
+}
+
+function networkMatches(
+  net: TestingNetworkPlan,
+  row: { network: string | null },
+): boolean {
+  if (!row.network) return false;
+  return row.network.trim().toLowerCase() === net.network.trim().toLowerCase();
+}
+
+/** Latest worker activity timestamp for a network (any GEO). */
+export function deriveNetworkLastWorkedAtMs(
+  net: TestingNetworkPlan,
+  context: GeoSelectionContext = {},
+): number | null {
+  let lastWorkedAtMs: number | null = null;
+
+  for (const raw of context.campaigns ?? []) {
+    const row = toMissionCampaignRow(raw);
+    if (!row || !networkMatches(net, row)) continue;
+
+    for (const stamp of [row.createdAt, row.liveStartedAt, row.updatedAt]) {
+      if (!stamp) continue;
+      const ts = new Date(stamp).getTime();
+      if (Number.isFinite(ts)) {
+        lastWorkedAtMs =
+          lastWorkedAtMs == null ? ts : Math.max(lastWorkedAtMs, ts);
+      }
+    }
+  }
+
+  return lastWorkedAtMs;
+}
+
+/** Derive scoring metrics from plan progress + today's campaigns. */
+export function deriveGeoPerformanceMetrics(
+  net: TestingNetworkPlan,
+  geo: TestingGeo,
+  context: GeoSelectionContext = {},
+): GeoPerformanceMetrics {
+  const now = context.now ?? new Date();
+  let hasActivityToday = geo.doneToday > 0;
+  let roi = 0;
+  let conversions = 0;
+  let lastWorkedAtMs: number | null = null;
+
+  for (const raw of context.campaigns ?? []) {
+    const row = toMissionCampaignRow(raw);
+    if (!row || !networkGeoMatches(net, geo.geo, row)) continue;
+
+    for (const stamp of [row.createdAt, row.liveStartedAt, row.updatedAt]) {
+      if (!stamp || !isSameLocalDay(stamp, now)) continue;
+      hasActivityToday = true;
+      const ts = new Date(stamp).getTime();
+      if (Number.isFinite(ts)) {
+        lastWorkedAtMs =
+          lastWorkedAtMs == null ? ts : Math.max(lastWorkedAtMs, ts);
+      }
+    }
+
+    const r = Number(raw.roi ?? 0);
+    if (Number.isFinite(r)) roi = Math.max(roi, r);
+    const conv = Number(raw.conversions ?? 0);
+    if (Number.isFinite(conv)) conversions += conv;
+  }
+
+  return { roi, conversions, lastWorkedAtMs, hasActivityToday };
+}
+
+/**
+ * Smart GEO priority score — behind pace first, larger GEOs within the network,
+ * push untouched GEOs, boost proven performers, deprioritize very recent work.
+ */
+export function baseScoreGeoForMission(
+  geo: TestingGeo,
+  net: TestingNetworkPlan,
+  metrics: GeoPerformanceMetrics,
+  now = new Date(),
+): number {
+  let score = 0;
+
+  const gap = Math.max(0, geo.monthlyTarget - geo.current);
+  score += gap * 10;
+
+  const networkTarget = net.monthlyGoal;
+  if (networkTarget > 0 && geo.monthlyTarget > 0) {
+    score += (geo.monthlyTarget / networkTarget) * 50;
+  }
+
+  if (!metrics.hasActivityToday) score += 50;
+
+  if (metrics.roi > 0) score += 30;
+  if (metrics.conversions > 0) score += 20;
+
+  if (
+    metrics.lastWorkedAtMs != null &&
+    now.getTime() - metrics.lastWorkedAtMs < RECENT_GEO_WORK_MS
+  ) {
+    score -= 40;
+  }
+
+  return score;
+}
+
+export function scoreGeoForMission(
+  geo: TestingGeo,
+  net: TestingNetworkPlan,
+  metrics: GeoPerformanceMetrics,
+  seed = 0,
+  now = new Date(),
+): number {
+  const tiebreaker = (hashGeo(`${net.network}:${geo.geo}:${seed}`) % 500) / 100;
+  return baseScoreGeoForMission(geo, net, metrics, now) + tiebreaker;
+}
+
+function orderGeosBySmartScore(
+  net: TestingNetworkPlan,
+  geos: TestingGeo[],
+  context: GeoSelectionContext = {},
+): TestingGeo[] {
+  const now = context.now ?? new Date();
+  const seed = context.seed ?? 0;
+  return [...geos].sort((a, b) => {
+    const sa = baseScoreGeoForMission(
+      a,
+      net,
+      deriveGeoPerformanceMetrics(net, a, context),
+      now,
+    );
+    const sb = baseScoreGeoForMission(
+      b,
+      net,
+      deriveGeoPerformanceMetrics(net, b, context),
+      now,
+    );
+    if (sb !== sa) return sb - sa;
+    if (b.gapToPace !== a.gapToPace) return b.gapToPace - a.gapToPace;
+    if (b.remaining !== a.remaining) return b.remaining - a.remaining;
+    const ta = hashGeo(`${net.network}:${a.geo}:${seed}`) % 500;
+    const tb = hashGeo(`${net.network}:${b.geo}:${seed}`) % 500;
+    return tb - ta || a.geo.localeCompare(b.geo);
+  });
+}
+
+/** Top incomplete GEOs by smart score (campaign-aware). */
+export function selectTopGeosFromPlan(
+  net: TestingNetworkPlan,
+  limit = 3,
+  context: GeoSelectionContext = {},
+): TestingGeo[] {
+  const notCompleted = net.geos.filter(
+    (g) => g.todayRequired > 0 && g.doneToday < g.todayRequired,
+  );
+  return orderGeosBySmartScore(net, notCompleted, context).slice(0, limit);
+}
+
+export function orderTestingGeosByPlanPriority(
+  net: TestingNetworkPlan,
+  seed = 0,
+  context: GeoSelectionContext = {},
+): TestingGeo[] {
+  const ctx = { ...context, seed };
+  const active = net.geos.filter(
+    (g) => g.todayRequired > 0 && g.doneToday < g.todayRequired,
+  );
+  const complete = net.geos.filter(
+    (g) => g.todayRequired > 0 && g.doneToday >= g.todayRequired,
+  );
+  return [
+    ...orderGeosBySmartScore(net, active, ctx),
+    ...orderGeosBySmartScore(net, complete, ctx),
+  ];
+}
+
+function networkActiveMaxGapFromPlan(net: TestingNetworkPlan): number {
+  return net.geos.reduce(
+    (m, g) =>
+      isTestingGeoCompleteFromPlan(g) ? m : Math.max(m, g.gapToPace),
+    0,
+  );
+}
+
+/** Sum of GEO monthly progress for network-level scoring. */
+export function networkCurrentFromPlan(net: TestingNetworkPlan): number {
+  return net.geos.reduce((s, g) => s + Math.max(0, g.current), 0);
+}
+
+/**
+ * Top-level network priority — behind pace, low progress boost,
+ * deprioritize tiny networks, anti-starvation rotation.
+ */
+export function scoreNetworkForMission(
+  net: TestingNetworkPlan,
+  context: GeoSelectionContext = {},
+): number {
+  const now = context.now ?? new Date();
+  const current = networkCurrentFromPlan(net);
+  const remaining = Math.max(0, net.monthlyGoal - current);
+  const progress = net.monthlyGoal > 0 ? current / net.monthlyGoal : 0;
+
+  let score = 0;
+
+  score += remaining * 5;
+  score += (1 - progress) * 100;
+
+  if (net.monthlyGoal < 10) {
+    score -= 20;
+  }
+
+  const lastWorkedAtMs = deriveNetworkLastWorkedAtMs(net, context) ?? 0;
+
+  let minutesIdle: number;
+  if (lastWorkedAtMs === 0) {
+    // Never touched — moderate tier only, not max starvation inflation.
+    minutesIdle = 60;
+  } else {
+    minutesIdle = minutesSince(lastWorkedAtMs, now);
+  }
+
+  if (minutesIdle > 60) {
+    score += 40;
+  }
+  if (minutesIdle > 120) {
+    score += 80;
+  }
+
+  return score;
+}
+
+export function orderTestingNetworksByPlanPriority(
+  networks: TestingNetworkPlan[],
+  context: GeoSelectionContext = {},
+): TestingNetworkPlan[] {
+  return [...networks].sort((a, b) => {
+    const ca = isTestingNetworkDailyTargetMetFromPlan(a);
+    const cb = isTestingNetworkDailyTargetMetFromPlan(b);
+    if (ca !== cb) return ca ? 1 : -1;
+
+    const sa = scoreNetworkForMission(a, context);
+    const sb = scoreNetworkForMission(b, context);
+    if (sb !== sa) return sb - sa;
+
+    const ga = networkActiveMaxGapFromPlan(a);
+    const gb = networkActiveMaxGapFromPlan(b);
+    if (gb !== ga) return gb - ga;
+
+    return a.network.localeCompare(b.network);
+  });
+}
+
+/** Focus the highest-priority networks before GEO selection (default: top 2). */
+export const MISSION_FOCUS_NETWORK_COUNT = 2;
+
+export function selectFocusTestingNetworksFromPlan(
+  networks: TestingNetworkPlan[],
+  limit = MISSION_FOCUS_NETWORK_COUNT,
+  context: GeoSelectionContext = {},
+): TestingNetworkPlan[] {
+  const visible = networks.filter(isTestingNetworkVisibleFromPlan);
+  const active = visible.filter((n) => !isTestingNetworkDailyTargetMetFromPlan(n));
+  const doneToday = visible.filter((n) => isTestingNetworkDailyTargetMetFromPlan(n));
+
+  const focused = orderTestingNetworksByPlanPriority(active, context).slice(0, limit);
+  const rest = orderTestingNetworksByPlanPriority(active, context).slice(limit);
+  return [
+    ...focused,
+    ...rest,
+    ...orderTestingNetworksByPlanPriority(doneToday, context),
+  ];
+}
+
+/** Top GEO picks across the highest-priority networks (network layer → GEO layer). */
+export function selectTopGeosAcrossPlan(
+  plan: DailyActionPlan,
+  context: GeoSelectionContext = {},
+  options: { networkLimit?: number; geoLimit?: number } = {},
+): Array<{ network: string; geo: TestingGeo }> {
+  const networkLimit = options.networkLimit ?? MISSION_FOCUS_NETWORK_COUNT;
+  const geoLimit = options.geoLimit ?? 2;
+
+  const nets = orderTestingNetworksByPlanPriority(plan.testingNetworks, context)
+    .filter(
+      (n) =>
+        isTestingNetworkVisibleFromPlan(n) &&
+        !isTestingNetworkDailyTargetMetFromPlan(n),
+    )
+    .slice(0, networkLimit);
+
+  return nets.flatMap((net) =>
+    selectTopGeosFromPlan(net, geoLimit, context).map((geo) => ({
+      network: net.network,
+      geo,
+    })),
+  );
+}
+
+export function selectNextActionFromPlan(
+  plan: DailyActionPlan,
+  context: GeoSelectionContext = {},
+): NextAction | null {
+  for (const net of orderTestingNetworksByPlanPriority(
+    plan.testingNetworks,
+    context,
+  )) {
+    if (isTestingNetworkDailyTargetMetFromPlan(net)) continue;
+    for (const g of orderTestingGeosByPlanPriority(net, 0, context)) {
+      if (g.todayRequired <= 0) continue;
+      if (isTestingGeoCompleteFromPlan(g)) continue;
+      return {
+        kind: "testing",
+        key: testingGeoKey(net.network, g.geo),
+        title: `${g.geo} — Open ${g.todayRequired} test${g.todayRequired === 1 ? "" : "s"}`,
+        context: `${net.network} · ${g.doneToday}/${g.todayRequired} done`,
+        network: net.network,
+        geo: g.geo,
+      };
+    }
+  }
+
+  const opt = plan.optimizations.find(
+    (g) => !(g.canTrackCompletion && g.required > 0 && g.doneToday >= g.required),
+  );
+  if (opt) {
+    return {
+      kind: "optimize",
+      key: optimizationKey(opt.issueType),
+      title: opt.label,
+      context: "Optimize a live campaign",
+    };
+  }
+
+  const scaleAll = [...plan.scalingCandidates, ...plan.moveToWorkingCandidates];
+  const sc = scaleAll[0];
+  if (sc) {
+    return {
+      kind: "scale",
+      key: scalingKey(sc.kind, sc.id),
+      title: sc.name,
+      context: `${sc.network} / ${sc.geo} · review for scaling`,
+    };
+  }
+
+  return null;
+}
+
+/** Progress summary from plan build (campaign timestamps — same for worker and admin). */
+export function effectiveSummaryFromPlan(plan: DailyActionPlan): EffectiveSummary {
+  return {
+    testsRequired: plan.summary.testsRequired,
+    testsDone: plan.summary.testsDone,
+    optimizationsRequired: plan.summary.optimizationsRequired,
+    optimizationsDone: plan.summary.optimizationsDone,
+    scalingAdvisory: plan.summary.scalingAdvisory,
+    scalingDone: 0,
+    shutdownAdvisory: plan.summary.shutdownAdvisory,
+    shutdownDone: 0,
+    completed: plan.summary.completed,
+    total: plan.summary.total,
+    progressPct: plan.summary.progressPct,
   };
 }

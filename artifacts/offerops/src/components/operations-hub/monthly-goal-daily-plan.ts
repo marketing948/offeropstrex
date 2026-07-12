@@ -27,6 +27,7 @@ import {
   type OptimizeReason,
 } from "@workspace/alert-rules";
 import { logAlertDecision } from "../../lib/alert-decision-log.ts";
+import { resolveDisplayRoiPercent } from "../../lib/campaign-metrics.ts";
 
 export type TestingGeoAction = {
   geo: string;
@@ -231,8 +232,10 @@ function campaignProfit(c: OpsCampaignRowLite | MissionCampaignRow): number {
 }
 
 function campaignRoi(c: OpsCampaignRowLite | MissionCampaignRow): number {
-  const raw = Number((c as OpsCampaignRowLite).roi ?? 0);
-  return Math.abs(raw) <= 1 && raw !== 0 ? raw * 100 : raw;
+  const cost = Number((c as OpsCampaignRowLite).cost ?? 0);
+  const revenue = Number((c as OpsCampaignRowLite).revenue ?? 0);
+  const stored = Number((c as OpsCampaignRowLite).roi ?? 0);
+  return resolveDisplayRoiPercent(cost, revenue, stored) ?? 0;
 }
 
 function campaignClicks(c: OpsCampaignRowLite): number {

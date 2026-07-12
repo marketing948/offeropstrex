@@ -12,6 +12,10 @@ import type {
   ReviewQueueCampaign,
   SuggestedReviewAction,
 } from "@/lib/campaign-review/types";
+import {
+  resolveDisplayRoiPercent,
+  profitFromCostRevenue,
+} from "@/lib/campaign-metrics";
 import { logAlertDecision } from "../alert-decision-log.ts";
 
 export type ReviewCampaignInput = {
@@ -30,6 +34,7 @@ export type ReviewCampaignInput = {
   revenue: number;
   cost: number;
   roi: number;
+  voluumCampaignId?: string | null;
 };
 
 const HEALTH_LABELS: Record<CampaignHealthStatus, string> = {
@@ -394,7 +399,8 @@ export function buildReviewQueueItem(
   const health = signals.length === 0 ? "healthy" : deriveHealthStatus(signals);
   if (health === "healthy") return null;
 
-  const profit = (c.revenue ?? 0) - (c.cost ?? 0);
+  const profit = profitFromCostRevenue(c.cost, c.revenue);
+  const roi = resolveDisplayRoiPercent(c.cost, c.revenue, c.roi) ?? 0;
 
   return {
     campaignId: c.id,
@@ -414,10 +420,11 @@ export function buildReviewQueueItem(
     conversions: c.conversions ?? 0,
     revenue: c.revenue ?? 0,
     cost: c.cost ?? 0,
-    roi: c.roi ?? 0,
+    roi,
     profit,
     firstSeenAt,
     escalated,
+    voluumCampaignId: c.voluumCampaignId ?? null,
     urgencyScore: computeUrgencyScore(signals, escalated),
   };
 }
@@ -436,7 +443,8 @@ export function buildManualReviewQueueItem(
       "high",
     ),
   ];
-  const profit = (c.revenue ?? 0) - (c.cost ?? 0);
+  const profit = profitFromCostRevenue(c.cost, c.revenue);
+  const roi = resolveDisplayRoiPercent(c.cost, c.revenue, c.roi) ?? 0;
   return {
     campaignId: c.id,
     campaignName: c.campaignName,
@@ -455,10 +463,12 @@ export function buildManualReviewQueueItem(
     conversions: c.conversions ?? 0,
     revenue: c.revenue ?? 0,
     cost: c.cost ?? 0,
-    roi: c.roi ?? 0,
+    roi,
     profit,
     firstSeenAt: requestedAt,
     escalated: true,
+    voluumCampaignId: c.voluumCampaignId ?? null,
+    reviewComment: note.trim() || null,
     urgencyScore: computeUrgencyScore(signals, true) + 5,
   };
 }

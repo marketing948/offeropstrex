@@ -10,6 +10,7 @@ import {
   computeEffectiveSummary,
   countCompletedGeosToday,
   countExtraCompletionsToday,
+  createEmptyMissionState,
   emptyCompletion,
   geoUsageCount,
   geoUsageLastUsedAt,
@@ -20,11 +21,16 @@ import {
   isTestingNetworkComplete,
   isTestingNetworkDailyTargetMet,
   isTestingNetworkVisible,
+  getRecentGeos,
+  getSeenGeosToday,
   getUntouchedGeosToday,
+  MAX_RECENT_GEOS,
   isAutoExtraModeActive,
   isExtraLimitReached,
   isNetworkFocusReuseMode,
   localDayKey,
+  markGeosSeen,
+  recordGeosShown,
   missionStartSentence,
   MAX_EXTRA_PER_NETWORK,
   normalizeForToday,
@@ -38,6 +44,17 @@ import {
   selectNetworkFocusGeo,
   selectNextAction,
   selectTopGeosForNetwork,
+  scoreGeoForMission,
+  scoreNetworkForMission,
+  deriveGeoPerformanceMetrics,
+  selectTopGeosFromPlan,
+  selectTopGeosAcrossPlan,
+  selectFocusTestingNetworksFromPlan,
+  selectNextActionFromPlan,
+  effectiveSummaryFromPlan,
+  isTestingGeoCompleteFromPlan,
+  countCompletedGeosTodayFromPlan,
+  isTestingNetworkDailyTargetMetFromPlan,
   testingGeoKey,
   testingNetworkKey,
   toggleDone,
@@ -314,6 +331,32 @@ function betaNetExtendedTarget(): DailyActionPlan["testingNetworks"][number] {
   return { ...twoNetworkPlan().testingNetworks[1]!, todayRequired: 5 };
 }
 
+function sixGeoNetwork(): DailyActionPlan["testingNetworks"][number] {
+  const geo = (
+    g: string,
+    gap: number,
+  ): DailyActionPlan["testingNetworks"][number]["geos"][number] => ({
+    geo: g,
+    monthlyTarget: 20,
+    current: 0,
+    expectedByNow: gap,
+    dailyExpected: 1,
+    gapToPace: gap,
+    remaining: 20,
+    todayRequired: 1,
+    doneToday: 0,
+  });
+  return {
+    network: "WideNet",
+    todayRequired: 6,
+    monthlyGoal: 120,
+    geoCount: 6,
+    doneToday: 0,
+    paceStatus: "behind",
+    geos: [geo("GB", 5), geo("US", 5), geo("DE", 2), geo("FR", 4), geo("IT", 3), geo("NL", 1)],
+  };
+}
+
 describe("execution workflow: next action + priority queue", () => {
   test("next action is the highest-priority GEO (most behind pace)", () => {
     const p = twoNetworkPlan();
@@ -407,19 +450,26 @@ describe("testing refresh: next GEO within same network", () => {
     assert.equal(focus?.geo, "GB"); // gap 9 wins
   });
 
-  test("refresh (skip+1) rotates to the next best GEO", () => {
+  test("refresh (mark seen) rotates to the next unseen GEO", () => {
     const beta = twoNetworkPlan().testingNetworks[1]!;
-    const state = emptyCompletion(NOW);
+    let state = emptyCompletion(NOW);
     const first = selectNetworkFocusGeo(beta, state, 0);
-    const second = selectNetworkFocusGeo(beta, state, 1);
+    state = markGeosSeen(state, beta.network, [first!.geo]);
+    const second = selectNetworkFocusGeo(beta, state, 0);
     assert.notEqual(first?.geo, second?.geo);
     assert.equal(second?.geo, "DE");
   });
 
-  test("refresh cycles back around the active queue", () => {
+  test("returns reuse fallback after all active GEOs were seen", () => {
     const beta = twoNetworkPlan().testingNetworks[1]!;
-    const state = emptyCompletion(NOW);
-    assert.equal(selectNetworkFocusGeo(beta, state, 2)?.geo, "GB");
+    let state = emptyCompletion(NOW);
+    const batch = selectTopGeosForNetwork(beta, state, 2).map((g) => g.geo);
+    state = markGeosSeen(state, beta.network, batch);
+    state = completeGeo(state, beta.network, "GB", NOW);
+    state = completeGeo(state, beta.network, "DE", NOW);
+    const reuse = selectNetworkFocusGeo(beta, state, 0);
+    assert.ok(reuse);
+    assert.ok(["GB", "DE"].includes(reuse!.geo));
   });
 
   test("completed GEO never reappears via refresh (no repeat same day)", () => {
@@ -482,11 +532,10 @@ describe("GEO usage tracking + reuse ordering", () => {
     const beta = betaNetExtendedTarget();
     let state = completeGeo(emptyCompletion(NOW), "BetaNet", "GB", NOW);
     state = completeGeo(state, "BetaNet", "DE", NOW);
-    const geos = new Set([
-      selectTopGeosForNetwork(beta, state, 1, 0)[0]?.geo,
-      selectTopGeosForNetwork(beta, state, 1, 1)[0]?.geo,
-    ]);
-    assert.equal(geos.size, 2, "both GEOs are reachable via refresh before repeats");
+    const first = selectTopGeosForNetwork(beta, state, 1)[0]?.geo;
+    state = markGeosSeen(state, beta.network, [first!]);
+    const second = selectTopGeosForNetwork(beta, state, 1)[0]?.geo;
+    assert.notEqual(first, second);
   });
 
   test("normalizeFortoday drops stale usage but keeps same-day usage", () => {
@@ -620,22 +669,22 @@ describe("multi-GEO pool (V3): selectTopGeosForNetwork", () => {
     );
   });
 
-  test("refresh changes at least 1 geo when ties exist", () => {
-    const net = plan().testingNetworks[0]!;
-    const state = emptyCompletion(NOW);
-    const seed0 = selectTopGeosForNetwork(net, state, 3, 0).map((g) => g.geo);
-    const seed1 = selectTopGeosForNetwork(net, state, 3, 1).map((g) => g.geo);
-    assert.notDeepEqual(seed0, seed1, "seed must rotate tied GEO order");
-    assert.equal(new Set(seed0).size, 3);
-    assert.equal(new Set(seed1).size, 3);
+  test("refresh returns a new unseen GEO batch (not reorder)", () => {
+    const net = sixGeoNetwork();
+    let state = emptyCompletion(NOW);
+    const first = selectTopGeosForNetwork(net, state, 3).map((g) => g.geo);
+    assert.equal(first.length, 3);
+    state = markGeosSeen(state, net.network, first);
+    const second = selectTopGeosForNetwork(net, state, 3).map((g) => g.geo);
+    assert.equal(second.length, 3);
+    for (const g of second) assert.ok(!first.includes(g), `${g} must not repeat before exhaustion`);
+    assert.equal(second.length, 3);
   });
 
   test("no duplicate GEO in same render", () => {
     const net = plan().testingNetworks[0]!;
-    for (let seed = 0; seed < 5; seed++) {
-      const geos = selectTopGeosForNetwork(net, emptyCompletion(NOW), 3, seed);
-      assert.equal(new Set(geos.map((g) => g.geo.toLowerCase())).size, geos.length);
-    }
+    const geos = selectTopGeosForNetwork(net, emptyCompletion(NOW), 3);
+    assert.equal(new Set(geos.map((g) => g.geo.toLowerCase())).size, geos.length);
   });
 
   test("completed GEO never shown again same day (active pool only)", () => {
@@ -799,18 +848,13 @@ describe("extra work mode (V5): controlled bonus after target", () => {
     assert.ok(pick === "US" || pick === "DE");
   });
 
-  test("refresh rotates extra GEO suggestion", () => {
+  test("refresh rotates extra GEO via unseen pool", () => {
     const net = plan().testingNetworks[0]!;
-    const state = targetMetState(net);
-    const baseline = selectExtraGeoForNetwork(net, state, 0)[0]?.geo;
-    let rotated = false;
-    for (let seed = 1; seed <= 5; seed++) {
-      if (selectExtraGeoForNetwork(net, state, seed)[0]?.geo !== baseline) {
-        rotated = true;
-        break;
-      }
-    }
-    assert.ok(rotated, "seed must rotate among tied bonus GEOs");
+    let state = targetMetState(net);
+    const first = selectExtraGeoForNetwork(net, state, 0)[0]?.geo;
+    state = markGeosSeen(state, net.network, [first!]);
+    const second = selectExtraGeoForNetwork(net, state, 0)[0]?.geo;
+    assert.notEqual(first, second);
   });
 });
 
@@ -860,5 +904,367 @@ describe("auto extra flow (V6): no manual entry + soft limit", () => {
     assert.equal(countCompletedGeosToday(net, state), 3);
     const summary = computeEffectiveSummary(plan(), state);
     assert.equal(summary.testsDone, 3);
+  });
+});
+
+describe("GEO rotation pool (seenGeosToday)", () => {
+  test("refresh returns unseen GEO", () => {
+    const net = sixGeoNetwork();
+    let state = emptyCompletion(NOW);
+    const batch1 = selectTopGeosForNetwork(net, state, 3).map((g) => g.geo);
+    state = markGeosSeen(state, net.network, batch1);
+    const batch2 = selectTopGeosForNetwork(net, state, 3).map((g) => g.geo);
+    assert.ok(batch2.every((g) => !batch1.includes(g)));
+  });
+
+  test("no repeat until all GEOs seen in active pool", () => {
+    const net = sixGeoNetwork();
+    let state = emptyCompletion(NOW);
+    const seen: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const batch = selectTopGeosForNetwork(net, state, 3).map((g) => g.geo);
+      for (const g of batch) assert.ok(!seen.includes(g));
+      seen.push(...batch);
+      state = markGeosSeen(state, net.network, batch);
+    }
+    assert.equal(new Set(seen).size, 6);
+  });
+
+  test("fallback only after unseen exhaustion", () => {
+    const beta = betaNetExtendedTarget();
+    let state = emptyCompletion(NOW);
+    const all = selectTopGeosForNetwork(beta, state, 2).map((g) => g.geo);
+    state = markGeosSeen(state, beta.network, all);
+    state = completeGeo(state, beta.network, "GB", NOW);
+    state = completeGeo(state, beta.network, "DE", NOW);
+    const fallback = selectTopGeosForNetwork(beta, state, 1)[0]?.geo;
+    assert.ok(fallback);
+    assert.ok(["GB", "DE"].includes(fallback!));
+  });
+
+  test("seen resets on new day", () => {
+    const net = sixGeoNetwork();
+    let state = markGeosSeen(emptyCompletion(NOW), net.network, ["GB", "US"]);
+    const stale = { ...state, day: "2026-07-07" };
+    state = normalizeForToday(stale, NOW);
+    assert.equal(getSeenGeosToday(state, net.network).size, 0);
+  });
+
+  test("seen clears when network dismissed", () => {
+    const net = sixGeoNetwork();
+    let state = recordGeosShown(emptyCompletion(NOW), net.network, ["GB"], NOW);
+    state = toggleDone(state, testingNetworkKey(net.network), NOW);
+    assert.equal(getSeenGeosToday(state, net.network).size, 0);
+    assert.equal(getRecentGeos(state, net.network).length, 0);
+  });
+});
+
+describe("campaign-backed plan selectors", () => {
+  test("selectTopGeosFromPlan returns top incomplete GEOs by smart score", () => {
+    const net = sixGeoNetwork();
+    const top = selectTopGeosFromPlan(net, 3);
+    assert.equal(top.length, 3);
+    assert.ok(top.every((g) => g.doneToday < g.todayRequired));
+    assert.deepEqual(
+      top.map((g) => g.geo).sort(),
+      ["FR", "GB", "US"],
+    );
+  });
+
+  test("scoreGeoForMission boosts GEOs with no activity today", () => {
+    const net = sixGeoNetwork();
+    const geo = net.geos.find((g) => g.geo === "NL")!;
+    const quiet = deriveGeoPerformanceMetrics(net, geo, { campaigns: [] });
+    const active = { ...quiet, hasActivityToday: true };
+    const quietScore = scoreGeoForMission(geo, net, quiet, 0, NOW);
+    const activeScore = scoreGeoForMission(geo, net, active, 0, NOW);
+    assert.ok(quietScore > activeScore);
+  });
+
+  test("scoreGeoForMission penalizes GEO worked in last 30 minutes", () => {
+    const net = sixGeoNetwork();
+    const geo = net.geos[0]!;
+    const base = deriveGeoPerformanceMetrics(net, geo, { campaigns: [], now: NOW });
+    const recent = {
+      ...base,
+      hasActivityToday: true,
+      lastWorkedAtMs: NOW.getTime() - 5 * 60_000,
+    };
+    assert.ok(
+      scoreGeoForMission(geo, net, base, 0, NOW) >
+        scoreGeoForMission(geo, net, recent, 0, NOW),
+    );
+  });
+
+  test("scoreGeoForMission rewards positive ROI and conversions", () => {
+    const net = sixGeoNetwork();
+    const geo = net.geos.find((g) => g.geo === "DE")!;
+    const plain = deriveGeoPerformanceMetrics(net, geo, { campaigns: [], now: NOW });
+    const hot = { ...plain, roi: 12, conversions: 3 };
+    assert.ok(
+      scoreGeoForMission(geo, net, hot, 0, NOW) >
+        scoreGeoForMission(geo, net, plain, 0, NOW),
+    );
+  });
+
+  test("scoreGeoForMission boosts larger GEOs within the network", () => {
+    const net = twoNetworkPlan().testingNetworks[1]!;
+    const gb = net.geos.find((g) => g.geo === "GB")!;
+    const de = net.geos.find((g) => g.geo === "DE")!;
+    const metrics = deriveGeoPerformanceMetrics(net, gb, { campaigns: [], now: NOW });
+    assert.ok(
+      scoreGeoForMission(gb, net, metrics, 0, NOW) >
+        scoreGeoForMission(de, net, metrics, 0, NOW),
+    );
+  });
+
+  test("scoreNetworkForMission ranks larger behind-pace networks higher", () => {
+    const p = twoNetworkPlan();
+    const alpha = p.testingNetworks[0]!;
+    const beta = p.testingNetworks[1]!;
+    assert.ok(scoreNetworkForMission(beta) > scoreNetworkForMission(alpha));
+  });
+
+  test("scoreNetworkForMission penalizes tiny networks", () => {
+    const tiny = {
+      ...twoNetworkPlan().testingNetworks[0]!,
+      monthlyGoal: 8,
+    };
+    const normal = {
+      ...twoNetworkPlan().testingNetworks[0]!,
+      monthlyGoal: 10,
+    };
+    assert.ok(scoreNetworkForMission(normal) > scoreNetworkForMission(tiny));
+  });
+
+  test("scoreNetworkForMission boosts idle networks (anti-starvation)", () => {
+    const net = twoNetworkPlan().testingNetworks[0]!;
+    const at61 = scoreNetworkForMission(net, {
+      now: NOW,
+      campaigns: [
+        {
+          status: "live",
+          campaignPurpose: "testing",
+          createdAt: new Date(NOW.getTime() - 61 * 60_000).toISOString(),
+          affiliateNetworkName: net.network,
+          geo: "US",
+        },
+      ],
+    });
+    const at30 = scoreNetworkForMission(net, {
+      now: NOW,
+      campaigns: [
+        {
+          status: "live",
+          campaignPurpose: "testing",
+          createdAt: new Date(NOW.getTime() - 30 * 60_000).toISOString(),
+          affiliateNetworkName: net.network,
+          geo: "US",
+        },
+      ],
+    });
+    assert.ok(at61 > at30);
+    assert.equal(at61 - at30, 40);
+  });
+
+  test("scoreNetworkForMission strongly boosts networks idle over 2 hours", () => {
+    const net = twoNetworkPlan().testingNetworks[0]!;
+    const at61 = scoreNetworkForMission(net, {
+      now: NOW,
+      campaigns: [
+        {
+          affiliateNetworkName: net.network,
+          geo: "US",
+          createdAt: new Date(NOW.getTime() - 61 * 60_000).toISOString(),
+        },
+      ],
+    });
+    const at121 = scoreNetworkForMission(net, {
+      now: NOW,
+      campaigns: [
+        {
+          affiliateNetworkName: net.network,
+          geo: "US",
+          createdAt: new Date(NOW.getTime() - 121 * 60_000).toISOString(),
+        },
+      ],
+    });
+    assert.ok(at121 > at61);
+    assert.equal(at121 - at61, 80);
+  });
+
+  test("scoreNetworkForMission caps never-touched networks at moderate idle", () => {
+    const net = twoNetworkPlan().testingNetworks[0]!;
+    const neverTouched = scoreNetworkForMission(net, { now: NOW, campaigns: [] });
+    const longIdle = scoreNetworkForMission(net, {
+      now: NOW,
+      campaigns: [
+        {
+          affiliateNetworkName: net.network,
+          geo: "US",
+          createdAt: new Date(NOW.getTime() - 121 * 60_000).toISOString(),
+        },
+      ],
+    });
+    assert.ok(longIdle > neverTouched);
+    assert.equal(longIdle - neverTouched, 120);
+  });
+
+  test("selectFocusTestingNetworksFromPlan puts top mission-score networks first", () => {
+    const p = twoNetworkPlan();
+    const ordered = selectFocusTestingNetworksFromPlan(p.testingNetworks);
+    assert.equal(ordered[0]?.network, "BetaNet");
+  });
+
+  test("selectTopGeosAcrossPlan returns GEOs from top focus networks", () => {
+    const p = twoNetworkPlan();
+    const picks = selectTopGeosAcrossPlan(p, {}, { networkLimit: 1, geoLimit: 1 });
+    assert.equal(picks.length, 1);
+    assert.equal(picks[0]?.network, "BetaNet");
+    assert.equal(picks[0]?.geo.geo, "GB");
+  });
+
+  test("campaign context affects ranking via recent-work penalty", () => {
+    const net = sixGeoNetwork();
+    const campaigns = [
+      {
+        status: "live",
+        campaignPurpose: "testing",
+        createdAt: NOW.toISOString(),
+        affiliateNetworkName: net.network,
+        geo: "GB",
+        roi: 5,
+        conversions: 1,
+      },
+    ];
+    const withCampaigns = selectTopGeosFromPlan(net, 3, {
+      campaigns,
+      now: NOW,
+    });
+    assert.ok(!withCampaigns.some((g) => g.geo === "GB"));
+  });
+
+  test("completed GEOs drop out after plan reflects campaigns", () => {
+    const net = sixGeoNetwork();
+    const withProgress = {
+      ...net,
+      geos: net.geos.map((g) =>
+        g.geo === "GB" ? { ...g, doneToday: g.todayRequired } : g,
+      ),
+    };
+    const top = selectTopGeosFromPlan(withProgress, 3);
+    assert.ok(!top.some((g) => g.geo === "GB"));
+  });
+
+  test("target met from plan when enough GEOs have campaigns today", () => {
+    const net = sixGeoNetwork();
+    const met = {
+      ...net,
+      geos: net.geos.map((g) => ({ ...g, doneToday: g.todayRequired })),
+    };
+    assert.equal(isTestingNetworkDailyTargetMetFromPlan(met), true);
+    assert.equal(selectTopGeosFromPlan(met, 3).length, 0);
+  });
+
+  test("effectiveSummaryFromPlan uses plan.summary", () => {
+    const p = twoNetworkPlan();
+    const s = effectiveSummaryFromPlan(p);
+    assert.equal(s.testsRequired, p.summary.testsRequired);
+    assert.equal(s.testsDone, p.summary.testsDone);
+  });
+
+  test("selectNextActionFromPlan picks highest-priority incomplete GEO", () => {
+    const p = twoNetworkPlan();
+    const na = selectNextActionFromPlan(p);
+    assert.equal(na?.network, "BetaNet");
+    assert.equal(na?.geo, "GB");
+  });
+
+  test("isTestingGeoCompleteFromPlan requires daily quota", () => {
+    assert.equal(isTestingGeoCompleteFromPlan({ todayRequired: 2, doneToday: 1 }), false);
+    assert.equal(isTestingGeoCompleteFromPlan({ todayRequired: 2, doneToday: 2 }), true);
+  });
+
+  test("countCompletedGeosTodayFromPlan sums geo doneToday capped", () => {
+    const beta = twoNetworkPlan().testingNetworks[1]!;
+    assert.equal(countCompletedGeosTodayFromPlan(beta), 0);
+  });
+});
+
+describe("legacy localStorage helpers (deprecated for UI)", () => {
+  test("createEmptyMissionState matches emptyCompletion", () => {
+    assert.deepEqual(createEmptyMissionState(NOW), emptyCompletion(NOW));
+  });
+
+  test("selectors tolerate null state", () => {
+    const p = twoNetworkPlan();
+    const beta = p.testingNetworks[1]!;
+    assert.equal(countCompletedGeosToday(beta, null), beta.geos.reduce((s, g) => s + g.doneToday, 0));
+    assert.ok(selectTopGeosForNetwork(beta, null, 1).length > 0);
+    assert.ok(selectNextAction(p, null));
+    assert.ok(computeEffectiveSummary(p, null).total > 0);
+  });
+
+  test("empty state ignores worker localStorage marks", () => {
+    const beta = twoNetworkPlan().testingNetworks[1]!;
+    let workerState = completeGeo(emptyCompletion(NOW), beta.network, "GB", NOW);
+    workerState = completeGeo(workerState, beta.network, "DE", NOW);
+    const adminState = createEmptyMissionState(NOW);
+    assert.equal(countCompletedGeosToday(beta, workerState), 2);
+    assert.equal(countCompletedGeosToday(beta, adminState), 0);
+    assert.equal(isTestingNetworkDailyTargetMet(beta, workerState), true);
+    assert.equal(isTestingNetworkDailyTargetMet(beta, adminState), false);
+  });
+});
+
+describe("GEO anti-repeat memory (recentGeos)", () => {
+  test("no immediate repeat in reuse mode", () => {
+    const beta = betaNetExtendedTarget();
+    let state = completeGeo(emptyCompletion(NOW), "BetaNet", "GB", NOW);
+    state = completeGeo(state, "BetaNet", "DE", NOW);
+    const first = selectTopGeosForNetwork(beta, state, 1)[0]!.geo;
+    state = recordGeosShown(state, beta.network, [first], NOW);
+    const second = selectTopGeosForNetwork(beta, state, 1)[0]!.geo;
+    assert.notEqual(first, second);
+  });
+
+  test("no repeat within last MAX_RECENT_GEOS shown", () => {
+    const net = sixGeoNetwork();
+    let state = emptyCompletion(NOW);
+    for (const geo of ["GB", "US", "DE", "FR", "IT", "NL"]) {
+      state = completeGeo(state, net.network, geo, NOW);
+    }
+    state = recordGeosShown(state, net.network, ["GB", "US", "DE"], NOW);
+    assert.deepEqual(getRecentGeos(state, net.network), ["gb", "us", "de"]);
+    const pick = selectExtraGeoForNetwork(net, state, 0)[0]?.geo;
+    assert.ok(pick);
+    assert.ok(!["GB", "US", "DE"].includes(pick!));
+  });
+
+  test("recent buffer trims to MAX_RECENT_GEOS", () => {
+    const net = sixGeoNetwork();
+    let state = recordGeosShown(emptyCompletion(NOW), net.network, ["GB", "US"], NOW);
+    state = recordGeosShown(state, net.network, ["DE", "FR"], NOW);
+    assert.equal(getRecentGeos(state, net.network).length, MAX_RECENT_GEOS);
+    assert.deepEqual(getRecentGeos(state, net.network), ["us", "de", "fr"]);
+  });
+
+  test("fallback when pool too small to avoid all recent GEOs", () => {
+    const beta = betaNetExtendedTarget();
+    let state = emptyCompletion(NOW);
+    state = completeGeo(state, beta.network, "GB", NOW);
+    state = completeGeo(state, beta.network, "DE", NOW);
+    state = recordGeosShown(state, beta.network, ["GB", "DE"], NOW);
+    const pick = selectTopGeosForNetwork(beta, state, 1)[0]?.geo;
+    assert.ok(pick);
+    assert.ok(["GB", "DE"].includes(pick!));
+  });
+
+  test("recent resets on new day", () => {
+    const net = sixGeoNetwork();
+    let state = recordGeosShown(emptyCompletion(NOW), net.network, ["GB"], NOW);
+    const stale = { ...state, day: "2026-07-07" };
+    state = normalizeForToday(stale, NOW);
+    assert.equal(getRecentGeos(state, net.network).length, 0);
   });
 });

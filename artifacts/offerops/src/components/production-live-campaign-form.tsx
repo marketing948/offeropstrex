@@ -10,6 +10,7 @@ import {
 } from "@workspace/api-client-react";
 import { authedFetch } from "@/lib/api-fetch";
 import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal-surfaces";
+import { syncCampaignsAfterMutation, type CampaignListRow } from "@/lib/campaign-query-cache";
 import { useToast } from "@/hooks/use-toast";
 import { useWorkspace } from "@/lib/workspace-context";
 import { wsQueryOpts } from "@/lib/ws-query";
@@ -162,8 +163,12 @@ export function ProductionLiveCampaignForm({
         throw new Error(json?.error ?? `${res.status} ${res.statusText}`);
       }
       setConflict(null);
+      const createdRow = json as Record<string, unknown> & { id: number; workspaceId: number };
+      if (createdRow.id && createdRow.workspaceId) {
+        syncCampaignsAfterMutation(queryClient, activeWorkspaceId, createdRow as CampaignListRow);
+      }
       toast({
-        title: json?.overrideApplied ? "Campaign updated" : "Manual campaign added",
+        title: json?.overrideApplied ? "Campaign updated ✅" : "Campaign created ✅",
         description: json?.overrideApplied ? "Existing campaign was updated without creating a duplicate." : undefined,
       });
       void queryClient.invalidateQueries({ queryKey: ["live-campaigns"] });

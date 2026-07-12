@@ -1,10 +1,10 @@
 import { useLocation } from "wouter";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AlertRulesConfig } from "@workspace/alert-rules";
 import { DEFAULT_ALERT_RULES } from "@workspace/alert-rules";
 import type { ReviewQueueCampaign, SuggestedReviewAction } from "@/lib/campaign-review/types";
-import { recordReviewEvent, dismissCampaignUntil, getLatestMediaBuyerNote } from "@/lib/campaign-review/memory";
+import { recordReviewEvent, getLatestMediaBuyerNote } from "@/lib/campaign-review/memory";
 import { authedJson } from "@/lib/api-fetch";
 import { AddToWorkQueueDialog } from "@/components/campaign-review/add-to-work-queue-dialog";
 import {
@@ -15,12 +15,22 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { CampaignHealthBadge } from "@/components/campaign-review/health-badge";
 import { useToast } from "@/hooks/use-toast";
-import { ListTodo } from "lucide-react";
+import { Copy, ListTodo, Pencil } from "lucide-react";
 
 function fmt$(n: number) {
   return `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+async function copyText(value: string, toast: ReturnType<typeof useToast>["toast"], label: string) {
+  try {
+    await navigator.clipboard.writeText(value);
+    toast({ title: `${label} copied` });
+  } catch {
+    toast({ title: "Could not copy", variant: "destructive" });
+  }
 }
 
 export function ReviewDetailSheet({
@@ -30,6 +40,7 @@ export function ReviewDetailSheet({
   workspaceId,
   actorEmployeeId,
   onMemoryRecorded,
+  onServerDismiss,
   rules = DEFAULT_ALERT_RULES,
 }: {
   item: ReviewQueueCampaign | null;
@@ -38,6 +49,8 @@ export function ReviewDetailSheet({
   workspaceId: number;
   actorEmployeeId: number;
   onMemoryRecorded: () => void;
+  /** Server-authoritative dismiss for a single campaign. */
+  onServerDismiss?: (campaignId: number) => Promise<void> | void;
   rules?: AlertRulesConfig;
 }) {
   const [, navigate] = useLocation();
@@ -45,11 +58,29 @@ export function ReviewDetailSheet({
   const queryClient = useQueryClient();
   const [workQueueOpen, setWorkQueueOpen] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [editingComment, setEditingComment] = useState(false);
+  const [commentDraft, setCommentDraft] = useState("");
+  const [savingComment, setSavingComment] = useState(false);
 
-  if (!item) return null;
   const review = item;
-  const mediaBuyerNote = getLatestMediaBuyerNote(workspaceId, actorEmployeeId, review.campaignId);
-  const isManualReview = review.signals.some((s) => s.label === "Manual review requested");
+  const mediaBuyerNote =
+    review != null ? getLatestMediaBuyerNote(workspaceId, actorEmployeeId, review.campaignId) : null;
+  const isManualReview =
+    review?.signals.some((s) => s.label === "Manual review requested") ?? false;
+  const displayComment =
+    review?.reviewComment?.trim() ||
+    mediaBuyerNote?.note?.trim() ||
+    "";
+
+  useEffect(() => {
+    if (!open || !review) {
+      setEditingComment(false);
+      return;
+    }
+    setCommentDraft(displayComment);
+  }, [open, review?.campaignId, displayComment]);
+
+  if (!review) return null;
 
   async function resolveManualReview(resolution: string) {
     if (!isManualReview) return;
@@ -71,6 +102,28 @@ export function ReviewDetailSheet({
     }
   }
 
+  async function saveComment() {
+    setSavingComment(true);
+    try {
+      await authedJson(`/api/campaigns/${review.campaignId}/review-note`, {
+        method: "PATCH",
+        body: JSON.stringify({ workspaceId, note: commentDraft }),
+      });
+      await queryClient.invalidateQueries({ queryKey: ["campaign-review-open", workspaceId] });
+      setEditingComment(false);
+      onMemoryRecorded();
+      toast({ title: "Review comment saved" });
+    } catch (e: unknown) {
+      toast({
+        title: "Could not save comment",
+        description: e instanceof Error ? e.message : "Request failed",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingComment(false);
+    }
+  }
+
   function applyAction(action: SuggestedReviewAction) {
     void (async () => {
       recordReviewEvent(workspaceId, actorEmployeeId, {
@@ -80,7 +133,7 @@ export function ReviewDetailSheet({
         note: action.label,
       });
       if (action.memoryType === "dismissed_signal") {
-        dismissCampaignUntil(workspaceId, actorEmployeeId, review.campaignId, undefined, rules);
+        await onServerDismiss?.(review.campaignId);
       }
       if (
         isManualReview &&
@@ -99,7 +152,12 @@ export function ReviewDetailSheet({
       if (action.href) {
         onOpenChange(false);
         navigate(action.href);
-      } else if (isManualReview && action.memoryType === "reviewed") {
+      } else if (
+        isManualReview &&
+        (action.memoryType === "reviewed" || action.memoryType === "dismissed_signal")
+      ) {
+        onOpenChange(false);
+      } else if (action.memoryType === "dismissed_signal") {
         onOpenChange(false);
       }
     })();
@@ -123,20 +181,94 @@ export function ReviewDetailSheet({
             {review.purpose} · {review.platform}
             {review.employeeName && ` · ${review.employeeName}`}
           </SheetDescription>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => void copyText(String(review.campaignId), toast, "Campaign ID")}
+            >
+              <Copy className="mr-1 h-3 w-3" />
+              ID {review.campaignId}
+            </Button>
+            {review.voluumCampaignId && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 max-w-full text-xs"
+                onClick={() => void copyText(review.voluumCampaignId!, toast, "Voluum ID")}
+              >
+                <Copy className="mr-1 h-3 w-3 shrink-0" />
+                <span className="truncate">Voluum {review.voluumCampaignId}</span>
+              </Button>
+            )}
+          </div>
         </SheetHeader>
 
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
-          {mediaBuyerNote?.note?.trim() && (
-            <div className="rounded-lg border border-primary/25 bg-primary/5 px-3 py-3">
-              <p className="text-xs font-bold uppercase tracking-widest text-primary">
-                Media buyer note
+          <div className="rounded-xl border-2 border-primary/30 bg-primary/5 px-4 py-4">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-bold uppercase tracking-widest text-primary">
+                Review comment
               </p>
-              <p className="mt-2 whitespace-pre-wrap text-sm">{mediaBuyerNote.note}</p>
-              <p className="mt-2 text-[10px] text-muted-foreground">
-                From Live Campaigns — persisted in review queue when sent via Send to review.
-              </p>
+              {!editingComment && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    setCommentDraft(displayComment);
+                    setEditingComment(true);
+                  }}
+                >
+                  <Pencil className="mr-1 h-3 w-3" />
+                  Edit
+                </Button>
+              )}
             </div>
-          )}
+            {editingComment ? (
+              <div className="mt-3 space-y-2">
+                <Textarea
+                  value={commentDraft}
+                  onChange={(e) => setCommentDraft(e.target.value)}
+                  rows={5}
+                  className="text-base"
+                  placeholder="Add context for this review…"
+                />
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={savingComment}
+                    onClick={() => void saveComment()}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={savingComment}
+                    onClick={() => {
+                      setCommentDraft(displayComment);
+                      setEditingComment(false);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-3 whitespace-pre-wrap text-base leading-relaxed text-foreground">
+                {displayComment || (
+                  <span className="text-muted-foreground italic">No comment yet</span>
+                )}
+              </p>
+            )}
+          </div>
 
           <div>
             <p className="mb-2 text-xs font-bold uppercase tracking-widest text-muted-foreground">
@@ -149,7 +281,7 @@ export function ReviewDetailSheet({
               <Metric label="ROI" value={`${review.roi.toFixed(1)}%`} />
             </div>
             <p className="mt-2 text-[10px] text-muted-foreground">
-              Signals use UI heuristics on imported metrics — not automated server rules.
+              ROI is calculated from cost and revenue — not imported from CSV.
             </p>
           </div>
 

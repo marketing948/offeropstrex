@@ -20,6 +20,7 @@ import {
   roiPercent,
   summaryHealthBadgeClass,
 } from "@/components/live-campaigns/live-campaign-health";
+import { resolveDisplayRoiPercent, profitFromCostRevenue } from "@/lib/campaign-metrics";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -55,7 +56,8 @@ function fmtPct(v: number | null): string {
 }
 
 function toReviewInput(c: MonitoringCampaign): ReviewCampaignInput {
-  const roiNum = Number(c.roi ?? 0);
+  const cost = Number(c.cost ?? 0);
+  const revenue = Number(c.revenue ?? 0);
   return {
     id: c.id,
     campaignName: c.campaignName,
@@ -69,9 +71,10 @@ function toReviewInput(c: MonitoringCampaign): ReviewCampaignInput {
     liveStartedAt: c.liveStartedAt,
     clicks: Number(c.clicks ?? 0),
     conversions: Number(c.conversions ?? 0),
-    revenue: Number(c.revenue ?? 0),
-    cost: Number(c.cost ?? 0),
-    roi: Math.abs(roiNum) <= 1 ? roiNum * 100 : roiNum,
+    revenue,
+    cost,
+    roi: resolveDisplayRoiPercent(cost, revenue, c.roi) ?? 0,
+    voluumCampaignId: c.voluumCampaignId,
   };
 }
 
@@ -79,14 +82,14 @@ function toRangeSnapshot(daily: DailyMetricRow | undefined) {
   if (!daily) return null;
   const cost = Number(daily.cost);
   const revenue = Number(daily.revenue);
-  const profit = Number(daily.profit);
+  const profit = profitFromCostRevenue(cost, revenue);
   return {
     visits: daily.visits,
     conversions: daily.conversions,
     cost,
     revenue,
     profit,
-    roi: roiPercent(daily.roi),
+    roi: resolveDisplayRoiPercent(cost, revenue, daily.roi),
   };
 }
 
@@ -104,6 +107,7 @@ export function LiveCampaignsSummaryTable({
   onRetry,
   retrying,
   onSelectCampaign,
+  reviewedCampaignIds = new Set<number>(),
 }: {
   campaigns: MonitoringCampaign[];
   metricsByCampaignId: Map<number, DailyMetricRow>;
@@ -118,6 +122,7 @@ export function LiveCampaignsSummaryTable({
   onRetry: () => void;
   retrying: boolean;
   onSelectCampaign: (campaign: MonitoringCampaign) => void;
+  reviewedCampaignIds?: Set<number>;
 }) {
   const sort = useTableSort("visits");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -135,7 +140,11 @@ export function LiveCampaignsSummaryTable({
           if (col === "visits") return range?.visits ?? Number(c.clicks ?? 0);
           if (col === "revenue") return range?.revenue ?? Number(c.revenue ?? 0);
           if (col === "profit") return range?.profit ?? (Number(c.revenue ?? 0) - Number(c.cost ?? 0));
-          if (col === "roi") return range?.roi ?? roiPercent(c.roi);
+          if (col === "roi") {
+            const cost = range?.cost ?? Number(c.cost ?? 0);
+            const revenue = range?.revenue ?? Number(c.revenue ?? 0);
+            return resolveDisplayRoiPercent(cost, revenue, range?.roi ?? c.roi) ?? 0;
+          }
           if (col === "conversions") return range?.conversions ?? Number(c.conversions ?? 0);
           if (col === "offerCount") {
             return resolveCampaignOfferCount(c, {
@@ -279,6 +288,7 @@ export function LiveCampaignsSummaryTable({
                 const conv = range?.conversions ?? null;
                 const visits = range?.visits ?? Number(c.clicks ?? 0);
                 const checked = selectedIds.has(c.id);
+                const isReviewed = reviewedCampaignIds.has(c.id);
 
                 return (
                   <TableRow
@@ -286,6 +296,7 @@ export function LiveCampaignsSummaryTable({
                     className={cn(
                       "cursor-pointer align-middle hover:bg-slate-50/80",
                       checked && "bg-violet-50/40",
+                      isReviewed && "bg-emerald-50/60 ring-1 ring-inset ring-emerald-200",
                     )}
                     onClick={() => onSelectCampaign(c)}
                   >
@@ -306,6 +317,11 @@ export function LiveCampaignsSummaryTable({
                       >
                         {c.campaignName}
                       </p>
+                      {isReviewed && (
+                        <Badge className="mt-1 border-emerald-300 bg-emerald-100 text-[10px] font-bold text-emerald-800">
+                          Reviewed
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell className="py-3">
                       <Badge

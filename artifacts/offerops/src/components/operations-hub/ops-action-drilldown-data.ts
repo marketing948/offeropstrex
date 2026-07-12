@@ -238,7 +238,7 @@ function classifyWorkingRow(
   const highlights: WorkingHighlight[] = [];
   const revenue = num(c.revenue);
   const cost = num(c.cost);
-  const roi = num(c.roi) || roiPct(revenue, cost);
+  const roi = cost > 0 || revenue !== 0 ? roiPct(revenue, cost) : num(c.roi);
   const conversions = num(c.conversions);
   const visits = num(c.clicks);
   const daysLive = daysSince(c.liveStartedAt ?? null);
@@ -529,7 +529,7 @@ export function buildWorkingDrilldown(
       const revenue = num(c.revenue);
       const cost = num(c.cost);
       const profit = revenue - cost;
-      const roi = num(c.roi) || roiPct(revenue, cost);
+      const roi = cost > 0 || revenue !== 0 ? roiPct(revenue, cost) : num(c.roi);
       const conversions = num(c.conversions);
       const { highlights, tags } = classifyWorkingRow(c, rules);
 

@@ -30,35 +30,22 @@ import {
   type WorkerDailyPlanSummary,
 } from "@/components/operations-hub/monthly-goal-daily-plan";
 import {
-  computeEffectiveSummary,
-  countCompletedGeosToday,
-  geoUsageCount,
-  isAutoExtraModeActive,
-  isExtraLimitReached,
-  isOptimizationComplete,
-  isScalingComplete,
-  isShutdownComplete,
-  isTestingGeoComplete,
-  isTestingNetworkDailyTargetMet,
-  isTestingNetworkVisible,
-  optimizationKey,
-  orderTestingNetworksByPriority,
-  scalingKey,
-  selectTopGeosForNetwork,
-  selectNextAction,
-  shutdownKey,
+  countCompletedGeosTodayFromPlan,
+  effectiveSummaryFromPlan,
+  isTestingGeoCompleteFromPlan,
+  isTestingNetworkDailyTargetMetFromPlan,
+  isTestingNetworkVisibleFromPlan,
+  selectFocusTestingNetworksFromPlan,
+  selectNextActionFromPlan,
+  selectTopGeosFromPlan,
   testingGeoKey,
-  testingNetworkKey,
-  type MissionCompletionState,
 } from "@/components/operations-hub/daily-mission-completion";
-import { useDailyMissionCompletion } from "@/components/operations-hub/use-daily-mission-completion";
 import {
   FlaskConical,
   Sparkles,
   Puzzle,
   TrendingUp,
   CheckCircle2,
-  Circle,
   ArrowRight,
   ChevronDown,
   ChevronRight,
@@ -71,12 +58,6 @@ import { cn } from "@/lib/utils";
 import { geoFlagLabel } from "@/lib/geo-flag";
 
 type ColorKey = "sky" | "emerald" | "amber";
-
-const CHECK_RING: Record<ColorKey, string> = {
-  sky: "text-sky-600 hover:bg-sky-50",
-  emerald: "text-emerald-600 hover:bg-emerald-50",
-  amber: "text-amber-600 hover:bg-amber-50",
-};
 
 function openFocusNav(
   onSelectFocus: (item: FocusItem) => void,
@@ -97,100 +78,43 @@ function openFocusNav(
   });
 }
 
-/** Small "Done for today" toggle. Stops row click propagation. */
-function DoneCheck({
-  done,
-  color,
-  onToggle,
-  disabled,
-}: {
-  done: boolean;
-  color: ColorKey;
-  onToggle: () => void;
-  disabled?: boolean;
-}) {
-  if (disabled) return null;
-  return (
-    <button
-      type="button"
-      aria-pressed={done}
-      title={done ? "Marked done for today" : "Mark done for today"}
-      onClick={(e) => {
-        e.stopPropagation();
-        onToggle();
-      }}
-      className={cn(
-        "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-all duration-150 active:scale-90",
-        done ? "text-emerald-600" : CHECK_RING[color],
-      )}
-    >
-      {done ? (
-        <CheckCircle2 className="h-5 w-5 animate-in zoom-in-75 duration-200" strokeWidth={2.25} />
-      ) : (
-        <Circle className="h-5 w-5" strokeWidth={2} />
-      )}
-    </button>
-  );
-}
-
 function GeoLine({
   geo,
-  done,
   primary,
-  isReuse,
-  isExtra,
-  canComplete,
-  onToggle,
+  completed,
 }: {
   geo: TestingNetworkPlan["geos"][number];
-  done: boolean;
   primary?: boolean;
-  isReuse?: boolean;
-  isExtra?: boolean;
-  canComplete: boolean;
-  onToggle: () => void;
+  completed: boolean;
 }) {
   return (
     <div
       className={cn(
         "flex items-center gap-2 border-t border-sky-100/80 px-3 py-2 first:border-t-0",
-        done && "opacity-45",
-        primary && !done && "bg-sky-100/70",
-        isExtra && !done && "bg-amber-50/80",
+        completed && "bg-emerald-50/40",
+        primary && !completed && "bg-sky-100/70",
       )}
     >
-      <DoneCheck done={done} color="sky" onToggle={onToggle} disabled={!canComplete} />
       <div className="min-w-0 flex-1">
         <span
           className={cn(
             "font-bold text-slate-900",
             primary ? "text-[13px]" : "text-[12px]",
-            done && "text-slate-500 line-through",
-            isExtra && !done && "text-amber-950",
+            completed && "text-emerald-800",
           )}
         >
-          {isExtra ? (
-            <>
-              🚀 Next opportunity: {geoFlagLabel(geo.geo)} — Open {geo.todayRequired} test
-              {geo.todayRequired === 1 ? "" : "s"}
-            </>
-          ) : (
-            <>
-              {geoFlagLabel(geo.geo)} — Open {geo.todayRequired} test
-              {geo.todayRequired === 1 ? "" : "s"}
-            </>
-          )}
-          {isReuse && !isExtra && (
-            <span className="ml-1.5 text-[11px] font-semibold text-sky-600" title="Reusing a GEO you already completed today">
-              🔁
-            </span>
-          )}
+          {geoFlagLabel(geo.geo)} —{" "}
+          {completed
+            ? "Done today ✅"
+            : `Open ${geo.todayRequired} test${geo.todayRequired === 1 ? "" : "s"}`}
         </span>
-        {geo.doneToday > 0 && !done && !isExtra && (
-          <span className="ml-1.5 text-[11px] font-medium text-sky-700">· {geo.doneToday} done</span>
+        {!completed && geo.doneToday > 0 && (
+          <span className="ml-1.5 text-[11px] font-medium text-sky-700">
+            · {geo.doneToday}/{geo.todayRequired} in progress
+          </span>
         )}
       </div>
-      {primary && !done && (
+      {primary && !completed && (
         <span className="shrink-0 rounded-full bg-sky-600 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-white">
           Do next
         </span>
@@ -200,53 +124,34 @@ function GeoLine({
 }
 
 /**
- * Testing network card — shows up to 3 focused GEO tasks at a time.
- * Completing a GEO removes it from the active pool and the selector back-fills
- * the next best GEO. Refresh rotates tie-break order per network (seed-based).
+ * Testing network card — shows up to 3 incomplete GEO tasks (campaign-backed).
+ * Refresh refetches live campaigns so new tests appear automatically.
  */
 function TestingNetworkCard({
   plan,
   topGeos,
   doneToday,
   targetMet,
-  extraMode,
-  activeCount,
-  eligibleCount,
-  isReuse,
-  completionState,
   onRefresh,
-  canComplete,
+  isRefreshing,
   isPrimaryGeo,
-  onCompleteGeo,
-  onCompleteExtraGeo,
-  onDismissNetwork,
 }: {
   plan: TestingNetworkPlan;
   topGeos: TestingNetworkPlan["geos"];
   doneToday: number;
   targetMet: boolean;
-  extraMode: boolean;
-  extraLimitReached: boolean;
-  activeCount: number;
-  eligibleCount: number;
-  isReuse: boolean;
-  completionState: MissionCompletionState;
   onRefresh: () => void;
-  canComplete: boolean;
+  isRefreshing?: boolean;
   isPrimaryGeo: (geo: string) => boolean;
-  onCompleteGeo: (geo: string) => void;
-  onCompleteExtraGeo: (geo: string) => void;
-  onDismissNetwork: () => void;
 }) {
-  const canRefresh = extraMode
-    ? eligibleCount > 1
-    : !targetMet && eligibleCount > 1;
-  const showExtraGeos = targetMet && extraMode && topGeos.length > 0;
+  const activeCount = plan.geos.filter(
+    (g) => g.todayRequired > 0 && !isTestingGeoCompleteFromPlan(g),
+  ).length;
+
   return (
     <div
       className={cn(
         "overflow-hidden rounded-2xl border bg-white shadow-sm",
-        targetMet && extraMode && "shadow-emerald-100/80 shadow-md ring-1 ring-emerald-100/80",
         targetMet ? "border-emerald-200/90" : "border-sky-200/90",
       )}
     >
@@ -264,11 +169,7 @@ function TestingNetworkCard({
             targetMet ? "bg-emerald-100 text-emerald-700" : "bg-sky-100 text-sky-700",
           )}
         >
-          {targetMet && extraMode ? (
-            <span className="text-base leading-none" aria-hidden>
-              🚀
-            </span>
-          ) : targetMet ? (
+          {targetMet ? (
             <CheckCircle2 className="h-4 w-4" strokeWidth={2.25} />
           ) : (
             <FlaskConical className="h-4 w-4" strokeWidth={2.25} />
@@ -298,31 +199,9 @@ function TestingNetworkCard({
         </div>
       </div>
       {targetMet ? (
-        <>
-          <div className="bg-emerald-50/30 px-3 py-4 text-center">
-            <p className="text-sm font-bold text-emerald-800">✅ Done for today</p>
-            {extraLimitReached && (
-              <p className="mt-2 text-[12px] font-semibold text-emerald-900/90">
-                💡 You&apos;ve done great here — try another network
-              </p>
-            )}
-          </div>
-          {showExtraGeos && (
-            <div className="divide-y divide-amber-100/80 border-t border-amber-100/60 bg-white">
-              {topGeos.map((geo) => (
-                <GeoLine
-                  key={geo.geo}
-                  geo={geo}
-                  isExtra
-                  isReuse={geoUsageCount(completionState, plan.network, geo.geo) > 0}
-                  done={false}
-                  canComplete={canComplete}
-                  onToggle={() => onCompleteExtraGeo(geo.geo)}
-                />
-              ))}
-            </div>
-          )}
-        </>
+        <div className="bg-emerald-50/30 px-3 py-4 text-center">
+          <p className="text-sm font-bold text-emerald-800">✅ Done for today</p>
+        </div>
       ) : (
         <div className="divide-y divide-sky-100/80 bg-white">
           {topGeos.map((geo) => (
@@ -330,10 +209,7 @@ function TestingNetworkCard({
               key={geo.geo}
               geo={geo}
               primary={isPrimaryGeo(geo.geo)}
-              isReuse={isTestingGeoComplete(plan.network, geo, completionState)}
-              done={false}
-              canComplete={canComplete}
-              onToggle={() => onCompleteGeo(geo.geo)}
+              completed={isTestingGeoCompleteFromPlan(geo)}
             />
           ))}
         </div>
@@ -341,66 +217,27 @@ function TestingNetworkCard({
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-sky-100 px-3 py-2">
         {!targetMet && (
           <span className="text-[10px] font-medium text-slate-500">
-            {isReuse
-              ? "All GEOs done — looping with 🔁"
-              : activeCount > topGeos.length
-                ? `${activeCount} GEOs left in this network`
-                : activeCount === 1
-                  ? "Single active GEO"
-                  : `${topGeos.length} GEOs shown`}
+            {activeCount > topGeos.length
+              ? `${activeCount} GEOs left in this network`
+              : activeCount === 1
+                ? "Single active GEO"
+                : `${topGeos.length} GEOs shown`}
           </span>
         )}
-        {extraMode && targetMet && !extraLimitReached && (
-          <span className="text-[10px] font-medium text-emerald-700">
-            Optional — helps you find more winners
-          </span>
-        )}
-        <div
-          className={cn(
-            "flex flex-wrap items-center gap-1.5",
-            (targetMet || extraMode) && "ml-auto w-full justify-end",
-          )}
-        >
-          {(extraMode || !targetMet) && (
-            <button
-              type="button"
-              onClick={onRefresh}
-              disabled={!canRefresh}
-              title={
-                eligibleCount <= 1
-                  ? "Only one GEO in this network"
-                  : extraMode
-                    ? "Suggest another opportunity"
-                    : isReuse
-                      ? "Suggest another GEO to repeat"
-                      : "Rotate GEO suggestions"
-              }
-              className={cn(
-                "inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide transition-all duration-150 active:scale-90",
-                extraMode
-                  ? "border-amber-200 text-amber-800 hover:bg-amber-50"
-                  : "border-sky-200 text-sky-700 hover:bg-sky-100",
-                !canRefresh && "cursor-not-allowed opacity-40",
-              )}
-            >
-              <RefreshCw className="h-3 w-3" />
-              Refresh
-            </button>
-          )}
-          {canComplete && (
-            <button
-              type="button"
-              onClick={onDismissNetwork}
-              className={cn(
-                "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide",
-                targetMet
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
-                  : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100",
-              )}
-            >
-              ✓ Done with this network today
-            </button>
-          )}
+        <div className={cn("flex flex-wrap items-center gap-1.5", targetMet && "ml-auto w-full justify-end")}>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={isRefreshing}
+            title="Reload campaigns from the server"
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1 rounded-full border border-sky-200 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-sky-700 transition-all duration-150 hover:bg-sky-100 active:scale-90",
+              isRefreshing && "cursor-wait opacity-60",
+            )}
+          >
+            <RefreshCw className={cn("h-3 w-3", isRefreshing && "animate-spin")} />
+            Refresh
+          </button>
         </div>
       </div>
     </div>
@@ -409,15 +246,9 @@ function TestingNetworkCard({
 
 function ScalingCard({
   candidate,
-  done,
-  canComplete,
-  onToggle,
   onReview,
 }: {
   candidate: ScalingCandidate;
-  done: boolean;
-  canComplete: boolean;
-  onToggle: () => void;
   onReview: () => void;
 }) {
   const reasonLabel = candidate.isWinner
@@ -430,11 +261,9 @@ function ScalingCard({
       className={cn(
         "overflow-hidden rounded-2xl border bg-white shadow-sm",
         candidate.isWinner ? "border-emerald-300 ring-1 ring-emerald-200" : "border-emerald-200/90",
-        done && "opacity-60",
       )}
     >
       <div className="flex items-center gap-1.5 px-2.5 py-3">
-        <DoneCheck done={done} color="emerald" onToggle={onToggle} disabled={!canComplete} />
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-800">
           {candidate.isWinner ? (
             <Trophy className="h-4 w-4" strokeWidth={2.25} />
@@ -444,7 +273,7 @@ function ScalingCard({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline justify-between gap-2">
-            <p className={cn("truncate text-sm font-extrabold text-slate-900", done && "line-through")}>
+            <p className="truncate text-sm font-extrabold text-slate-900">
               {candidate.isWinner && (
                 <span className="mr-1 rounded bg-emerald-600 px-1 py-0.5 text-[9px] font-black uppercase tracking-wide text-white">
                   Winner
@@ -477,27 +306,15 @@ function ScalingCard({
 
 function OptimizationCard({
   group,
-  done,
-  canComplete,
-  onToggle,
   onReview,
 }: {
   group: OptimizationGroup;
-  done: boolean;
-  canComplete: boolean;
-  onToggle: () => void;
   onReview: () => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div
-      className={cn(
-        "overflow-hidden rounded-2xl border border-amber-200/90 bg-white shadow-sm",
-        done && "opacity-60",
-      )}
-    >
+    <div className="overflow-hidden rounded-2xl border border-amber-200/90 bg-white shadow-sm">
       <div className="flex items-center gap-1.5 pl-2.5">
-        <DoneCheck done={done} color="amber" onToggle={onToggle} disabled={!canComplete} />
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
@@ -507,7 +324,7 @@ function OptimizationCard({
             <Puzzle className="h-4 w-4" strokeWidth={2.25} />
           </span>
           <div className="min-w-0 flex-1">
-            <p className={cn("text-sm font-extrabold text-slate-900", done && "line-through")}>
+            <p className="text-sm font-extrabold text-slate-900">
               {group.label}
             </p>
             <p className="mt-0.5 text-[11px] text-slate-600">
@@ -551,32 +368,20 @@ function OptimizationCard({
 
 function ShutdownCard({
   candidate,
-  done,
-  canComplete,
-  onToggle,
   onReview,
 }: {
   candidate: ShutdownCandidate;
-  done: boolean;
-  canComplete: boolean;
-  onToggle: () => void;
   onReview: () => void;
 }) {
   return (
-    <div
-      className={cn(
-        "overflow-hidden rounded-2xl border border-rose-200/90 bg-white shadow-sm",
-        done && "opacity-60",
-      )}
-    >
+    <div className="overflow-hidden rounded-2xl border border-rose-200/90 bg-white shadow-sm">
       <div className="flex items-center gap-1.5 px-2.5 py-3">
-        <DoneCheck done={done} color="amber" onToggle={onToggle} disabled={!canComplete} />
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
           <OctagonX className="h-4 w-4" strokeWidth={2.25} />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline justify-between gap-2">
-            <p className={cn("truncate text-sm font-extrabold text-slate-900", done && "line-through")}>
+            <p className="truncate text-sm font-extrabold text-slate-900">
               {candidate.name}
             </p>
             <span className="shrink-0 text-[11px] text-slate-500">
@@ -734,75 +539,47 @@ function SuccessState({ onSelectFocus }: { onSelectFocus: (item: FocusItem) => v
 function WorkerPlanBoard({
   plan,
   onSelectFocus,
-  workspaceId,
-  employeeId,
+  onRefreshCampaigns,
+  campaignsRefreshing = false,
+  campaigns = [],
+  lastRefreshedAt = null,
 }: {
   plan: DailyActionPlan;
   onSelectFocus: (item: FocusItem) => void;
-  workspaceId: number | null;
-  employeeId: number | null;
+  onRefreshCampaigns: () => void;
+  campaignsRefreshing?: boolean;
+  campaigns?: import("./ops-goal-focus.ts").OpsCampaignRowLite[];
+  lastRefreshedAt?: Date | null;
 }) {
-  const { state, toggle, completeGeo, completeExtraGeo, enabled } = useDailyMissionCompletion(
-    workspaceId,
-    employeeId,
-  );
-  // Fold live "done for today" marks into the Focus Bar so chips update instantly.
-  const s = useMemo(() => computeEffectiveSummary(plan, state), [plan, state]);
-
-  // Per-network Refresh: seed rotates tie-break order for visible GEO rows.
-  const [refreshSeedByNetwork, setRefreshSeedByNetwork] = useState<Record<string, number>>({});
-  const bumpRefreshSeed = (network: string) =>
-    setRefreshSeedByNetwork((m) => ({ ...m, [network]: (m[network] ?? 0) + 1 }));
+  const geoContext = useMemo(() => ({ campaigns }), [campaigns]);
+  const s = useMemo(() => effectiveSummaryFromPlan(plan), [plan]);
 
   const visibleTestingNetworks = useMemo(
     () =>
-      orderTestingNetworksByPriority(plan.testingNetworks, state)
-        .filter((net) => isTestingNetworkVisible(net, state))
-        .map((net) => {
-          const targetMet = isTestingNetworkDailyTargetMet(net, state);
-          const extraLimitReached = isExtraLimitReached(net, state);
-          const extraMode = isAutoExtraModeActive(net, state);
-          const topGeos = selectTopGeosForNetwork(
-            net,
-            state,
-            targetMet ? 1 : 3,
-            refreshSeedByNetwork[net.network] ?? 0,
-          );
-          return {
-            net,
-            topGeos,
-            doneToday: countCompletedGeosToday(net, state),
-            targetMet,
-            extraMode,
-            extraLimitReached,
-          };
-        }),
-    [plan.testingNetworks, state, refreshSeedByNetwork],
+      selectFocusTestingNetworksFromPlan(plan.testingNetworks, undefined, geoContext)
+        .filter((net) => isTestingNetworkVisibleFromPlan(net))
+        .map((net) => ({
+          net,
+          topGeos: selectTopGeosFromPlan(net, 3, geoContext),
+          doneToday: countCompletedGeosTodayFromPlan(net),
+          targetMet: isTestingNetworkDailyTargetMetFromPlan(net),
+        })),
+    [plan.testingNetworks, geoContext],
   );
 
   const scalingAll = useMemo(
     () => [...plan.scalingCandidates, ...plan.moveToWorkingCandidates],
     [plan.scalingCandidates, plan.moveToWorkingCandidates],
   );
-  const scalingVisible = useMemo(
-    () => scalingAll.filter((c) => !isScalingComplete(c, state)),
-    [scalingAll, state],
-  );
-  const optimizeVisible = useMemo(
-    () => plan.optimizations.filter((g) => !isOptimizationComplete(g, state)),
-    [plan.optimizations, state],
-  );
+  const optimizeAll = plan.optimizations;
   const shutdownAll = plan.shutdownCandidates ?? [];
-  const shutdownVisible = useMemo(
-    () => shutdownAll.filter((c) => !isShutdownComplete(c, state)),
-    [shutdownAll, state],
-  );
 
-  // SINGLE SOURCE OF TRUTH: the top task in the same ordered queue is highlighted.
-  const nextAction = useMemo(() => selectNextAction(plan, state), [plan, state]);
+  const nextAction = useMemo(
+    () => selectNextActionFromPlan(plan, geoContext),
+    [plan, geoContext],
+  );
   const primaryGeoKey = nextAction?.kind === "testing" ? nextAction.key : null;
 
-  // Collapsible groups: Testing open by default, the rest closed.
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
     testing: false,
     scale: true,
@@ -811,9 +588,9 @@ function WorkerPlanBoard({
   });
   const toggleGroup = (k: string) => setCollapsed((c) => ({ ...c, [k]: !c[k] }));
 
-  // Micro feedback: transient "+1" whenever the completed count increases.
   const [plusOne, setPlusOne] = useState(false);
   const prevCompleted = useRef(s.completed);
+
   useEffect(() => {
     if (s.completed > prevCompleted.current) {
       setPlusOne(true);
@@ -851,6 +628,11 @@ function WorkerPlanBoard({
         <div className="mt-3">
           <ProgressBarVisual pct={s.progressPct} size="lg" />
         </div>
+        {lastRefreshedAt && (
+          <p className="mt-2 text-[10px] text-slate-500">
+            Last refreshed {lastRefreshedAt.toLocaleTimeString()}
+          </p>
+        )}
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <div className="rounded-xl border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-center">
             <p className="text-sm font-black tabular-nums text-sky-800">
@@ -860,7 +642,7 @@ function WorkerPlanBoard({
           </div>
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-center">
             <p className="text-sm font-black tabular-nums text-emerald-800">
-              {s.scalingDone}/{s.scalingAdvisory}
+              {s.scalingAdvisory}
             </p>
             <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Scale</p>
           </div>
@@ -872,7 +654,7 @@ function WorkerPlanBoard({
           </div>
           <div className="rounded-xl border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-center">
             <p className="text-sm font-black tabular-nums text-rose-800">
-              {s.shutdownDone}/{s.shutdownAdvisory}
+              {s.shutdownAdvisory}
             </p>
             <p className="text-[10px] font-bold uppercase tracking-wide text-rose-700">Stop</p>
           </div>
@@ -892,37 +674,18 @@ function WorkerPlanBoard({
         />
         {!collapsed.testing &&
           (visibleTestingNetworks.length > 0 ? (
-            visibleTestingNetworks.map(({ net, topGeos, doneToday, targetMet, extraMode, extraLimitReached }) => {
-              const eligibleCount = net.geos.filter((g) => g.todayRequired > 0).length;
-              const activeCount = net.geos.filter(
-                (g) => g.todayRequired > 0 && !isTestingGeoActiveComplete(net, g, state),
-              ).length;
-              const isReuse = !targetMet && activeCount === 0;
-              return (
-                <TestingNetworkCard
-                  key={net.network}
-                  plan={net}
-                  topGeos={topGeos}
-                  doneToday={doneToday}
-                  targetMet={targetMet}
-                  extraMode={extraMode}
-                  extraLimitReached={extraLimitReached}
-                  activeCount={activeCount}
-                  eligibleCount={eligibleCount}
-                  isReuse={isReuse}
-                  completionState={state}
-                  onRefresh={() => bumpRefreshSeed(net.network)}
-                  canComplete={enabled}
-                  isPrimaryGeo={(geo) => primaryGeoKey === testingGeoKey(net.network, geo)}
-                  onCompleteGeo={(geo) => completeGeo(net.network, geo)}
-                  onCompleteExtraGeo={(geo) => {
-                    completeExtraGeo(net.network, geo);
-                    bumpRefreshSeed(net.network);
-                  }}
-                  onDismissNetwork={() => toggle(testingNetworkKey(net.network))}
-                />
-              );
-            })
+            visibleTestingNetworks.map(({ net, topGeos, doneToday, targetMet }) => (
+              <TestingNetworkCard
+                key={net.network}
+                plan={net}
+                topGeos={topGeos}
+                doneToday={doneToday}
+                targetMet={targetMet}
+                onRefresh={onRefreshCampaigns}
+                isRefreshing={campaignsRefreshing}
+                isPrimaryGeo={(geo) => primaryGeoKey === testingGeoKey(net.network, geo)}
+              />
+            ))
           ) : (
             <EmptyState
               color="sky"
@@ -941,19 +704,16 @@ function WorkerPlanBoard({
           color="emerald"
           icon={TrendingUp}
           title="Campaigns We Should Scale Today"
-          doneLabel={`${s.scalingDone}/${s.scalingAdvisory} done`}
+          doneLabel={`${scalingAll.length} to review`}
           collapsed={collapsed.scale}
           onToggle={() => toggleGroup("scale")}
         />
         {!collapsed.scale &&
-          (scalingVisible.length > 0 ? (
-            scalingVisible.map((c) => (
+          (scalingAll.length > 0 ? (
+            scalingAll.map((c) => (
               <ScalingCard
                 key={`${c.kind}:${c.id}`}
                 candidate={c}
-                canComplete={enabled}
-                done={false}
-                onToggle={() => toggle(scalingKey(c.kind, c.id))}
                 onReview={() =>
                   openFocusNav(
                     onSelectFocus,
@@ -968,11 +728,7 @@ function WorkerPlanBoard({
           ) : (
             <EmptyState
               color="emerald"
-              message={
-                scalingAll.length > 0
-                  ? "All scale reviews done for today. Nice work!"
-                  : "No campaigns are ready to scale today."
-              }
+              message="No campaigns are ready to scale today."
             />
           ))}
       </div>
@@ -988,14 +744,11 @@ function WorkerPlanBoard({
           onToggle={() => toggleGroup("optimize")}
         />
         {!collapsed.optimize &&
-          (optimizeVisible.length > 0 ? (
-            optimizeVisible.map((g) => (
+          (optimizeAll.length > 0 ? (
+            optimizeAll.map((g) => (
               <OptimizationCard
                 key={g.issueType}
                 group={g}
-                canComplete={enabled}
-                done={false}
-                onToggle={() => toggle(optimizationKey(g.issueType))}
                 onReview={() =>
                   openFocusNav(
                     onSelectFocus,
@@ -1010,11 +763,7 @@ function WorkerPlanBoard({
           ) : (
             <EmptyState
               color="amber"
-              message={
-                plan.optimizations.length > 0
-                  ? "All optimizations done for today. Nice work!"
-                  : "No campaigns need optimization right now."
-              }
+              message="No campaigns need optimization right now."
             />
           ))}
       </div>
@@ -1025,19 +774,16 @@ function WorkerPlanBoard({
           color="amber"
           icon={OctagonX}
           title="Campaigns We Should STOP"
-          doneLabel={`${s.shutdownDone}/${s.shutdownAdvisory} done`}
+          doneLabel={`${shutdownAll.length} to review`}
           collapsed={collapsed.stop}
           onToggle={() => toggleGroup("stop")}
         />
         {!collapsed.stop &&
-          (shutdownVisible.length > 0 ? (
-            shutdownVisible.map((c) => (
+          (shutdownAll.length > 0 ? (
+            shutdownAll.map((c) => (
               <ShutdownCard
                 key={c.id}
                 candidate={c}
-                canComplete={enabled}
-                done={false}
-                onToggle={() => toggle(shutdownKey(c.id))}
                 onReview={() =>
                   openFocusNav(
                     onSelectFocus,
@@ -1052,25 +798,12 @@ function WorkerPlanBoard({
           ) : (
             <EmptyState
               color="amber"
-              message={
-                shutdownAll.length > 0
-                  ? "All stop reviews done for today. Nice work!"
-                  : "No campaigns need stopping right now."
-              }
+              message="No campaigns need stopping right now."
             />
           ))}
       </div>
     </div>
   );
-}
-
-/** Whether a GEO is complete (marked done or timestamp-done). */
-function isTestingGeoActiveComplete(
-  net: TestingNetworkPlan,
-  geo: TestingNetworkPlan["geos"][number],
-  state: MissionCompletionState,
-): boolean {
-  return isTestingGeoComplete(net.network, geo, state);
 }
 
 /** Completion band → color. Green ≥70%, Orange 30–70%, Red <30%. */
@@ -1204,6 +937,9 @@ export function TodaysFocusCard({
   monthKey,
   testingSlices = [],
   teamWorkers,
+  onRefreshCampaigns,
+  campaignsRefreshing = false,
+  lastRefreshedAt = null,
 }: {
   /** Legacy Focus payload — kept for call-site compatibility; board uses plan builders. */
   focus?: unknown;
@@ -1223,21 +959,25 @@ export function TodaysFocusCard({
     testingSlices: MetricSliceBundle["testing"];
     campaigns?: OpsCampaignRowLite[];
   }[];
+  onRefreshCampaigns?: () => void;
+  campaignsRefreshing?: boolean;
+  lastRefreshedAt?: Date | null;
 }) {
   void _focus;
   void isWorker;
-  const { rules, workspaceId } = useAlertRules();
+  const { rules } = useAlertRules();
 
   const scopedCampaigns = useMemo(() => {
-    if (employeeId == null) return campaigns;
-    return campaigns.filter((c) => c.employeeId == null || c.employeeId === employeeId);
+    const list = campaigns ?? [];
+    if (employeeId == null) return list;
+    return list.filter((c) => c != null && (c.employeeId == null || c.employeeId === employeeId));
   }, [campaigns, employeeId]);
 
   const workerPlan = useMemo(() => {
     if (isAdminAllEmployees) return null;
     return buildDailyActionPlan({
       monthKey,
-      testingSlices,
+      testingSlices: testingSlices ?? [],
       campaigns: scopedCampaigns,
       rules,
     });
@@ -1248,7 +988,7 @@ export function TodaysFocusCard({
     return buildTeamDailyPlans(teamWorkers ?? [], monthKey, new Date(), rules);
   }, [isAdminAllEmployees, teamWorkers, monthKey, rules]);
 
-  const title = isAdminAllEmployees ? "Team Daily Focus" : "What we need to do today";
+  const title = isAdminAllEmployees ? "Team Daily Focus" : "Daily Board";
   const subtitle = isAdminAllEmployees
     ? `${teamPlans.length} worker${teamPlans.length === 1 ? "" : "s"} need action today`
     : employeeName
@@ -1295,8 +1035,10 @@ export function TodaysFocusCard({
           <WorkerPlanBoard
             plan={workerPlan}
             onSelectFocus={onSelectFocus}
-            workspaceId={workspaceId ?? null}
-            employeeId={employeeId}
+            onRefreshCampaigns={onRefreshCampaigns ?? (() => {})}
+            campaignsRefreshing={campaignsRefreshing}
+            lastRefreshedAt={lastRefreshedAt}
+            campaigns={scopedCampaigns}
           />
         ) : (
           <SuccessState onSelectFocus={onSelectFocus} />

@@ -181,6 +181,17 @@ export default function LiveCampaigns() {
   const campaignItems = response?.items;
   const campaigns = campaignItems ?? [];
   const pagination = response?.pagination;
+
+  const { data: reviewedTodayData } = useQuery<{ items: Array<{ campaignId: number }> }>({
+    queryKey: ["campaign-reviewed-today", activeWorkspaceId],
+    enabled: !!activeWorkspaceId,
+    queryFn: () =>
+      authedJson(`/api/campaign-review/reviewed-today?workspace_id=${activeWorkspaceId}`),
+  });
+  const reviewedCampaignIds = useMemo(
+    () => new Set((reviewedTodayData?.items ?? []).map((i) => i.campaignId)),
+    [reviewedTodayData?.items],
+  );
   const loadErrorMessage = operationalErrorMessage(
     error,
     "Couldn't load live campaigns.",
@@ -450,6 +461,7 @@ export default function LiveCampaigns() {
         onRetry={() => void refetch()}
         retrying={isFetching}
         onSelectCampaign={setSelectedCampaign}
+        reviewedCampaignIds={reviewedCampaignIds}
       />
 
       <LiveCampaignDrawer
@@ -465,9 +477,14 @@ export default function LiveCampaigns() {
           setImportOpen(true);
         }}
         onCloseCampaign={setCloseTarget}
+        isReviewedToday={selectedCampaign != null && reviewedCampaignIds.has(selectedCampaign.id)}
+        onMarkedReviewed={() => {
+          void queryClient.invalidateQueries({ queryKey: ["campaign-reviewed-today", activeWorkspaceId] });
+        }}
         onCampaignUpdated={() => {
           void queryClient.invalidateQueries({ queryKey: ["live-campaigns"] });
           void queryClient.invalidateQueries({ queryKey: ["live-campaign-filter-options"] });
+          void queryClient.invalidateQueries({ queryKey: ["campaign-reviewed-today", activeWorkspaceId] });
           if (activeWorkspaceId) invalidateGoalSurfaces(queryClient, activeWorkspaceId);
         }}
       />
