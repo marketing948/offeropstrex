@@ -22,6 +22,7 @@ import {
   isSameLocalDay,
   toMissionCampaignRow,
 } from "./daily-mission-board.ts";
+import { geoCodeText } from "../../lib/geo-flag.ts";
 
 type TestingGeo = TestingNetworkPlan["geos"][number];
 
@@ -1330,6 +1331,36 @@ export function selectRotatingGeosFromPlan(
     out.push(g);
   }
   return out;
+}
+
+/**
+ * Campaign-backed COMPLETED goal GEOs for a network today — one row per distinct
+ * GEO with a real testing campaign (uncapped `doneToday > 0`). Rendered with the
+ * checked completion circle ("Done today"). Completion is campaign truth, so this
+ * survives reload / logout / admin view without any localStorage.
+ */
+export function selectCompletedGeosFromPlan(net: TestingNetworkPlan): TestingGeo[] {
+  const seen = new Set<string>();
+  const out: TestingGeo[] = [];
+  for (const g of suggestionPoolFromPlan(net)) {
+    if ((g.doneToday ?? 0) <= 0) continue;
+    const key = canonicalGeoKey(g.geo);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(g);
+  }
+  return out;
+}
+
+/**
+ * Canonical toast copy when circle verification finds no qualifying testing
+ * campaign. GEO is rendered via the shared code formatter (never "US US").
+ */
+export function geoVerificationFailureMessage(
+  network: string,
+  geo: string,
+): string {
+  return `No matching Testing campaign was found for ${network} / ${geoCodeText(geo)} today.`;
 }
 
 export function orderTestingGeosByPlanPriority(
