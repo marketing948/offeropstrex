@@ -78,10 +78,70 @@ export function toMissionCampaignRow(raw: unknown): MissionCampaignRow | null {
     network,
     geo,
     employeeId: (() => {
-      const e = asFiniteNumber(c.employeeId);
-      return e != null && Number.isInteger(e) ? e : null;
+      // Owner resolution: campaign owner → creator → batch owner (batch
+      // attribution is the fallback for CampaignOps-generated testing rows).
+      for (const key of ["employeeId", "createdByEmployeeId", "batchEmployeeId"]) {
+        const e = asFiniteNumber(c[key]);
+        if (e != null && Number.isInteger(e)) return e;
+      }
+      return null;
     })(),
     employeeName: asTrimmedString(c.employeeName),
+  };
+}
+
+/**
+ * ONE canonical Daily-Board campaign adapter (single source of field
+ * resolution). All completion/matching logic derives from these fields so
+ * network/GEO/purpose/owner normalization never diverges between call sites.
+ *
+ * - employeeId: campaign owner → creator → batch owner; else null (won't count).
+ * - networkId : stable affiliate-network id when present (campaign or batch).
+ * - networkKey: canonical network name (trim/lowercase/collapse) — no fuzzy match.
+ * - geoCode   : ISO-2 uppercase (`us`,`US`,`US US`,`🇺🇸 US` → `US`).
+ * - purpose   : "testing" | "not_testing" | null (unknown/missing → null).
+ * - createdAt is primary; liveStartedAt is a fallback only when createdAt absent.
+ */
+export type DailyMissionCampaign = {
+  id: number | null;
+  employeeId: number | null;
+  networkId: number | null;
+  networkKey: string;
+  geoCode: string;
+  purpose: "testing" | "not_testing" | null;
+  createdAt: string | null;
+  liveStartedAt: string | null;
+};
+
+export function toDailyMissionCampaign(raw: unknown): DailyMissionCampaign | null {
+  const row = toMissionCampaignRow(raw);
+  if (!row) return null;
+  const c = raw as Record<string, unknown>;
+
+  const networkId = (() => {
+    for (const key of ["affiliateNetworkId", "batchAffiliateNetworkId"]) {
+      const n = asFiniteNumber(c[key]);
+      if (n != null && Number.isInteger(n)) return n;
+    }
+    return null;
+  })();
+
+  const purpose: DailyMissionCampaign["purpose"] =
+    row.campaignPurpose === "testing"
+      ? "testing"
+      : row.campaignPurpose === "working" || row.campaignPurpose === "scaling"
+        ? "not_testing"
+        : null;
+
+  return {
+    id: row.id,
+    employeeId: row.employeeId,
+    networkId,
+    networkKey: canonicalNetworkKey(row.network),
+    geoCode: canonicalGeoKey(row.geo),
+    purpose,
+    createdAt: row.createdAt,
+    liveStartedAt: row.liveStartedAt,
   };
 }
 
@@ -299,15 +359,18 @@ export function explainDailyMissionCampaignMatch(
   geo: string | null | undefined,
   now: Date = new Date(),
 ): DailyMissionMatchExplanation {
+  // Derive every field from the ONE canonical adapter so this diagnostic can
+  // never disagree with the completion path about normalization.
+  const adapted = toDailyMissionCampaign(campaign);
   const row = toMissionCampaignRow(campaign);
   const normalized = {
-    campaignNetwork: canonicalNetworkKey(row?.network ?? null),
+    campaignNetwork: adapted?.networkKey ?? "",
     planNetwork: canonicalNetworkKey(network),
-    campaignGeo: canonicalGeoKey(row?.geo ?? null),
+    campaignGeo: adapted?.geoCode ?? "",
     planGeo: canonicalGeoKey(geo ?? null),
   };
 
-  if (!row) {
+  if (!adapted) {
     return {
       employeeMatch: false,
       networkMatch: false,
@@ -320,15 +383,19 @@ export function explainDailyMissionCampaignMatch(
   }
 
   const employeeMatch =
-    employee?.id != null && row.employeeId != null
-      ? row.employeeId === employee.id
-      : employee?.name && row.employeeName
+    employee?.id != null && adapted.employeeId != null
+      ? adapted.employeeId === employee.id
+      : employee?.name && row?.employeeName
         ? row.employeeName.trim().toLowerCase() === employee.name.trim().toLowerCase()
         : true;
-  const networkMatch = networkMatches(row.network, network);
-  const geoMatch = geoMatches(row.geo, geo);
-  const purposeMatch = row.campaignPurpose === "testing";
-  const stamp = row.createdAt || row.liveStartedAt;
+  const networkMatch = normalized.planNetwork
+    ? normalized.campaignNetwork === normalized.planNetwork
+    : false;
+  const geoMatch = !geo?.trim()
+    ? true
+    : normalized.campaignGeo === normalized.planGeo;
+  const purposeMatch = adapted.purpose === "testing";
+  const stamp = adapted.createdAt || adapted.liveStartedAt;
   const dateMatch = Boolean(stamp && isSameLocalDay(stamp, now));
 
   return {

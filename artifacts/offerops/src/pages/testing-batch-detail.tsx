@@ -38,6 +38,7 @@ import { MissingVoluumBadge } from "@/components/voluum-entity-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { VOLUUM_UI_ENABLED } from "@/lib/feature-flags";
 import { useWorkspace } from "@/lib/workspace-context";
+import { invalidateDailyBoardData } from "@/lib/invalidate-daily-board";
 import type { TestingBatch, Offer, Performance, Campaign, BatchResult } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
@@ -395,6 +396,9 @@ export default function TestingBatchDetail() {
     qc.invalidateQueries({ queryKey: getGetTestingBatchQueryKey(batchId) });
     qc.invalidateQueries({ queryKey: getListOffersQueryKey({ batch_id: batchId, workspace_id: activeWorkspaceId ?? 0 }) });
     qc.invalidateQueries({ queryKey: getGetQueuesQueryKey({ workspace_id: activeWorkspaceId ?? 0 }) });
+    // Batch go-live creates testing campaigns → refresh the Daily Board so their
+    // GEOs flip to "Done today" and progress advances without a reload.
+    if (activeWorkspaceId) void invalidateDailyBoardData(qc, activeWorkspaceId);
   };
 
   const goLive      = useGoLiveBatch({ mutation: { onSuccess: () => { invalidateAll(); toast({ title: "Batch is now Live! Click tracking started." }); } } });

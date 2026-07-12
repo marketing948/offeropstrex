@@ -31,6 +31,7 @@ import {
 } from "@/components/operations-hub/monthly-goal-daily-plan";
 import {
   countCompletedGeosTodayFromPlan,
+  countIncompleteSuggestionGeosFromPlan,
   effectiveSummaryFromPlan,
   isTestingGeoCompleteFromPlan,
   isTestingNetworkDailyTargetMetFromPlan,
@@ -132,6 +133,7 @@ function TestingNetworkCard({
   topGeos,
   doneToday,
   targetMet,
+  incompleteCount,
   onRefresh,
   isRefreshing,
   isPrimaryGeo,
@@ -140,13 +142,16 @@ function TestingNetworkCard({
   topGeos: TestingNetworkPlan["geos"];
   doneToday: number;
   targetMet: boolean;
+  /** Incomplete GEOs still available to suggest across the whole Monthly Goal. */
+  incompleteCount: number;
   onRefresh: () => void;
   isRefreshing?: boolean;
   isPrimaryGeo: (geo: string) => boolean;
 }) {
-  const activeCount = plan.geos.filter(
-    (g) => g.todayRequired > 0 && !isTestingGeoCompleteFromPlan(g),
-  ).length;
+  const activeCount = incompleteCount;
+  // Refresh can only surface something new when the incomplete pool is larger
+  // than what's already shown.
+  const exhausted = !targetMet && incompleteCount <= topGeos.length;
 
   return (
     <div
@@ -217,22 +222,28 @@ function TestingNetworkCard({
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-sky-100 px-3 py-2">
         {!targetMet && (
           <span className="text-[10px] font-medium text-slate-500">
-            {activeCount > topGeos.length
-              ? `${activeCount} GEOs left in this network`
-              : activeCount === 1
-                ? "Single active GEO"
-                : `${topGeos.length} GEOs shown`}
+            {exhausted
+              ? "All available GEOs are already shown"
+              : activeCount > topGeos.length
+                ? `${activeCount} GEOs available · showing ${topGeos.length}`
+                : activeCount === 1
+                  ? "Single active GEO"
+                  : `${topGeos.length} GEOs shown`}
           </span>
         )}
         <div className={cn("flex flex-wrap items-center gap-1.5", targetMet && "ml-auto w-full justify-end")}>
           <button
             type="button"
             onClick={onRefresh}
-            disabled={isRefreshing}
-            title="Reload campaigns from the server"
+            disabled={isRefreshing || exhausted}
+            title={
+              exhausted
+                ? "No more GEOs to rotate — all Monthly-Goal GEOs are already shown"
+                : "Show the next GEOs and reload campaigns from the server"
+            }
             className={cn(
               "inline-flex shrink-0 items-center gap-1 rounded-full border border-sky-200 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-sky-700 transition-all duration-150 hover:bg-sky-100 active:scale-90",
-              isRefreshing && "cursor-wait opacity-60",
+              (isRefreshing || exhausted) && "cursor-not-allowed opacity-50",
             )}
           >
             <RefreshCw className={cn("h-3 w-3", isRefreshing && "animate-spin")} />
@@ -588,6 +599,7 @@ function WorkerPlanBoard({
           ),
           doneToday: countCompletedGeosTodayFromPlan(net),
           targetMet: isTestingNetworkDailyTargetMetFromPlan(net),
+          incompleteCount: countIncompleteSuggestionGeosFromPlan(net),
         })),
     [plan.testingNetworks, geoContext, refreshCounts],
   );
@@ -699,13 +711,14 @@ function WorkerPlanBoard({
         />
         {!collapsed.testing &&
           (visibleTestingNetworks.length > 0 ? (
-            visibleTestingNetworks.map(({ net, topGeos, doneToday, targetMet }) => (
+            visibleTestingNetworks.map(({ net, topGeos, doneToday, targetMet, incompleteCount }) => (
               <TestingNetworkCard
                 key={net.network}
                 plan={net}
                 topGeos={topGeos}
                 doneToday={doneToday}
                 targetMet={targetMet}
+                incompleteCount={incompleteCount}
                 onRefresh={() => void refreshNetwork(net.network)}
                 isRefreshing={refreshingNetwork === net.network}
                 isPrimaryGeo={(geo) => primaryGeoKey === testingGeoKey(net.network, geo)}

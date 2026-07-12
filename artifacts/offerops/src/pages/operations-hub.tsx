@@ -21,7 +21,7 @@ import {
 } from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
 import { CAMPAIGNS_LIVE_REFETCH_MS } from "@/lib/campaign-query-cache";
-import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal-surfaces";
+import { invalidateDailyBoardData } from "@/lib/invalidate-daily-board";
 import { useWorkspace } from "@/lib/workspace-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { OpsKpiStripCard } from "@/components/operations-hub/ops-kpi-strip";
@@ -102,9 +102,17 @@ export default function OperationsHub() {
   const [lastBoardRefreshAt, setLastBoardRefreshAt] = useState<Date | null>(null);
 
   const handleRefreshBoard = async () => {
-    await refetchCampaigns();
+    // Await ALL board data (campaigns + goal breakdown + testing batches) so a
+    // per-network Refresh only clears its spinner once fresh truth has landed.
     if (activeWorkspaceId) {
-      invalidateGoalSurfaces(queryClient, activeWorkspaceId, drilldown.monthKey);
+      await invalidateDailyBoardData(
+        queryClient,
+        activeWorkspaceId,
+        scopeEmployeeId === "" ? null : Number(scopeEmployeeId),
+        drilldown.monthKey,
+      );
+    } else {
+      await refetchCampaigns();
     }
     setLastBoardRefreshAt(new Date());
   };

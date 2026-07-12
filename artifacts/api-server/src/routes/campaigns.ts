@@ -700,6 +700,8 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
       batchGeo: sql<string | null>`coalesce(${campaignsTable.geo}, ${testingBatchesTable.geo})`,
       batchAffiliateNetwork: sql<string | null>`coalesce(${affiliateNetworksTable.name}, ${testingBatchesTable.affiliateNetwork})`,
       employeeName: employeesTable.name,
+      batchEmployeeId: testingBatchesTable.employeeId,
+      batchAffiliateNetworkId: testingBatchesTable.affiliateNetworkId,
       trafficSourceName: workspaceTrafficSourcesTable.name,
     })
     .from(campaignsTable)
@@ -751,6 +753,11 @@ router.get("/live-campaigns", async (req, res): Promise<void> => {
       batchGeo: row.batchGeo,
       batchAffiliateNetwork: row.batchAffiliateNetwork,
       employeeName: row.employeeName,
+      // Owner for Daily-Board attribution: campaign creator → batch owner.
+      // Enables employee-scoped completion (admin employee view == worker view).
+      employeeId: row.campaign.createdByEmployeeId ?? row.batchEmployeeId ?? null,
+      batchEmployeeId: row.batchEmployeeId,
+      batchAffiliateNetworkId: row.batchAffiliateNetworkId,
       trafficSourceName: row.trafficSourceName,
       sortContext: sort.col,
     })),
