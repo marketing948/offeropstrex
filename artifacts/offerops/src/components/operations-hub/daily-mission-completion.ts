@@ -17,6 +17,8 @@ import type {
 } from "./monthly-goal-daily-plan.ts";
 import type { OpsCampaignRowLite } from "./ops-goal-focus.ts";
 import {
+  canonicalGeoKey,
+  canonicalNetworkKey,
   isSameLocalDay,
   toMissionCampaignRow,
 } from "./daily-mission-board.ts";
@@ -1104,8 +1106,8 @@ function networkGeoMatches(
 ): boolean {
   if (!row.network || !row.geo) return false;
   return (
-    row.network.trim().toLowerCase() === net.network.trim().toLowerCase() &&
-    row.geo.trim().toLowerCase() === geoCode.trim().toLowerCase()
+    canonicalNetworkKey(row.network) === canonicalNetworkKey(net.network) &&
+    canonicalGeoKey(row.geo) === canonicalGeoKey(geoCode)
   );
 }
 
@@ -1114,7 +1116,7 @@ function networkMatches(
   row: { network: string | null },
 ): boolean {
   if (!row.network) return false;
-  return row.network.trim().toLowerCase() === net.network.trim().toLowerCase();
+  return canonicalNetworkKey(row.network) === canonicalNetworkKey(net.network);
 }
 
 /** Latest worker activity timestamp for a network (any GEO). */
@@ -1261,6 +1263,38 @@ export function selectTopGeosFromPlan(
     (g) => g.todayRequired > 0 && g.doneToday < g.todayRequired,
   );
   return orderGeosBySmartScore(net, notCompleted, context).slice(0, limit);
+}
+
+/**
+ * Per-network suggestion rotation: a sliding window of up to `limit` INCOMPLETE
+ * GEOs, advanced by `refreshCount`. Completion is always recomputed from the
+ * plan (real campaigns) — rotation only controls which incomplete GEOs are shown.
+ *
+ * - refreshCount 0 → highest-priority incomplete GEOs.
+ * - each refresh advances the window by `limit` (genuinely new GEOs, not a
+ *   reorder of the same three) and wraps once the incomplete pool is exhausted.
+ * - never returns completed GEOs, so finishing one never fabricates work.
+ */
+export function selectRotatingGeosFromPlan(
+  net: TestingNetworkPlan,
+  limit = 3,
+  refreshCount = 0,
+  context: GeoSelectionContext = {},
+): TestingGeo[] {
+  const ordered = selectTopGeosFromPlan(net, Number.MAX_SAFE_INTEGER, context);
+  if (ordered.length <= limit) return ordered;
+  const rounds = Math.max(0, Math.floor(refreshCount));
+  const start = (rounds * limit) % ordered.length;
+  const out: TestingGeo[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < ordered.length && out.length < limit; i++) {
+    const g = ordered[(start + i) % ordered.length]!;
+    const key = canonicalGeoKey(g.geo);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(g);
+  }
+  return out;
 }
 
 export function orderTestingGeosByPlanPriority(

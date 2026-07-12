@@ -83,7 +83,7 @@ export default function OperationsHub() {
     batchParams,
     wsQueryOpts(activeWorkspaceId, getListTodoTasksQueryKey(batchParams)),
   );
-  const { data: campaigns = [], refetch: refetchCampaigns, isFetching: campaignsFetching } = useListCampaigns(
+  const { data: campaigns = [], refetch: refetchCampaigns } = useListCampaigns(
     { workspace_id: wsId },
     wsQueryOpts(activeWorkspaceId, getListCampaignsQueryKey({ workspace_id: wsId }), {
       staleTime: 5_000,
@@ -289,8 +289,7 @@ export default function OperationsHub() {
             monthKey={drilldown.monthKey}
             testingSlices={drilldown.focusTestingSlices}
             teamWorkers={drilldown.focusTeamWorkers}
-            onRefreshCampaigns={() => void handleRefreshBoard()}
-            campaignsRefreshing={campaignsFetching}
+            onRefreshCampaigns={handleRefreshBoard}
             lastRefreshedAt={lastBoardRefreshAt}
           />
 

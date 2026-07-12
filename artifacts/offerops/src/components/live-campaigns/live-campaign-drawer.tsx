@@ -44,6 +44,8 @@ import { cn } from "@/lib/utils";
 import { authedJson } from "@/lib/api-fetch";
 import { useWorkspace } from "@/lib/workspace-context";
 import { resolveDisplayRoiPercent, profitFromCostRevenue } from "@/lib/campaign-metrics";
+import { isScalingOpportunity } from "@/components/operations-hub/scaling-opportunity";
+import { toLiveCampaignDrawerModel } from "@/components/live-campaigns/live-campaign-drawer-model";
 
 function fmtMoney(v: string | number | null | undefined): string {
   if (v == null || v === "") return "—";
@@ -138,6 +140,14 @@ export function LiveCampaignDrawer({
   }, [campaign?.id, offerCount]);
 
   if (!campaign) return null;
+
+  // Single null-safe view model — missing optional fields never crash rendering.
+  const model = toLiveCampaignDrawerModel(campaign, {
+    rangeMetrics,
+    offerCount,
+    isReviewedToday,
+  });
+  if (!model) return null;
 
   const reviewInput = toReviewInput(campaign);
   const monitoring = evaluateCampaignMonitoringHealth(reviewInput, offerCount, rules);
@@ -258,7 +268,7 @@ export function LiveCampaignDrawer({
                 {campaign.platform}
               </Badge>
               <Badge variant="outline" className="text-[10px] capitalize">
-                {campaign.status.replace(/_/g, " ")}
+                {model.statusLabel}
               </Badge>
               {isReviewedToday && (
                 <Badge className="border-emerald-300 bg-emerald-100 text-[10px] font-bold text-emerald-800">
@@ -276,19 +286,19 @@ export function LiveCampaignDrawer({
           </div>
           <div className="flex justify-between gap-3">
             <span className="text-slate-500">Network</span>
-            <span className="font-medium text-slate-800">{campaign.batchAffiliateNetwork ?? "—"}</span>
+            <span className="font-medium text-slate-800">{model.network ?? "—"}</span>
           </div>
           <div className="flex justify-between gap-3">
             <span className="text-slate-500">GEO</span>
-            <span className="font-medium uppercase text-slate-800">{campaign.batchGeo ?? "—"}</span>
+            <span className="font-medium uppercase text-slate-800">{model.geo ?? "—"}</span>
           </div>
           <div className="flex justify-between gap-3">
             <span className="text-slate-500">Source</span>
-            <span className="font-medium text-slate-800">{campaign.trafficSourceName ?? "—"}</span>
+            <span className="font-medium text-slate-800">{model.trafficSourceName ?? "—"}</span>
           </div>
           <div className="flex justify-between gap-3">
             <span className="text-slate-500">OS</span>
-            <span className="font-medium uppercase text-slate-800">{campaign.platform}</span>
+            <span className="font-medium uppercase text-slate-800">{model.platform}</span>
           </div>
         </div>
 

@@ -31,6 +31,7 @@ import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal
 import type { MonitoringCampaign } from "@/components/live-campaigns/live-campaigns-monitoring-table";
 import { LiveCampaignsSummaryTable } from "@/components/live-campaigns/live-campaigns-summary-table";
 import { LiveCampaignDrawer } from "@/components/live-campaigns/live-campaign-drawer";
+import { LiveCampaignDrawerErrorBoundary } from "@/components/live-campaigns/live-campaign-drawer-error-boundary";
 import { PerformanceRangePicker } from "@/components/live-campaigns/performance-range-picker";
 import { formatPerformanceRangeLabel } from "@/components/live-campaigns/live-campaign-labels";
 import { LiveCampaignsAdminDeleteDialog } from "@/components/live-campaigns/live-campaigns-admin-delete-dialog";
@@ -464,30 +465,36 @@ export default function LiveCampaigns() {
         reviewedCampaignIds={reviewedCampaignIds}
       />
 
-      <LiveCampaignDrawer
-        campaign={selectedCampaign}
-        rangeMetrics={selectedCampaign ? metricsByCampaignId.get(selectedCampaign.id) : undefined}
-        performanceRangeLabel={performanceRangeLabel}
-        offerCount={selectedOfferCount}
-        rules={rules}
+      <LiveCampaignDrawerErrorBoundary
         open={selectedCampaign != null}
         onClose={() => setSelectedCampaign(null)}
-        onImportCsv={() => {
-          setSelectedCampaign(null);
-          setImportOpen(true);
-        }}
-        onCloseCampaign={setCloseTarget}
-        isReviewedToday={selectedCampaign != null && reviewedCampaignIds.has(selectedCampaign.id)}
-        onMarkedReviewed={() => {
-          void queryClient.invalidateQueries({ queryKey: ["campaign-reviewed-today", activeWorkspaceId] });
-        }}
-        onCampaignUpdated={() => {
-          void queryClient.invalidateQueries({ queryKey: ["live-campaigns"] });
-          void queryClient.invalidateQueries({ queryKey: ["live-campaign-filter-options"] });
-          void queryClient.invalidateQueries({ queryKey: ["campaign-reviewed-today", activeWorkspaceId] });
-          if (activeWorkspaceId) invalidateGoalSurfaces(queryClient, activeWorkspaceId);
-        }}
-      />
+        resetKey={selectedCampaign?.id ?? null}
+      >
+        <LiveCampaignDrawer
+          campaign={selectedCampaign}
+          rangeMetrics={selectedCampaign ? metricsByCampaignId.get(selectedCampaign.id) : undefined}
+          performanceRangeLabel={performanceRangeLabel}
+          offerCount={selectedOfferCount}
+          rules={rules}
+          open={selectedCampaign != null}
+          onClose={() => setSelectedCampaign(null)}
+          onImportCsv={() => {
+            setSelectedCampaign(null);
+            setImportOpen(true);
+          }}
+          onCloseCampaign={setCloseTarget}
+          isReviewedToday={selectedCampaign != null && reviewedCampaignIds.has(selectedCampaign.id)}
+          onMarkedReviewed={() => {
+            void queryClient.invalidateQueries({ queryKey: ["campaign-reviewed-today", activeWorkspaceId] });
+          }}
+          onCampaignUpdated={() => {
+            void queryClient.invalidateQueries({ queryKey: ["live-campaigns"] });
+            void queryClient.invalidateQueries({ queryKey: ["live-campaign-filter-options"] });
+            void queryClient.invalidateQueries({ queryKey: ["campaign-reviewed-today", activeWorkspaceId] });
+            if (activeWorkspaceId) invalidateGoalSurfaces(queryClient, activeWorkspaceId);
+          }}
+        />
+      </LiveCampaignDrawerErrorBoundary>
 
       <RefreshingHint visible={isFetching && !isLoading} className="mb-1" />
 
