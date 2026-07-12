@@ -1045,20 +1045,41 @@ export function computeEffectiveSummary(
 // Campaign-backed plan selectors (single source of truth — no localStorage)
 // ---------------------------------------------------------------------------
 
-/** GEO done when today's testing campaigns meet the daily quota (from plan build). */
+/**
+ * Full suggestion pool for a network: the complete Monthly-Goal GEO set when
+ * available, else today's allocated GEOs (backward-compatible fallback so plan
+ * fixtures without `suggestionGeos` keep working).
+ */
+export function suggestionPoolFromPlan(net: TestingNetworkPlan): TestingGeo[] {
+  const pool = net.suggestionGeos;
+  return pool && pool.length > 0 ? pool : net.geos;
+}
+
+/**
+ * GEO done today: a real testing campaign exists (uncapped `doneToday > 0`) and,
+ * for an allocated GEO, its daily quota is met. Suggestion-pool GEOs (allocation
+ * of 0) count as done as soon as one testing campaign lands.
+ */
 export function isTestingGeoCompleteFromPlan(
   geo: { todayRequired: number; doneToday: number },
 ): boolean {
-  return geo.todayRequired > 0 && geo.doneToday >= geo.todayRequired;
+  const done = geo.doneToday ?? 0;
+  if (done <= 0) return false;
+  return geo.todayRequired <= 0 || done >= geo.todayRequired;
 }
 
-/** Network progress from campaign timestamps embedded in the plan. */
+/**
+ * Network progress = DISTINCT Monthly-Goal GEOs with a real testing campaign
+ * today, capped at the network's daily requirement. Counting distinct GEOs (not
+ * per-allocation) means testing any goal GEO — including one surfaced by Refresh
+ * beyond the initial 3 — advances progress.
+ */
 export function countCompletedGeosTodayFromPlan(net: TestingNetworkPlan): number {
-  let sum = 0;
-  for (const g of net.geos) {
-    if (g.todayRequired > 0) sum += Math.min(g.todayRequired, g.doneToday);
-  }
-  return Math.min(net.todayRequired, sum);
+  const pool = suggestionPoolFromPlan(net);
+  const distinctDone = new Set(
+    pool.filter((g) => (g.doneToday ?? 0) > 0).map((g) => canonicalGeoKey(g.geo)),
+  ).size;
+  return Math.min(net.todayRequired, distinctDone);
 }
 
 export function isTestingNetworkDailyTargetMetFromPlan(
@@ -1066,6 +1087,15 @@ export function isTestingNetworkDailyTargetMetFromPlan(
 ): boolean {
   if (net.todayRequired <= 0) return true;
   return countCompletedGeosTodayFromPlan(net) >= net.todayRequired;
+}
+
+/** Incomplete GEOs still available to suggest (real doneToday 0, monthly open). */
+export function countIncompleteSuggestionGeosFromPlan(
+  net: TestingNetworkPlan,
+): number {
+  return suggestionPoolFromPlan(net).filter(
+    (g) => (g.doneToday ?? 0) === 0 && g.remaining > 0,
+  ).length;
 }
 
 export function isTestingNetworkVisibleFromPlan(net: TestingNetworkPlan): boolean {
@@ -1253,14 +1283,19 @@ function orderGeosBySmartScore(
   });
 }
 
-/** Top incomplete GEOs by smart score (campaign-aware). */
+/**
+ * Top incomplete GEOs by smart score (campaign-aware), drawn from the FULL
+ * Monthly-Goal pool (not just today's 3 allocated) so Refresh can rotate through
+ * every configured GEO. Incomplete = no real testing campaign today AND the
+ * monthly target is still open.
+ */
 export function selectTopGeosFromPlan(
   net: TestingNetworkPlan,
   limit = 3,
   context: GeoSelectionContext = {},
 ): TestingGeo[] {
-  const notCompleted = net.geos.filter(
-    (g) => g.todayRequired > 0 && g.doneToday < g.todayRequired,
+  const notCompleted = suggestionPoolFromPlan(net).filter(
+    (g) => (g.doneToday ?? 0) === 0 && g.remaining > 0,
   );
   return orderGeosBySmartScore(net, notCompleted, context).slice(0, limit);
 }

@@ -49,7 +49,17 @@ export type TestingNetworkPlan = {
   geoCount: number;
   doneToday: number;
   paceStatus: "behind" | "on_pace" | "completed";
+  /** Today's allocated GEO tasks (drives the daily target math + progress). */
   geos: TestingGeoAction[];
+  /**
+   * Full Monthly-Goal GEO pool for suggestion rotation — every configured GEO
+   * for this network, not just today's allocation. `doneToday` here is the REAL
+   * uncapped count of matching testing campaigns created today (so a GEO the
+   * worker actually tested shows "Done today", and Refresh can rotate through
+   * GEOs beyond the 3 allocated). Completion truth still comes from real
+   * campaigns — rotation only controls which incomplete GEOs are displayed.
+   */
+  suggestionGeos: TestingGeoAction[];
 };
 
 export type OptimizationIssueType =
@@ -565,6 +575,10 @@ export function buildTestingNetworkPlans(
     }
 
     // 4) Done today counted per matching Network/GEO testing campaigns (honest).
+    //    `realDone` is the UNCAPPED count for a GEO (used for suggestions +
+    //    distinct-GEO progress); `g.doneToday` stays capped by the GEO's
+    //    allocation for the allocated-row display / existing math.
+    const realDoneByGeo = new Map<string, number>();
     for (const g of geos) {
       const done = countTestingDoneForSlice(
         rows,
@@ -572,18 +586,40 @@ export function buildTestingNetworkPlans(
         g.geo === "ALL" ? null : g.geo,
         now,
       );
+      realDoneByGeo.set(g.geo, done);
       g.doneToday = Math.min(g.todayRequired, done);
     }
 
     const geosWithWork = geos.filter((g) => g.todayRequired > 0 || g.doneToday > 0);
     if (geosWithWork.length === 0 || todayNeededNetwork <= 0) continue;
 
+    // Progress counts DISTINCT Monthly-Goal GEOs with a real testing campaign
+    // today (so testing any goal GEO — even one outside today's 3 allocated —
+    // counts), capped at the network's daily requirement.
+    const distinctDoneGeos = geos.filter(
+      (g) => g.geo !== "ALL" && (realDoneByGeo.get(g.geo) ?? 0) > 0,
+    ).length;
     const doneToday = Math.min(
       todayNeededNetwork,
-      geosWithWork.reduce((s, g) => s + g.doneToday, 0),
+      Math.max(
+        distinctDoneGeos,
+        geosWithWork.reduce((s, g) => s + g.doneToday, 0),
+      ),
     );
     const anyBehind = geos.some((g) => g.gapToPace > 0);
     const allDoneMonth = networkRemaining <= 0;
+
+    // Suggestion pool: every configured GEO for this network (excluding the
+    // synthetic "ALL" bucket), with the REAL uncapped done count so a tested GEO
+    // renders "Done today" and Refresh can rotate beyond the 3 allocated.
+    const suggestionGeos: TestingGeoAction[] = geos
+      .filter((g) => g.geo !== "ALL")
+      .map((g) => ({
+        ...g,
+        // Non-allocated goal GEOs still read "Open 1 test" as a suggestion.
+        todayRequired: g.todayRequired > 0 ? g.todayRequired : 1,
+        doneToday: realDoneByGeo.get(g.geo) ?? 0,
+      }));
 
     plans.push({
       network,
@@ -595,6 +631,11 @@ export function buildTestingNetworkPlans(
       geos: geosWithWork.sort((a, b) => {
         if (b.todayRequired !== a.todayRequired) return b.todayRequired - a.todayRequired;
         if (b.gapToPace !== a.gapToPace) return b.gapToPace - a.gapToPace;
+        return a.geo.localeCompare(b.geo);
+      }),
+      suggestionGeos: suggestionGeos.sort((a, b) => {
+        if (b.gapToPace !== a.gapToPace) return b.gapToPace - a.gapToPace;
+        if (b.remaining !== a.remaining) return b.remaining - a.remaining;
         return a.geo.localeCompare(b.geo);
       }),
     });

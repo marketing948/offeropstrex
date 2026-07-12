@@ -10,6 +10,7 @@ import {
 } from "@workspace/api-client-react";
 import { authedFetch } from "@/lib/api-fetch";
 import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal-surfaces";
+import { invalidateDailyBoardData } from "@/lib/invalidate-daily-board";
 import { syncCampaignsAfterMutation, type CampaignListRow } from "@/lib/campaign-query-cache";
 import { useToast } from "@/hooks/use-toast";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -174,6 +175,9 @@ export function ProductionLiveCampaignForm({
       void queryClient.invalidateQueries({ queryKey: ["live-campaigns"] });
       void queryClient.invalidateQueries({ queryKey: ["live-campaign-filter-options"] });
       invalidateGoalSurfaces(queryClient, activeWorkspaceId);
+      // Auto-refresh the Daily Board so a new testing campaign flips its GEO to
+      // "Done today" and advances progress without a reload.
+      void invalidateDailyBoardData(queryClient, activeWorkspaceId);
       onCreated();
     } catch (e: unknown) {
       toast({
