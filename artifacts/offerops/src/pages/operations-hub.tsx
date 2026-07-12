@@ -30,6 +30,7 @@ import {
   useOpsDrilldownData,
 } from "@/components/operations-hub/ops-operator-top";
 import { TodaysFocusCard } from "@/components/operations-hub/todays-focus-card";
+import { isGeoCompletedToday } from "@/components/operations-hub/daily-mission-board";
 import { RevenueByNetworkSection } from "@/components/operations-hub/revenue-by-network-section";
 import { OpenTasksPanel } from "@/components/operations-hub/open-tasks-panel";
 import { OpsActivityCounters } from "@/components/operations-hub/ops-activity-counters";
@@ -115,6 +116,40 @@ export default function OperationsHub() {
       await refetchCampaigns();
     }
     setLastBoardRefreshAt(new Date());
+  };
+
+  // Board attribution scope: worker sees self, admin sees the selected employee.
+  const boardEmployeeId = isWorker
+    ? currentEmployee?.id ?? null
+    : scopeEmployeeId !== ""
+      ? Number(scopeEmployeeId)
+      : null;
+
+  /**
+   * Verify a GEO task against REAL campaign data: refetch, then run the shared
+   * canonical matcher. Returns whether a qualifying Testing campaign exists today
+   * for this employee/network/GEO. Completion truth stays campaign-backed — this
+   * never writes local/UI completion state. A successful match naturally flips the
+   * row to "Done today" once the refetched campaigns recompute the plan.
+   */
+  const verifyGeoCompletion = async (
+    network: string,
+    geo: string,
+  ): Promise<boolean> => {
+    const { data } = await refetchCampaigns();
+    if (activeWorkspaceId) {
+      await invalidateDailyBoardData(
+        queryClient,
+        activeWorkspaceId,
+        boardEmployeeId,
+        drilldown.monthKey,
+      );
+    }
+    setLastBoardRefreshAt(new Date());
+    const fresh = (data ?? campaigns) as OpsCampaignRow[];
+    return isGeoCompletedToday(fresh, network, geo, {
+      employeeId: boardEmployeeId,
+    });
   };
 
   const winnersParams = { workspace_id: wsId, date_from: today, date_to: today };
@@ -298,6 +333,8 @@ export default function OperationsHub() {
             testingSlices={drilldown.focusTestingSlices}
             teamWorkers={drilldown.focusTeamWorkers}
             onRefreshCampaigns={handleRefreshBoard}
+            onVerifyGeoCompletion={verifyGeoCompletion}
+            onOpenCreateTesting={() => nav("/testing-batches")}
             lastRefreshedAt={lastBoardRefreshAt}
           />
 

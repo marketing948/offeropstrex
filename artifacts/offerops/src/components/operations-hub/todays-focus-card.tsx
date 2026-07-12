@@ -33,9 +33,11 @@ import {
   countCompletedGeosTodayFromPlan,
   countIncompleteSuggestionGeosFromPlan,
   effectiveSummaryFromPlan,
+  geoVerificationFailureMessage,
   isTestingGeoCompleteFromPlan,
   isTestingNetworkDailyTargetMetFromPlan,
   isTestingNetworkVisibleFromPlan,
+  selectCompletedGeosFromPlan,
   selectFocusTestingNetworksFromPlan,
   selectNextActionFromPlan,
   selectRotatingGeosFromPlan,
@@ -46,17 +48,22 @@ import {
   Sparkles,
   Puzzle,
   TrendingUp,
+  Check,
   CheckCircle2,
   ArrowRight,
   ChevronDown,
   ChevronRight,
   Users,
+  Loader2,
   RefreshCw,
   OctagonX,
   Trophy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeoCodeLabel } from "@/components/geo-code-label";
+import { geoCodeText } from "@/lib/geo-flag";
+import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 
 type ColorKey = "sky" | "emerald" | "amber";
 
@@ -79,23 +86,113 @@ function openFocusNav(
   });
 }
 
+/**
+ * GEO verification circle — the worker's confirmation control.
+ *
+ *   idle       → empty circle button (verifies on click)
+ *   checking   → spinner, disabled (awaiting a real campaign refetch)
+ *   completed  → checked green circle, disabled (campaign-backed truth)
+ *   read-only  → static empty/checked circle (admin viewing another employee)
+ *
+ * Completion is NEVER stored here — it is derived from real campaign data. The
+ * circle only triggers a verify + refetch and reflects the resulting truth.
+ */
+function GeoCompletionCircle({
+  geoCode,
+  completed,
+  checking,
+  readOnly,
+  onVerify,
+}: {
+  geoCode: string;
+  completed: boolean;
+  checking: boolean;
+  readOnly: boolean;
+  onVerify: () => void;
+}) {
+  if (completed) {
+    return (
+      <span
+        role="img"
+        aria-label={`${geoCode} testing task completed`}
+        title="Done today — a matching Testing campaign exists"
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-sm"
+      >
+        <Check className="h-3.5 w-3.5" strokeWidth={3} />
+      </span>
+    );
+  }
+
+  if (readOnly) {
+    return (
+      <span
+        role="img"
+        aria-label={`${geoCode} testing task not completed`}
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 border-slate-300"
+      />
+    );
+  }
+
+  const label = checking
+    ? `Checking ${geoCode} testing campaign`
+    : `Verify ${geoCode} testing task completion`;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        // Only the circle triggers verification — never the surrounding row.
+        e.stopPropagation();
+        if (!checking) onVerify();
+      }}
+      disabled={checking}
+      aria-label={label}
+      aria-busy={checking}
+      title={label}
+      className={cn(
+        "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-all duration-150",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-1",
+        checking
+          ? "cursor-wait border-sky-300 text-sky-500"
+          : "border-sky-400 text-sky-600 hover:border-sky-600 hover:bg-sky-50 active:scale-90",
+      )}
+    >
+      {checking && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+    </button>
+  );
+}
+
 function GeoLine({
+  network,
   geo,
   primary,
   completed,
+  checking,
+  readOnly,
+  onVerify,
 }: {
+  network: string;
   geo: TestingNetworkPlan["geos"][number];
   primary?: boolean;
   completed: boolean;
+  checking: boolean;
+  readOnly: boolean;
+  onVerify: (network: string, geo: string) => void;
 }) {
   return (
     <div
       className={cn(
         "flex items-center gap-2 border-t border-sky-100/80 px-3 py-2 first:border-t-0",
         completed && "bg-emerald-50/40",
-        primary && !completed && "bg-sky-100/70",
+        primary && !completed && !checking && "bg-sky-100/70",
       )}
     >
+      <GeoCompletionCircle
+        geoCode={geoCodeText(geo.geo)}
+        completed={completed}
+        checking={checking}
+        readOnly={readOnly}
+        onVerify={() => onVerify(network, geo.geo)}
+      />
       <div className="min-w-0 flex-1">
         <span
           className={cn(
@@ -106,16 +203,13 @@ function GeoLine({
         >
           <GeoCodeLabel geo={geo.geo} className="mr-1.5" />—{" "}
           {completed
-            ? "Done today ✅"
-            : `Open ${geo.todayRequired} test${geo.todayRequired === 1 ? "" : "s"}`}
+            ? "Done today"
+            : checking
+              ? "Checking campaign…"
+              : `Open ${geo.todayRequired} test${geo.todayRequired === 1 ? "" : "s"}`}
         </span>
-        {!completed && geo.doneToday > 0 && (
-          <span className="ml-1.5 text-[11px] font-medium text-sky-700">
-            · {geo.doneToday}/{geo.todayRequired} in progress
-          </span>
-        )}
       </div>
-      {primary && !completed && (
+      {primary && !completed && !checking && (
         <span className="shrink-0 rounded-full bg-sky-600 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-white">
           Do next
         </span>
@@ -131,15 +225,21 @@ function GeoLine({
 function TestingNetworkCard({
   plan,
   topGeos,
+  completedGeos,
   doneToday,
   targetMet,
   incompleteCount,
   onRefresh,
   isRefreshing,
   isPrimaryGeo,
+  checkingGeoKey,
+  onVerifyGeo,
+  readOnly,
 }: {
   plan: TestingNetworkPlan;
   topGeos: TestingNetworkPlan["geos"];
+  /** Campaign-backed completed GEOs today (checked circle, "Done today"). */
+  completedGeos: TestingNetworkPlan["geos"];
   doneToday: number;
   targetMet: boolean;
   /** Incomplete GEOs still available to suggest across the whole Monthly Goal. */
@@ -147,6 +247,11 @@ function TestingNetworkCard({
   onRefresh: () => void;
   isRefreshing?: boolean;
   isPrimaryGeo: (geo: string) => boolean;
+  /** testingGeoKey currently being verified (spinner), or null. */
+  checkingGeoKey: string | null;
+  onVerifyGeo: (network: string, geo: string) => void;
+  /** Admin viewing another employee — circles are read-only. */
+  readOnly: boolean;
 }) {
   const activeCount = incompleteCount;
   // Refresh can only surface something new when the incomplete pool is larger
@@ -203,22 +308,37 @@ function TestingNetworkCard({
           </p>
         </div>
       </div>
-      {targetMet ? (
-        <div className="bg-emerald-50/30 px-3 py-4 text-center">
-          <p className="text-sm font-bold text-emerald-800">✅ Done for today</p>
-        </div>
-      ) : (
-        <div className="divide-y divide-sky-100/80 bg-white">
-          {topGeos.map((geo) => (
+      <div className="bg-white">
+        {completedGeos.map((geo) => (
+          <GeoLine
+            key={`done:${geo.geo}`}
+            network={plan.network}
+            geo={geo}
+            completed
+            checking={false}
+            readOnly={readOnly}
+            onVerify={onVerifyGeo}
+          />
+        ))}
+        {!targetMet &&
+          topGeos.map((geo) => (
             <GeoLine
               key={geo.geo}
+              network={plan.network}
               geo={geo}
               primary={isPrimaryGeo(geo.geo)}
               completed={isTestingGeoCompleteFromPlan(geo)}
+              checking={checkingGeoKey === testingGeoKey(plan.network, geo.geo)}
+              readOnly={readOnly}
+              onVerify={onVerifyGeo}
             />
           ))}
-        </div>
-      )}
+        {targetMet && (
+          <div className="border-t border-emerald-100 bg-emerald-50/30 px-3 py-2.5 text-center first:border-t-0">
+            <p className="text-sm font-bold text-emerald-800">✅ Done for today</p>
+          </div>
+        )}
+      </div>
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-sky-100 px-3 py-2">
         {!targetMet && (
           <span className="text-[10px] font-medium text-slate-500">
@@ -551,15 +671,28 @@ function WorkerPlanBoard({
   plan,
   onSelectFocus,
   onRefreshCampaigns,
+  onVerifyGeoCompletion,
+  onOpenCreateTesting,
+  canVerify = true,
   campaigns = [],
   lastRefreshedAt = null,
 }: {
   plan: DailyActionPlan;
   onSelectFocus: (item: FocusItem) => void;
   onRefreshCampaigns: () => void | Promise<void>;
+  /**
+   * Verify a GEO against REAL campaign data — refetches, then returns whether a
+   * qualifying testing campaign exists today. Completion truth stays campaign-
+   * backed; this callback never writes local state.
+   */
+  onVerifyGeoCompletion?: (network: string, geo: string) => Promise<boolean>;
+  onOpenCreateTesting?: (opts: { network: string; geo: string }) => void;
+  /** Worker can verify their own tasks; admin viewing an employee is read-only. */
+  canVerify?: boolean;
   campaigns?: import("./ops-goal-focus.ts").OpsCampaignRowLite[];
   lastRefreshedAt?: Date | null;
 }) {
+  const { toast } = useToast();
   const geoContext = useMemo(() => ({ campaigns }), [campaigns]);
   const s = useMemo(() => effectiveSummaryFromPlan(plan), [plan]);
 
@@ -568,6 +701,9 @@ function WorkerPlanBoard({
   // shared loading flag, no stale closure over the first network.
   const [refreshCounts, setRefreshCounts] = useState<Record<string, number>>({});
   const [refreshingNetwork, setRefreshingNetwork] = useState<string | null>(null);
+
+  // testingGeoKey currently being verified via the completion circle (spinner).
+  const [checkingGeo, setCheckingGeo] = useState<string | null>(null);
 
   const refreshNetwork = useCallback(
     async (networkKey: string) => {
@@ -585,6 +721,40 @@ function WorkerPlanBoard({
     [onRefreshCampaigns],
   );
 
+  const verifyGeo = useCallback(
+    async (network: string, geo: string) => {
+      if (!onVerifyGeoCompletion) return;
+      const key = testingGeoKey(network, geo);
+      setCheckingGeo(key);
+      try {
+        // Refetch real campaigns, then check the canonical matcher. When found,
+        // the refreshed campaigns recompute the plan → the row flips to done.
+        const found = await onVerifyGeoCompletion(network, geo);
+        if (!found) {
+          toast({
+            title: "Not completed yet",
+            description: geoVerificationFailureMessage(network, geo),
+            ...(onOpenCreateTesting
+              ? {
+                  action: (
+                    <ToastAction
+                      altText="Open test campaign"
+                      onClick={() => onOpenCreateTesting({ network, geo })}
+                    >
+                      Open test campaign
+                    </ToastAction>
+                  ),
+                }
+              : {}),
+          });
+        }
+      } finally {
+        setCheckingGeo((cur) => (cur === key ? null : cur));
+      }
+    },
+    [onVerifyGeoCompletion, onOpenCreateTesting, toast],
+  );
+
   const visibleTestingNetworks = useMemo(
     () =>
       selectFocusTestingNetworksFromPlan(plan.testingNetworks, undefined, geoContext)
@@ -597,6 +767,7 @@ function WorkerPlanBoard({
             refreshCounts[net.network] ?? 0,
             geoContext,
           ),
+          completedGeos: selectCompletedGeosFromPlan(net),
           doneToday: countCompletedGeosTodayFromPlan(net),
           targetMet: isTestingNetworkDailyTargetMetFromPlan(net),
           incompleteCount: countIncompleteSuggestionGeosFromPlan(net),
@@ -711,17 +882,21 @@ function WorkerPlanBoard({
         />
         {!collapsed.testing &&
           (visibleTestingNetworks.length > 0 ? (
-            visibleTestingNetworks.map(({ net, topGeos, doneToday, targetMet, incompleteCount }) => (
+            visibleTestingNetworks.map(({ net, topGeos, completedGeos, doneToday, targetMet, incompleteCount }) => (
               <TestingNetworkCard
                 key={net.network}
                 plan={net}
                 topGeos={topGeos}
+                completedGeos={completedGeos}
                 doneToday={doneToday}
                 targetMet={targetMet}
                 incompleteCount={incompleteCount}
                 onRefresh={() => void refreshNetwork(net.network)}
                 isRefreshing={refreshingNetwork === net.network}
                 isPrimaryGeo={(geo) => primaryGeoKey === testingGeoKey(net.network, geo)}
+                checkingGeoKey={checkingGeo}
+                onVerifyGeo={(network, geo) => void verifyGeo(network, geo)}
+                readOnly={!canVerify}
               />
             ))
           ) : (
@@ -976,6 +1151,8 @@ export function TodaysFocusCard({
   testingSlices = [],
   teamWorkers,
   onRefreshCampaigns,
+  onVerifyGeoCompletion,
+  onOpenCreateTesting,
   lastRefreshedAt = null,
 }: {
   /** Legacy Focus payload — kept for call-site compatibility; board uses plan builders. */
@@ -997,10 +1174,12 @@ export function TodaysFocusCard({
     campaigns?: OpsCampaignRowLite[];
   }[];
   onRefreshCampaigns?: () => void | Promise<void>;
+  /** Verify a GEO against real campaign data (worker only). */
+  onVerifyGeoCompletion?: (network: string, geo: string) => Promise<boolean>;
+  onOpenCreateTesting?: (opts: { network: string; geo: string }) => void;
   lastRefreshedAt?: Date | null;
 }) {
   void _focus;
-  void isWorker;
   const { rules } = useAlertRules();
 
   const scopedCampaigns = useMemo(() => {
@@ -1072,6 +1251,9 @@ export function TodaysFocusCard({
             plan={workerPlan}
             onSelectFocus={onSelectFocus}
             onRefreshCampaigns={onRefreshCampaigns ?? (() => {})}
+            onVerifyGeoCompletion={onVerifyGeoCompletion}
+            onOpenCreateTesting={onOpenCreateTesting}
+            canVerify={isWorker && onVerifyGeoCompletion != null}
             lastRefreshedAt={lastRefreshedAt}
             campaigns={scopedCampaigns}
           />
