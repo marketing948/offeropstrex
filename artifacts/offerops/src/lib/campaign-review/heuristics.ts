@@ -1,6 +1,8 @@
 import {
   DEFAULT_ALERT_RULES,
+  evaluateCampaign,
   milestoneFractions,
+  USE_NEW_ALERT_ENGINE,
   type AlertRulesConfig,
 } from "@workspace/alert-rules";
 import type {
@@ -10,6 +12,11 @@ import type {
   ReviewQueueCampaign,
   SuggestedReviewAction,
 } from "@/lib/campaign-review/types";
+import {
+  resolveDisplayRoiPercent,
+  profitFromCostRevenue,
+} from "@/lib/campaign-metrics";
+import { logAlertDecision } from "../alert-decision-log.ts";
 
 export type ReviewCampaignInput = {
   id: number;
@@ -27,6 +34,7 @@ export type ReviewCampaignInput = {
   revenue: number;
   cost: number;
   roi: number;
+  voluumCampaignId?: string | null;
 };
 
 const HEALTH_LABELS: Record<CampaignHealthStatus, string> = {
@@ -53,6 +61,79 @@ function signal(
   return { id: `${kind}`, kind, label, detail, severity };
 }
 
+/**
+ * Decision predicates for a review campaign. When the new alert engine flag is
+ * on these come from the shared `evaluateCampaign` (single brain); otherwise the
+ * legacy inline computation is used. Only the DECISIONS are gated — the signal
+ * objects below are built once from these predicates (no duplicated UI logic).
+ */
+type SignalPredicates = {
+  pct: number;
+  milestoneReached: number | null;
+  stuckPace: boolean;
+  zeroConvTesting: boolean;
+  zeroConvScale: boolean;
+  staleSig: boolean;
+};
+
+function signalPredicates(
+  c: ReviewCampaignInput,
+  offerCount: number,
+  daysLive: number,
+  rules: AlertRulesConfig,
+  isTesting: boolean,
+  isScale: boolean,
+): SignalPredicates {
+  const visits = c.clicks ?? 0;
+  const conv = c.conversions ?? 0;
+
+  if (USE_NEW_ALERT_ENGINE) {
+    const out = evaluateCampaign(
+      { purpose: c.campaignPurpose, status: c.status, liveStartedAt: c.liveStartedAt },
+      {
+        revenue: c.revenue,
+        cost: c.cost,
+        roi: c.roi,
+        conversions: conv,
+        clicks: visits,
+        offerCount,
+      },
+      rules,
+    );
+    logAlertDecision(c.id, "live-campaigns", out);
+    return {
+      pct: out.facts.trafficPct,
+      milestoneReached: out.facts.milestoneReached,
+      stuckPace: out.isStuck,
+      zeroConvTesting: isTesting && out.isZeroConversion,
+      zeroConvScale: isScale && out.isZeroConversion,
+      staleSig: out.isStale,
+    };
+  }
+
+  // ----- legacy inline predicates (preserved behind the flag) -----
+  const target = Math.max(offerCount, 1) * rules.testing.visitsPerOffer;
+  const pct = target > 0 ? visits / target : 0;
+  const milestones = milestoneFractions(rules).sort((a, b) => b - a);
+  let milestoneReached: number | null = null;
+  if (isTesting && rules.testing.zeroConversionAtMilestoneEnabled && conv === 0) {
+    for (const m of milestones) {
+      if (pct >= m) {
+        milestoneReached = m;
+        break;
+      }
+    }
+  }
+  const paceMax = rules.testing.pacingRiskMaxTrafficPercent / 100;
+  const stuckPace =
+    isTesting && daysLive >= rules.testing.pacingRiskMinDaysLive && pct < paceMax && conv === 0;
+  const zeroConvTesting = isTesting && conv === 0 && visits > rules.testing.minVisitsForZeroConvAlert;
+  const scaleNoConvDays = rules.scaling.noConversionsAfterHours / 24;
+  const zeroConvScale = isScale && conv === 0 && daysLive >= scaleNoConvDays;
+  const staleSig = daysLive > rules.review.staleCampaignDays && c.status === "live" && conv === 0;
+  return { pct, milestoneReached, stuckPace, zeroConvTesting, zeroConvScale, staleSig };
+}
+
 /** UI heuristics only — thresholds from workspace alert rules. */
 export function deriveCampaignSignals(
   c: ReviewCampaignInput,
@@ -63,111 +144,95 @@ export function deriveCampaignSignals(
   const signals: CampaignSignal[] = [];
   const visits = c.clicks ?? 0;
   const conv = c.conversions ?? 0;
-  const visitsPerOffer = rules.testing.visitsPerOffer;
-  const target = Math.max(offerCount, 1) * visitsPerOffer;
-  const pct = target > 0 ? visits / target : 0;
+  const target = Math.max(offerCount, 1) * rules.testing.visitsPerOffer;
   const roi = c.roi ?? 0;
   const revenue = c.revenue ?? 0;
   const isTesting = c.campaignPurpose === "testing" && c.status === "live";
   const isScale = c.campaignPurpose !== "testing" && c.status === "live";
-  const milestones = milestoneFractions(rules).sort((a, b) => b - a);
-  const zeroAtMilestone = rules.testing.zeroConversionAtMilestoneEnabled;
 
-  if (isTesting && zeroAtMilestone) {
-    for (const m of milestones) {
-      if (conv === 0 && pct >= m) {
-        const pctLabel = Math.round(m * 100);
-        if (m >= 1) {
-          signals.push(
-            signal(
-              "traffic_100_no_conv",
-              "Visit target reached — no conversions",
-              "Testing traffic exhausted with no conversions recorded.",
-              "high",
-            ),
-          );
-          signals.push(
-            signal(
-              "burning",
-              "Burning testing campaign",
-              "High traffic with no conversion outcome — consider stopping test.",
-              "high",
-            ),
-          );
-        } else if (m >= 0.75) {
-          signals.push(
-            signal(
-              "traffic_75_no_conv",
-              `${pctLabel}% of visit target — no conversions`,
-              "Approaching full test spend without conversions.",
-              "high",
-            ),
-          );
-        } else if (m >= 0.5) {
-          signals.push(
-            signal(
-              "traffic_50_no_conv",
-              `${pctLabel}% of visit target — no conversions`,
-              `${Math.round(pct * 100)}% of expected traffic with zero conversions.`,
-              pct >= 0.75 ? "high" : "medium",
-            ),
-          );
-        }
-        break;
-      }
-    }
-  }
+  const { pct, milestoneReached, stuckPace, zeroConvTesting, zeroConvScale, staleSig } =
+    signalPredicates(c, offerCount, daysLive, rules, isTesting, isScale);
 
-  if (isTesting) {
-    const paceMax = rules.testing.pacingRiskMaxTrafficPercent / 100;
-    if (
-      daysLive >= rules.testing.pacingRiskMinDaysLive &&
-      pct < paceMax &&
-      conv === 0
-    ) {
+  if (milestoneReached != null) {
+    const pctLabel = Math.round(milestoneReached * 100);
+    if (milestoneReached >= 1) {
       signals.push(
         signal(
-          "traffic_unlikely_pace",
-          "Unlikely to hit target on pace",
-          "Low traffic velocity relative to days live.",
-          "medium",
+          "traffic_100_no_conv",
+          "Visit target reached — no conversions",
+          "Testing traffic exhausted with no conversions recorded.",
+          "high",
         ),
       );
-    }
-    if (conv === 0 && visits > rules.testing.minVisitsForZeroConvAlert) {
-      signals.push(
-        signal(
-          "zero_conversions",
-          "Zero conversions",
-          `${visits.toLocaleString()} visits recorded.`,
-          "medium",
-        ),
-      );
-    }
-  }
-
-  if (isScale) {
-    const scaleNoConvDays = rules.scaling.noConversionsAfterHours / 24;
-    if (conv === 0 && daysLive >= scaleNoConvDays) {
-      signals.push(
-        signal(
-          "zero_conversions",
-          "No conversions since live",
-          `Live ${daysLive} day(s) without conversions.`,
-          daysLive >= scaleNoConvDays ? "high" : "medium",
-        ),
-      );
-    }
-    if (roi < 0 && daysLive >= rules.scaling.negativeRoiDays) {
       signals.push(
         signal(
           "burning",
-          "Sustained negative ROI",
-          "Scale campaign negative ROI over extended live period.",
-          "medium",
+          "Burning testing campaign",
+          "High traffic with no conversion outcome — consider stopping test.",
+          "high",
+        ),
+      );
+    } else if (milestoneReached >= 0.75) {
+      signals.push(
+        signal(
+          "traffic_75_no_conv",
+          `${pctLabel}% of visit target — no conversions`,
+          "Approaching full test spend without conversions.",
+          "high",
+        ),
+      );
+    } else if (milestoneReached >= 0.5) {
+      signals.push(
+        signal(
+          "traffic_50_no_conv",
+          `${pctLabel}% of visit target — no conversions`,
+          `${Math.round(pct * 100)}% of expected traffic with zero conversions.`,
+          pct >= 0.75 ? "high" : "medium",
         ),
       );
     }
+  }
+
+  if (stuckPace) {
+    signals.push(
+      signal(
+        "traffic_unlikely_pace",
+        "Unlikely to hit target on pace",
+        "Low traffic velocity relative to days live.",
+        "medium",
+      ),
+    );
+  }
+  if (zeroConvTesting) {
+    signals.push(
+      signal(
+        "zero_conversions",
+        "Zero conversions",
+        `${visits.toLocaleString()} visits recorded.`,
+        "medium",
+      ),
+    );
+  }
+
+  if (zeroConvScale) {
+    signals.push(
+      signal(
+        "zero_conversions",
+        "No conversions since live",
+        `Live ${daysLive} day(s) without conversions.`,
+        "high",
+      ),
+    );
+  }
+  if (isScale && roi < 0 && daysLive >= rules.scaling.negativeRoiDays) {
+    signals.push(
+      signal(
+        "burning",
+        "Sustained negative ROI",
+        "Scale campaign negative ROI over extended live period.",
+        "medium",
+      ),
+    );
   }
 
   if (roi > rules.scaling.minRoiPercentForPositiveSignal && revenue > 50) {
@@ -200,7 +265,7 @@ export function deriveCampaignSignals(
     );
   }
 
-  if (daysLive > rules.review.staleCampaignDays && c.status === "live" && conv === 0) {
+  if (staleSig) {
     signals.push(
       signal("stale", "Stale live campaign", "Extended live period without meaningful conversion signal.", "medium"),
     );
@@ -334,7 +399,8 @@ export function buildReviewQueueItem(
   const health = signals.length === 0 ? "healthy" : deriveHealthStatus(signals);
   if (health === "healthy") return null;
 
-  const profit = (c.revenue ?? 0) - (c.cost ?? 0);
+  const profit = profitFromCostRevenue(c.cost, c.revenue);
+  const roi = resolveDisplayRoiPercent(c.cost, c.revenue, c.roi) ?? 0;
 
   return {
     campaignId: c.id,
@@ -354,10 +420,11 @@ export function buildReviewQueueItem(
     conversions: c.conversions ?? 0,
     revenue: c.revenue ?? 0,
     cost: c.cost ?? 0,
-    roi: c.roi ?? 0,
+    roi,
     profit,
     firstSeenAt,
     escalated,
+    voluumCampaignId: c.voluumCampaignId ?? null,
     urgencyScore: computeUrgencyScore(signals, escalated),
   };
 }
@@ -376,7 +443,8 @@ export function buildManualReviewQueueItem(
       "high",
     ),
   ];
-  const profit = (c.revenue ?? 0) - (c.cost ?? 0);
+  const profit = profitFromCostRevenue(c.cost, c.revenue);
+  const roi = resolveDisplayRoiPercent(c.cost, c.revenue, c.roi) ?? 0;
   return {
     campaignId: c.id,
     campaignName: c.campaignName,
@@ -395,10 +463,12 @@ export function buildManualReviewQueueItem(
     conversions: c.conversions ?? 0,
     revenue: c.revenue ?? 0,
     cost: c.cost ?? 0,
-    roi: c.roi ?? 0,
+    roi,
     profit,
     firstSeenAt: requestedAt,
     escalated: true,
+    voluumCampaignId: c.voluumCampaignId ?? null,
+    reviewComment: note.trim() || null,
     urgencyScore: computeUrgencyScore(signals, true) + 5,
   };
 }

@@ -99,14 +99,16 @@ export function deriveSummaryHealth(
   const visitsPerOffer = lifetimeVisits / offerCount;
   const targetVisitsPerOffer = rules.testing.visitsPerOffer;
   const pacingRatio = targetVisitsPerOffer > 0 ? (visitsPerOffer / targetVisitsPerOffer) : 0;
-  if (pacingRatio >= 1) {
+  // Thresholds come from Alert Rules (no hardcoded ratios): on-target at/above
+  // behindTargetRatio, behind at/above offTargetRatio, else off-target.
+  if (pacingRatio >= rules.optimization.behindTargetRatio) {
     return {
       status: "on_target",
       label: HEALTH_LABELS.on_target,
       reason: "Visits per offer reached target.",
     };
   }
-  if (pacingRatio >= 0.7) {
+  if (pacingRatio >= rules.optimization.offTargetRatio) {
     return {
       status: "behind_target",
       label: HEALTH_LABELS.behind_target,
@@ -147,7 +149,7 @@ export function deriveSummaryHealth(
   }
 
   if (roi != null && roi > 0 && range.conversions > 0) {
-    if (monitoring.health === "winner_candidate" || roi >= 15) {
+    if (monitoring.health === "winner_candidate" || roi >= rules.winning.minROI) {
       if (campaign.campaignPurpose === "working") {
         return {
           status: "healthy",
@@ -228,4 +230,58 @@ export function metricToneClass(tone: "positive" | "negative" | "neutral"): stri
   if (tone === "positive") return "text-emerald-700";
   if (tone === "negative") return "text-red-600";
   return "text-slate-400";
+}
+
+/** Resolve offer count: campaign field → batch.numberOfOffers → offer rows → 1. */
+const invalidOfferCountWarned = new Set<number | string>();
+
+function warnInvalidOfferCountOnce(
+  campaignId: number | string | null | undefined,
+  offerCount: number | null | undefined,
+): void {
+  const key = campaignId ?? "unknown";
+  if (invalidOfferCountWarned.has(key)) return;
+  invalidOfferCountWarned.add(key);
+  console.warn("INVALID_OFFER_COUNT", { campaignId: campaignId ?? null, offerCount: offerCount ?? null });
+}
+
+export function resolveCampaignOfferCount(
+  campaign: { id?: number; offerCount?: number | null; batchId?: number | null },
+  options?: {
+    /** Count of offer rows per batch (legacy fallback). */
+    offersPerBatch?: Map<number, number>;
+    /** batch.numberOfOffers per batchId (preferred batch fallback). */
+    batchNumberOfOffers?: Map<number, number>;
+    /** Persist a batch-derived backfill once (avoids recompute every render). */
+    onBackfillPersist?: (campaignId: number, offerCount: number) => void;
+  },
+): number {
+  const campaignId = campaign.id;
+  const direct = campaign.offerCount;
+
+  if (direct != null && direct <= 0) {
+    warnInvalidOfferCountOnce(campaignId, direct);
+  }
+
+  if (direct != null && direct > 0) return direct;
+
+  if (campaign.batchId != null) {
+    const fromBatchConfig = options?.batchNumberOfOffers?.get(campaign.batchId);
+    if (fromBatchConfig != null && fromBatchConfig > 0) {
+      if (campaignId != null) options?.onBackfillPersist?.(campaignId, fromBatchConfig);
+      return fromBatchConfig;
+    }
+    const fromOfferRows = options?.offersPerBatch?.get(campaign.batchId);
+    if (fromOfferRows != null && fromOfferRows > 0) {
+      if (campaignId != null) options?.onBackfillPersist?.(campaignId, fromOfferRows);
+      return fromOfferRows;
+    }
+  }
+
+  if (direct != null && direct <= 0) {
+    return 1;
+  }
+
+  warnInvalidOfferCountOnce(campaignId, direct ?? null);
+  return 1;
 }

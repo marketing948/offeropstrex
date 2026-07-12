@@ -4,6 +4,7 @@
 
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useListTestingBatches,
   useListTodoTasks,
@@ -19,6 +20,8 @@ import {
   getListEmployeesQueryKey,
 } from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
+import { CAMPAIGNS_LIVE_REFETCH_MS } from "@/lib/campaign-query-cache";
+import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal-surfaces";
 import { useWorkspace } from "@/lib/workspace-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { OpsKpiStripCard } from "@/components/operations-hub/ops-kpi-strip";
@@ -57,6 +60,7 @@ export default function OperationsHub() {
   const { currentEmployee } = useAuth();
   const isWorker = currentEmployee?.role !== "admin";
   const { activeWorkspaceId } = useWorkspace();
+  const queryClient = useQueryClient();
   const [, nav] = useLocation();
   const wsId = activeWorkspaceId ?? 0;
   const today = todayIso();
@@ -79,9 +83,13 @@ export default function OperationsHub() {
     batchParams,
     wsQueryOpts(activeWorkspaceId, getListTodoTasksQueryKey(batchParams)),
   );
-  const { data: campaigns = [] } = useListCampaigns(
+  const { data: campaigns = [], refetch: refetchCampaigns, isFetching: campaignsFetching } = useListCampaigns(
     { workspace_id: wsId },
-    wsQueryOpts(activeWorkspaceId, getListCampaignsQueryKey({ workspace_id: wsId })),
+    wsQueryOpts(activeWorkspaceId, getListCampaignsQueryKey({ workspace_id: wsId }), {
+      staleTime: 5_000,
+      refetchInterval: CAMPAIGNS_LIVE_REFETCH_MS,
+      refetchOnWindowFocus: true,
+    }),
   );
   const { data: offers = [] } = useListOffers(
     batchParams,
@@ -91,6 +99,15 @@ export default function OperationsHub() {
   const campaignsTyped = campaignCast(campaigns);
   const drilldownRoute = useOpsDrilldownRoute();
   const drilldown = useOpsDrilldownData(batches, campaignsTyped, tasks, scopeEmployeeId);
+  const [lastBoardRefreshAt, setLastBoardRefreshAt] = useState<Date | null>(null);
+
+  const handleRefreshBoard = async () => {
+    await refetchCampaigns();
+    if (activeWorkspaceId) {
+      invalidateGoalSurfaces(queryClient, activeWorkspaceId, drilldown.monthKey);
+    }
+    setLastBoardRefreshAt(new Date());
+  };
 
   const winnersParams = { workspace_id: wsId, date_from: today, date_to: today };
   const { data: todayPerf = [] } = useListPerformance(
@@ -272,6 +289,9 @@ export default function OperationsHub() {
             monthKey={drilldown.monthKey}
             testingSlices={drilldown.focusTestingSlices}
             teamWorkers={drilldown.focusTeamWorkers}
+            onRefreshCampaigns={() => void handleRefreshBoard()}
+            campaignsRefreshing={campaignsFetching}
+            lastRefreshedAt={lastBoardRefreshAt}
           />
 
           <OpenTasksPanel

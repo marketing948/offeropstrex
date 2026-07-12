@@ -23,19 +23,30 @@ export function resolveCampaignDisplayName(params: {
   campaignName: string;
   batchName?: string | null;
   platform: "ios" | "android";
+  voluumCampaignName?: string | null;
 }): string {
-  const { campaignName, batchName, platform } = params;
+  const { campaignName, batchName, platform, voluumCampaignName } = params;
   const trimmed = campaignName.trim();
+  const fromBatch =
+    batchName?.trim() != null && batchName.trim() !== ""
+      ? composeCampaignDisplayName(batchName.trim(), platform)
+      : null;
+  const voluum = voluumCampaignName?.trim();
+
+  if (voluum && fromBatch && trimmed === fromBatch) {
+    return voluum;
+  }
+  if (voluum && !trimmed) {
+    return voluum;
+  }
+
   if (batchName?.trim()) {
-    const fromBatch = composeCampaignDisplayName(batchName.trim(), platform);
     if (!trimmed || isCreateVoluumTaskTitle(trimmed)) {
-      return fromBatch;
+      return fromBatch ?? trimmed;
     }
   }
   if (trimmed) return trimmed;
-  if (batchName?.trim()) {
-    return composeCampaignDisplayName(batchName.trim(), platform);
-  }
+  if (fromBatch) return fromBatch;
   return platformDisplaySuffix(platform);
 }
 

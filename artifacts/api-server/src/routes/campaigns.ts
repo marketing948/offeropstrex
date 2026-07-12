@@ -815,17 +815,13 @@ router.post("/production-live-campaigns", async (req, res): Promise<void> => {
       .limit(1);
 
     if (existingVoluum) {
-      const isAdmin = access.employee.role === "admin";
-      const ownedByRequester = existingVoluum.createdByEmployeeId === creatorEmployeeId;
-      const ownerless = existingVoluum.createdByEmployeeId == null;
-      const isBatchLinked = existingVoluum.batchId != null;
-      const canOverride = isAdmin || (!isBatchLinked && (ownedByRequester || ownerless));
-      const overrideRequiresAdmin = isBatchLinked || (!isAdmin && !(ownedByRequester || ownerless));
-      const strongReason = isBatchLinked
-        ? "Existing campaign is batch-linked and requires admin override."
-        : "You can only override campaigns you own or ownerless campaigns.";
+      // Any member of the same workspace may override. The lookup above is already
+      // workspace-scoped (workspaceId + voluumCampaignId), and workspace access was
+      // verified via checkWorkspaceAccess, so ownership / admin gates are not applied
+      // here — the confirmOverride handshake still prevents accidental overrides.
+      const canOverride = true;
 
-      if (!body.confirmOverride || body.overrideExistingCampaignId !== existingVoluum.id || !canOverride) {
+      if (!body.confirmOverride || body.overrideExistingCampaignId !== existingVoluum.id) {
         res.status(409).json({
           code: "CAMPAIGN_ALREADY_LINKED",
           message: `Voluum campaign ID "${body.voluumCampaignId}" is already linked to another campaign in this workspace`,
@@ -843,8 +839,8 @@ router.post("/production-live-campaigns", async (req, res): Promise<void> => {
             createdAt: existingVoluum.createdAt.toISOString(),
           },
           canOverride,
-          overrideRequiresAdmin,
-          reason: canOverride ? undefined : strongReason,
+          overrideRequiresAdmin: false,
+          reason: undefined,
         });
         return;
       }
@@ -1046,10 +1042,20 @@ router.get("/campaigns", async (req, res): Promise<void> => {
             employeeId: testingBatchesTable.employeeId,
             geo: testingBatchesTable.geo,
             affiliateNetwork: testingBatchesTable.affiliateNetwork,
+            numberOfOffers: testingBatchesTable.numberOfOffers,
           })
           .from(testingBatchesTable)
           .where(inArray(testingBatchesTable.id, batchIds))
-      : Promise.resolve([] as { id: number; batchName: string; employeeId: number | null; geo: string | null; affiliateNetwork: string | null }[]),
+      : Promise.resolve(
+          [] as {
+            id: number;
+            batchName: string;
+            employeeId: number | null;
+            geo: string | null;
+            affiliateNetwork: string | null;
+            numberOfOffers: number | null;
+          }[],
+        ),
     anIds.length
       ? db
           .select({ id: affiliateNetworksTable.id, name: affiliateNetworksTable.name })
@@ -1078,14 +1084,26 @@ router.get("/campaigns", async (req, res): Promise<void> => {
   const tsMap = new Map(tsources.map((t) => [t.id, t.name]));
   const empMap = new Map(emps.map((e) => [e.id, e.name]));
 
+  // Read-time offer-count backfill (temporary safety net): if a campaign is
+  // missing its offer count but its batch has numberOfOffers, surface the batch
+  // value AND persist it so Health / VPO / Alerts stop reporting a gap. This
+  // covers rows created before the write-path wiring; best-effort, non-blocking.
+  const offerCountBackfills: { id: number; offerCount: number }[] = [];
+
   let result = rows.map((r) => {
     const b = r.batchId != null ? batchMap.get(r.batchId) : undefined;
     const affiliateNetworkName =
       (r.affiliateNetworkId != null ? anMap.get(r.affiliateNetworkId) : null) ??
       b?.affiliateNetwork ??
       null;
+    let offerCount = r.offerCount;
+    if (offerCount == null && b?.numberOfOffers != null) {
+      offerCount = b.numberOfOffers;
+      offerCountBackfills.push({ id: r.id, offerCount: b.numberOfOffers });
+    }
     return {
       ...serialize(r),
+      offerCount,
       batchName: b?.batchName ?? null,
       batchGeo: b?.geo ?? null,
       affiliateNetworkName,
@@ -1095,6 +1113,24 @@ router.get("/campaigns", async (req, res): Promise<void> => {
       _batchEmployeeId: b?.employeeId ?? null,
     };
   });
+
+  if (offerCountBackfills.length > 0) {
+    await Promise.all(
+      offerCountBackfills.map((patch) =>
+        db
+          .update(campaignsTable)
+          .set({ offerCount: patch.offerCount, updatedAt: new Date() })
+          .where(
+            and(
+              eq(campaignsTable.id, patch.id),
+              eq(campaignsTable.workspaceId, wsId),
+            ),
+          ),
+      ),
+    ).catch(() => {
+      // best-effort backfill; the response already carries the batch value
+    });
+  }
 
   if (!scoped.scope.isAdmin) {
     const allowed = scoped.scope.allowedNetworkIds ?? [];

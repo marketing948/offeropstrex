@@ -9,6 +9,7 @@ import {
   type PaceEvaluation,
 } from "./ops-v2-metrics.ts";
 import { isScalingOpportunity } from "./scaling-opportunity.ts";
+import { resolveDisplayRoiPercent } from "../../lib/campaign-metrics.ts";
 
 export type GoalKind = "revenue" | "testing" | "working";
 
@@ -292,8 +293,10 @@ function campaignProfit(c: OpsCampaignRowLite): number {
 }
 
 function campaignRoi(c: OpsCampaignRowLite): number {
-  const raw = Number(c.roi ?? 0);
-  return Math.abs(raw) <= 1 && raw !== 0 ? raw * 100 : raw;
+  const cost = Number(c.cost ?? 0);
+  const revenue = Number(c.revenue ?? 0);
+  const stored = Number(c.roi ?? 0);
+  return resolveDisplayRoiPercent(cost, revenue, stored) ?? 0;
 }
 
 export function buildTestingFocusAction(

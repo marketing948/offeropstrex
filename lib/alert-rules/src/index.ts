@@ -38,6 +38,31 @@ export const alertRulesSchema = z.object({
     // Proactive weak/underperforming working campaign review.
     minLiveDaysForReview: z.number().int().nonnegative(),
     weakRoiPercent: z.number(),
+    // Optimize Today: min days live before an ROI-based review, ROI floor, and
+    // ROI drop (percentage-point decline vs prior) that flags a campaign.
+    minDaysLive: z.number().int().nonnegative(),
+    roiMinThreshold: z.number(),
+    roiDropThreshold: z.number().nonnegative(),
+  }),
+  // Traffic volume / anomaly thresholds. Single source for spike/decrease and
+  // expected visits-per-offer bounds used by alerts + optimize suggestions.
+  traffic: z.object({
+    spikeIncreasePct: z.number().min(0).max(500),
+    spikeDecreasePct: z.number().min(0).max(100),
+    maxExpectedVisitsPerOffer: z.number().nonnegative(),
+    minExpectedVisitsPerOffer: z.number().nonnegative(),
+  }),
+  // Winning campaign rule → flags a campaign as WINNER and surfaces it in Scale.
+  winning: z.object({
+    minConversions: z.number().int().nonnegative(),
+    minRevenue: z.number().nonnegative(),
+    minROI: z.number(),
+  }),
+  // Shutdown rule → long-running + low performance → suggest STOP.
+  shutdown: z.object({
+    minDaysLive: z.number().int().nonnegative(),
+    maxConversions: z.number().int().nonnegative(),
+    maxRevenue: z.number().nonnegative(),
   }),
   review: z.object({
     ignoredSignalEscalationHours: z.number().int().positive(),
@@ -92,6 +117,25 @@ export const DEFAULT_ALERT_RULES: AlertRulesConfig = {
     behindTargetRatio: 1,
     minLiveDaysForReview: 3,
     weakRoiPercent: 5,
+    minDaysLive: 3,
+    roiMinThreshold: 5,
+    roiDropThreshold: 20,
+  },
+  traffic: {
+    spikeIncreasePct: 40,
+    spikeDecreasePct: 30,
+    maxExpectedVisitsPerOffer: 25_000,
+    minExpectedVisitsPerOffer: 3_000,
+  },
+  winning: {
+    minConversions: 1,
+    minRevenue: 200,
+    minROI: 15,
+  },
+  shutdown: {
+    minDaysLive: 7,
+    maxConversions: 0,
+    maxRevenue: 0,
   },
   review: {
     ignoredSignalEscalationHours: 4,
@@ -128,6 +172,9 @@ export function mergeAlertRules(raw: unknown): AlertRulesConfig {
     winners: mergeSection(DEFAULT_ALERT_RULES.winners, input.winners),
     scaling: mergeSection(DEFAULT_ALERT_RULES.scaling, input.scaling),
     optimization: mergeSection(DEFAULT_ALERT_RULES.optimization, input.optimization),
+    traffic: mergeSection(DEFAULT_ALERT_RULES.traffic, input.traffic),
+    winning: mergeSection(DEFAULT_ALERT_RULES.winning, input.winning),
+    shutdown: mergeSection(DEFAULT_ALERT_RULES.shutdown, input.shutdown),
     review: mergeSection(DEFAULT_ALERT_RULES.review, input.review),
     operationalScoring: mergeSection(
       DEFAULT_ALERT_RULES.operationalScoring,
@@ -142,3 +189,7 @@ export function mergeAlertRules(raw: unknown): AlertRulesConfig {
 export function milestoneFractions(rules: AlertRulesConfig): number[] {
   return rules.testing.trafficMilestonePercents.map((p) => p / 100);
 }
+
+// Unified alert engine (single brain) + rollout flags.
+export * from "./evaluator.ts";
+export * from "./feature-flags.ts";

@@ -10,7 +10,7 @@
  * "Done for today" (worker + date scoped convenience layer, not campaign truth).
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { FocusItem } from "@/components/operations-hub/ops-hub-drilldown-data";
 import type {
@@ -25,38 +25,39 @@ import {
   type DailyActionPlan,
   type OptimizationGroup,
   type ScalingCandidate,
+  type ShutdownCandidate,
   type TestingNetworkPlan,
   type WorkerDailyPlanSummary,
 } from "@/components/operations-hub/monthly-goal-daily-plan";
 import {
-  computeEffectiveSummary,
-  optimizationKey,
-  scalingKey,
+  countCompletedGeosTodayFromPlan,
+  effectiveSummaryFromPlan,
+  isTestingGeoCompleteFromPlan,
+  isTestingNetworkDailyTargetMetFromPlan,
+  isTestingNetworkVisibleFromPlan,
+  selectFocusTestingNetworksFromPlan,
+  selectNextActionFromPlan,
+  selectTopGeosFromPlan,
   testingGeoKey,
-  testingNetworkKey,
 } from "@/components/operations-hub/daily-mission-completion";
-import { useDailyMissionCompletion } from "@/components/operations-hub/use-daily-mission-completion";
 import {
   FlaskConical,
   Sparkles,
   Puzzle,
   TrendingUp,
   CheckCircle2,
-  Circle,
   ArrowRight,
   ChevronDown,
   ChevronRight,
   Users,
+  RefreshCw,
+  OctagonX,
+  Trophy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { geoFlagLabel } from "@/lib/geo-flag";
 
 type ColorKey = "sky" | "emerald" | "amber";
-
-const CHECK_RING: Record<ColorKey, string> = {
-  sky: "text-sky-600 hover:bg-sky-50",
-  emerald: "text-emerald-600 hover:bg-emerald-50",
-  amber: "text-amber-600 hover:bg-amber-50",
-};
 
 function openFocusNav(
   onSelectFocus: (item: FocusItem) => void,
@@ -77,210 +78,207 @@ function openFocusNav(
   });
 }
 
-/** Small "Done for today" toggle. Stops row click propagation. */
-function DoneCheck({
-  done,
-  color,
-  onToggle,
-  disabled,
-}: {
-  done: boolean;
-  color: ColorKey;
-  onToggle: () => void;
-  disabled?: boolean;
-}) {
-  if (disabled) return null;
-  return (
-    <button
-      type="button"
-      aria-pressed={done}
-      title={done ? "Marked done for today" : "Mark done for today"}
-      onClick={(e) => {
-        e.stopPropagation();
-        onToggle();
-      }}
-      className={cn(
-        "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors",
-        done ? "text-emerald-600" : CHECK_RING[color],
-      )}
-    >
-      {done ? (
-        <CheckCircle2 className="h-5 w-5" strokeWidth={2.25} />
-      ) : (
-        <Circle className="h-5 w-5" strokeWidth={2} />
-      )}
-    </button>
-  );
-}
-
 function GeoLine({
-  network,
   geo,
-  done,
-  canComplete,
-  onToggle,
+  primary,
+  completed,
 }: {
-  network: string;
   geo: TestingNetworkPlan["geos"][number];
-  done: boolean;
-  canComplete: boolean;
-  onToggle: () => void;
+  primary?: boolean;
+  completed: boolean;
 }) {
   return (
     <div
       className={cn(
-        "flex items-center gap-2 border-t border-sky-100/80 px-3 py-2 text-[12px] first:border-t-0",
-        done && "opacity-50",
+        "flex items-center gap-2 border-t border-sky-100/80 px-3 py-2 first:border-t-0",
+        completed && "bg-emerald-50/40",
+        primary && !completed && "bg-sky-100/70",
       )}
     >
-      <DoneCheck done={done} color="sky" onToggle={onToggle} disabled={!canComplete} />
       <div className="min-w-0 flex-1">
-        <span className={cn("font-bold text-sky-800", done && "line-through")}>{geo.geo}</span>
-        <span className="text-slate-600">
-          {" "}
-          — Open {geo.todayRequired} today · Monthly goal {Math.round(geo.monthlyTarget)} · Done today{" "}
-          {geo.doneToday}
+        <span
+          className={cn(
+            "font-bold text-slate-900",
+            primary ? "text-[13px]" : "text-[12px]",
+            completed && "text-emerald-800",
+          )}
+        >
+          {geoFlagLabel(geo.geo)} —{" "}
+          {completed
+            ? "Done today ✅"
+            : `Open ${geo.todayRequired} test${geo.todayRequired === 1 ? "" : "s"}`}
         </span>
+        {!completed && geo.doneToday > 0 && (
+          <span className="ml-1.5 text-[11px] font-medium text-sky-700">
+            · {geo.doneToday}/{geo.todayRequired} in progress
+          </span>
+        )}
       </div>
-      <span title="Network abbreviation" className="sr-only">
-        {network}
-      </span>
+      {primary && !completed && (
+        <span className="shrink-0 rounded-full bg-sky-600 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-white">
+          Do next
+        </span>
+      )}
     </div>
   );
 }
 
-function TestingNetworkAccordion({
+/**
+ * Testing network card — shows up to 3 incomplete GEO tasks (campaign-backed).
+ * Refresh refetches live campaigns so new tests appear automatically.
+ */
+function TestingNetworkCard({
   plan,
-  defaultOpen,
-  onOpenTests,
-  canComplete,
-  isNetworkDone,
-  isGeoDone,
-  onToggleNetwork,
-  onToggleGeo,
+  topGeos,
+  doneToday,
+  targetMet,
+  onRefresh,
+  isRefreshing,
+  isPrimaryGeo,
 }: {
   plan: TestingNetworkPlan;
-  defaultOpen?: boolean;
-  onOpenTests: () => void;
-  canComplete: boolean;
-  isNetworkDone: boolean;
-  isGeoDone: (geo: string) => boolean;
-  onToggleNetwork: () => void;
-  onToggleGeo: (geo: string) => void;
+  topGeos: TestingNetworkPlan["geos"];
+  doneToday: number;
+  targetMet: boolean;
+  onRefresh: () => void;
+  isRefreshing?: boolean;
+  isPrimaryGeo: (geo: string) => boolean;
 }) {
-  const [open, setOpen] = useState(Boolean(defaultOpen));
+  const activeCount = plan.geos.filter(
+    (g) => g.todayRequired > 0 && !isTestingGeoCompleteFromPlan(g),
+  ).length;
+
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-2xl border border-sky-200/90 bg-white shadow-sm",
-        isNetworkDone && "opacity-60",
+        "overflow-hidden rounded-2xl border bg-white shadow-sm",
+        targetMet ? "border-emerald-200/90" : "border-sky-200/90",
       )}
     >
-      <div className="flex items-center gap-1.5 pl-2.5">
-        <DoneCheck
-          done={isNetworkDone}
-          color="sky"
-          onToggle={onToggleNetwork}
-          disabled={!canComplete}
-        />
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="flex flex-1 items-center gap-2 py-3 pr-3 text-left hover:bg-sky-50/60"
+      <div
+        className={cn(
+          "flex items-center gap-1.5 border-b px-2.5 py-2.5",
+          targetMet
+            ? "border-emerald-100 bg-emerald-50/60"
+            : "border-sky-100 bg-sky-50/40",
+        )}
+      >
+        <span
+          className={cn(
+            "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl",
+            targetMet ? "bg-emerald-100 text-emerald-700" : "bg-sky-100 text-sky-700",
+          )}
         >
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-sky-100 text-sky-700">
+          {targetMet ? (
+            <CheckCircle2 className="h-4 w-4" strokeWidth={2.25} />
+          ) : (
             <FlaskConical className="h-4 w-4" strokeWidth={2.25} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p
+          )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-extrabold text-slate-900">{plan.network}</p>
+          <p className="mt-0.5 text-[11px] text-slate-600">
+            <span className={cn("font-semibold", targetMet ? "text-emerald-900" : "text-slate-800")}>
+              {plan.todayRequired} test{plan.todayRequired === 1 ? "" : "s"} today
+            </span>
+            {" · "}
+            <span
               className={cn(
-                "truncate text-sm font-extrabold text-slate-900",
-                isNetworkDone && "line-through",
+                "tabular-nums",
+                targetMet ? "font-bold text-emerald-800" : "text-sky-800",
               )}
             >
-              {plan.network}
-            </p>
-            <p className="mt-0.5 text-[11px] text-slate-600">
-              <span className="font-semibold text-slate-800">
-                Open {plan.todayRequired} test{plan.todayRequired === 1 ? "" : "s"} today
+              {doneToday}/{plan.todayRequired} done
+            </span>
+            {!targetMet && plan.paceStatus === "behind" && (
+              <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-amber-800">
+                Behind pace
               </span>
-              {" · "}Monthly goal {Math.round(plan.monthlyGoal)}
-              {" · "}Done today{" "}
-              <span className="font-semibold tabular-nums text-sky-800">{plan.doneToday}</span>
-              {plan.paceStatus === "behind" && (
-                <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-amber-800">
-                  Behind pace
-                </span>
-              )}
-            </p>
-          </div>
-          {open ? (
-            <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
-          ) : (
-            <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-          )}
-        </button>
+            )}
+          </p>
+        </div>
       </div>
-      {open && (
-        <div className="border-t border-sky-100 bg-sky-50/40">
-          {plan.geos.map((g) => (
+      {targetMet ? (
+        <div className="bg-emerald-50/30 px-3 py-4 text-center">
+          <p className="text-sm font-bold text-emerald-800">✅ Done for today</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-sky-100/80 bg-white">
+          {topGeos.map((geo) => (
             <GeoLine
-              key={g.geo}
-              network={plan.network}
-              geo={g}
-              done={isNetworkDone || isGeoDone(g.geo)}
-              canComplete={canComplete && !isNetworkDone}
-              onToggle={() => onToggleGeo(g.geo)}
+              key={geo.geo}
+              geo={geo}
+              primary={isPrimaryGeo(geo.geo)}
+              completed={isTestingGeoCompleteFromPlan(geo)}
             />
           ))}
-          <div className="flex justify-end border-t border-sky-100 px-3 py-2">
-            <button
-              type="button"
-              onClick={onOpenTests}
-              className="inline-flex items-center gap-1 rounded-full bg-sky-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white hover:bg-sky-700"
-            >
-              Open test
-              <ArrowRight className="h-3 w-3" />
-            </button>
-          </div>
         </div>
       )}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-sky-100 px-3 py-2">
+        {!targetMet && (
+          <span className="text-[10px] font-medium text-slate-500">
+            {activeCount > topGeos.length
+              ? `${activeCount} GEOs left in this network`
+              : activeCount === 1
+                ? "Single active GEO"
+                : `${topGeos.length} GEOs shown`}
+          </span>
+        )}
+        <div className={cn("flex flex-wrap items-center gap-1.5", targetMet && "ml-auto w-full justify-end")}>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={isRefreshing}
+            title="Reload campaigns from the server"
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1 rounded-full border border-sky-200 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-sky-700 transition-all duration-150 hover:bg-sky-100 active:scale-90",
+              isRefreshing && "cursor-wait opacity-60",
+            )}
+          >
+            <RefreshCw className={cn("h-3 w-3", isRefreshing && "animate-spin")} />
+            Refresh
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
 function ScalingCard({
   candidate,
-  done,
-  canComplete,
-  onToggle,
   onReview,
 }: {
   candidate: ScalingCandidate;
-  done: boolean;
-  canComplete: boolean;
-  onToggle: () => void;
   onReview: () => void;
 }) {
-  const reasonLabel =
-    candidate.kind === "scaling"
+  const reasonLabel = candidate.isWinner
+    ? "Winner → scale now"
+    : candidate.kind === "scaling"
       ? "Profitable & live long enough → scale"
       : "Testing showing signal → move to working";
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-2xl border border-emerald-200/90 bg-white shadow-sm",
-        done && "opacity-60",
+        "overflow-hidden rounded-2xl border bg-white shadow-sm",
+        candidate.isWinner ? "border-emerald-300 ring-1 ring-emerald-200" : "border-emerald-200/90",
       )}
     >
       <div className="flex items-center gap-1.5 px-2.5 py-3">
-        <DoneCheck done={done} color="emerald" onToggle={onToggle} disabled={!canComplete} />
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-800">
-          <TrendingUp className="h-4 w-4" strokeWidth={2.25} />
+          {candidate.isWinner ? (
+            <Trophy className="h-4 w-4" strokeWidth={2.25} />
+          ) : (
+            <TrendingUp className="h-4 w-4" strokeWidth={2.25} />
+          )}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline justify-between gap-2">
-            <p className={cn("truncate text-sm font-extrabold text-slate-900", done && "line-through")}>
+            <p className="truncate text-sm font-extrabold text-slate-900">
+              {candidate.isWinner && (
+                <span className="mr-1 rounded bg-emerald-600 px-1 py-0.5 text-[9px] font-black uppercase tracking-wide text-white">
+                  Winner
+                </span>
+              )}
               {candidate.name}
             </p>
             <span className="shrink-0 text-[11px] text-slate-500">
@@ -308,27 +306,15 @@ function ScalingCard({
 
 function OptimizationCard({
   group,
-  done,
-  canComplete,
-  onToggle,
   onReview,
 }: {
   group: OptimizationGroup;
-  done: boolean;
-  canComplete: boolean;
-  onToggle: () => void;
   onReview: () => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div
-      className={cn(
-        "overflow-hidden rounded-2xl border border-amber-200/90 bg-white shadow-sm",
-        done && "opacity-60",
-      )}
-    >
+    <div className="overflow-hidden rounded-2xl border border-amber-200/90 bg-white shadow-sm">
       <div className="flex items-center gap-1.5 pl-2.5">
-        <DoneCheck done={done} color="amber" onToggle={onToggle} disabled={!canComplete} />
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
@@ -338,7 +324,7 @@ function OptimizationCard({
             <Puzzle className="h-4 w-4" strokeWidth={2.25} />
           </span>
           <div className="min-w-0 flex-1">
-            <p className={cn("text-sm font-extrabold text-slate-900", done && "line-through")}>
+            <p className="text-sm font-extrabold text-slate-900">
               {group.label}
             </p>
             <p className="mt-0.5 text-[11px] text-slate-600">
@@ -380,15 +366,150 @@ function OptimizationCard({
   );
 }
 
-function GroupHeader({ color, children }: { color: ColorKey; children: React.ReactNode }) {
+function ShutdownCard({
+  candidate,
+  onReview,
+}: {
+  candidate: ShutdownCandidate;
+  onReview: () => void;
+}) {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-rose-200/90 bg-white shadow-sm">
+      <div className="flex items-center gap-1.5 px-2.5 py-3">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
+          <OctagonX className="h-4 w-4" strokeWidth={2.25} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <p className="truncate text-sm font-extrabold text-slate-900">
+              {candidate.name}
+            </p>
+            <span className="shrink-0 text-[11px] text-slate-500">
+              {candidate.network} / {candidate.geo}
+            </span>
+          </div>
+          <p className="mt-0.5 text-[11px] font-medium text-rose-700">
+            {candidate.daysLive} days live · {candidate.conversions} conv · $
+            {Math.round(candidate.revenue).toLocaleString()} rev → stop
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onReview}
+          className="inline-flex shrink-0 items-center gap-1 rounded-full bg-rose-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white hover:bg-rose-700"
+        >
+          Review
+          <ArrowRight className="h-3 w-3" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const GROUP_STYLE: Record<
+  ColorKey,
+  { bar: string; chip: string; text: string; count: string; icon: string }
+> = {
+  sky: {
+    bar: "bg-sky-100/70 border-sky-200",
+    chip: "bg-sky-600 text-white",
+    text: "text-sky-900",
+    count: "bg-white/70 text-sky-800",
+    icon: "text-sky-700",
+  },
+  emerald: {
+    bar: "bg-emerald-100/70 border-emerald-200",
+    chip: "bg-emerald-600 text-white",
+    text: "text-emerald-900",
+    count: "bg-white/70 text-emerald-800",
+    icon: "text-emerald-700",
+  },
+  amber: {
+    bar: "bg-amber-100/70 border-amber-200",
+    chip: "bg-amber-600 text-white",
+    text: "text-amber-900",
+    count: "bg-white/70 text-amber-900",
+    icon: "text-amber-700",
+  },
+};
+
+function GroupHeader({
+  color,
+  icon: Icon,
+  primary,
+  title,
+  doneLabel,
+  collapsed,
+  onToggle,
+}: {
+  color: ColorKey;
+  icon: typeof FlaskConical;
+  primary?: boolean;
+  title: string;
+  doneLabel?: string;
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
+  const st = GROUP_STYLE[color];
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={!collapsed}
+      className={cn(
+        "flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left",
+        st.bar,
+        primary && "shadow-sm",
+      )}
+    >
+      <span className={cn("flex h-6 w-6 items-center justify-center", st.icon)}>
+        <Icon className="h-4.5 w-4.5" strokeWidth={2.5} />
+      </span>
+      <h3
+        className={cn(
+          "flex-1 font-extrabold tracking-tight",
+          st.text,
+          primary ? "text-[15px]" : "text-[13px]",
+        )}
+      >
+        {title}
+      </h3>
+      {doneLabel && (
+        <span
+          className={cn(
+            "rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums",
+            st.count,
+          )}
+        >
+          {doneLabel}
+        </span>
+      )}
+      {collapsed ? (
+        <ChevronRight className={cn("h-4 w-4", st.icon)} />
+      ) : (
+        <ChevronDown className={cn("h-4 w-4", st.icon)} />
+      )}
+    </button>
+  );
+}
+
+function EmptyState({ color, message }: { color: ColorKey; message: string }) {
   const tone =
     color === "sky"
-      ? "text-sky-700"
+      ? "border-sky-200 bg-sky-50/60 text-sky-700"
       : color === "emerald"
-        ? "text-emerald-800"
-        : "text-amber-800";
+        ? "border-emerald-200 bg-emerald-50/60 text-emerald-800"
+        : "border-amber-200 bg-amber-50/60 text-amber-800";
   return (
-    <h3 className={cn("text-[11px] font-extrabold uppercase tracking-wider", tone)}>{children}</h3>
+    <div
+      className={cn(
+        "flex items-center gap-2 rounded-2xl border border-dashed px-4 py-3 text-[12px] font-medium",
+        tone,
+      )}
+    >
+      <CheckCircle2 className="h-4 w-4 shrink-0 opacity-70" />
+      {message}
+    </div>
   );
 }
 
@@ -418,131 +539,328 @@ function SuccessState({ onSelectFocus }: { onSelectFocus: (item: FocusItem) => v
 function WorkerPlanBoard({
   plan,
   onSelectFocus,
-  workspaceId,
-  employeeId,
+  onRefreshCampaigns,
+  campaignsRefreshing = false,
+  campaigns = [],
+  lastRefreshedAt = null,
 }: {
   plan: DailyActionPlan;
   onSelectFocus: (item: FocusItem) => void;
-  workspaceId: number | null;
-  employeeId: number | null;
+  onRefreshCampaigns: () => void;
+  campaignsRefreshing?: boolean;
+  campaigns?: import("./ops-goal-focus.ts").OpsCampaignRowLite[];
+  lastRefreshedAt?: Date | null;
 }) {
-  const { state, isDone, toggle, enabled } = useDailyMissionCompletion(workspaceId, employeeId);
-  // Fold live "done for today" marks into the Focus Bar so chips update instantly.
-  const s = useMemo(() => computeEffectiveSummary(plan, state), [plan, state]);
-  const hasWork = plan.summary.total > 0;
-  if (!hasWork) {
-    return <SuccessState onSelectFocus={onSelectFocus} />;
-  }
+  const geoContext = useMemo(() => ({ campaigns }), [campaigns]);
+  const s = useMemo(() => effectiveSummaryFromPlan(plan), [plan]);
 
-  const scalingAll = [...plan.scalingCandidates, ...plan.moveToWorkingCandidates];
+  const visibleTestingNetworks = useMemo(
+    () =>
+      selectFocusTestingNetworksFromPlan(plan.testingNetworks, undefined, geoContext)
+        .filter((net) => isTestingNetworkVisibleFromPlan(net))
+        .map((net) => ({
+          net,
+          topGeos: selectTopGeosFromPlan(net, 3, geoContext),
+          doneToday: countCompletedGeosTodayFromPlan(net),
+          targetMet: isTestingNetworkDailyTargetMetFromPlan(net),
+        })),
+    [plan.testingNetworks, geoContext],
+  );
+
+  const scalingAll = useMemo(
+    () => [...plan.scalingCandidates, ...plan.moveToWorkingCandidates],
+    [plan.scalingCandidates, plan.moveToWorkingCandidates],
+  );
+  const optimizeAll = plan.optimizations;
+  const shutdownAll = plan.shutdownCandidates ?? [];
+
+  const nextAction = useMemo(
+    () => selectNextActionFromPlan(plan, geoContext),
+    [plan, geoContext],
+  );
+  const primaryGeoKey = nextAction?.kind === "testing" ? nextAction.key : null;
+
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
+    testing: false,
+    scale: true,
+    optimize: true,
+    stop: true,
+  });
+  const toggleGroup = (k: string) => setCollapsed((c) => ({ ...c, [k]: !c[k] }));
+
+  const [plusOne, setPlusOne] = useState(false);
+  const prevCompleted = useRef(s.completed);
+
+  useEffect(() => {
+    if (s.completed > prevCompleted.current) {
+      setPlusOne(true);
+      const t = setTimeout(() => setPlusOne(false), 900);
+      prevCompleted.current = s.completed;
+      return () => clearTimeout(t);
+    }
+    prevCompleted.current = s.completed;
+    return undefined;
+  }, [s.completed]);
 
   return (
     <div className="space-y-4">
-      {/* Focus Bar */}
-      <div className="rounded-2xl border border-sky-100 bg-white/95 px-4 py-3 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Daily progress</p>
-          <p className="text-sm font-extrabold tabular-nums text-slate-900">
-            {s.completed} / {s.total} completed
+      {/* ===== Daily progress ===== */}
+      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm sm:px-5">
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-slate-500">
+              Daily progress
+            </p>
+          </div>
+          <div className="relative text-right">
+            {plusOne && (
+              <span className="pointer-events-none absolute -top-3 right-0 animate-in fade-in slide-in-from-bottom-2 text-sm font-black text-emerald-500 duration-300">
+                +1
+              </span>
+            )}
+            <p className="text-2xl font-black tabular-nums leading-none text-slate-900">
+              {s.completed}
+              <span className="text-base font-bold text-slate-400"> / {s.total}</span>
+            </p>
+            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">completed</p>
+          </div>
+        </div>
+        <div className="mt-3">
+          <ProgressBarVisual pct={s.progressPct} size="lg" />
+        </div>
+        {lastRefreshedAt && (
+          <p className="mt-2 text-[10px] text-slate-500">
+            Last refreshed {lastRefreshedAt.toLocaleTimeString()}
           </p>
-        </div>
-        <div className="mt-2">
-          <ProgressBarVisual pct={s.progressPct} size="md" />
-        </div>
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
-          <span className="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-0.5 text-[10px] font-bold text-sky-800">
-            Tests: {s.testsDone}/{s.testsRequired}
-          </span>
-          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800">
-            Scaling: {s.scalingDone}/{s.scalingAdvisory}
-          </span>
-          <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[10px] font-bold text-amber-900">
-            Optimizations: {s.optimizationsDone}/{s.optimizationsRequired}
-          </span>
+        )}
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="rounded-xl border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-center">
+            <p className="text-sm font-black tabular-nums text-sky-800">
+              {s.testsDone}/{s.testsRequired}
+            </p>
+            <p className="text-[10px] font-bold uppercase tracking-wide text-sky-700">Tests</p>
+          </div>
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-center">
+            <p className="text-sm font-black tabular-nums text-emerald-800">
+              {s.scalingAdvisory}
+            </p>
+            <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Scale</p>
+          </div>
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-center">
+            <p className="text-sm font-black tabular-nums text-amber-900">
+              {s.optimizationsDone}/{s.optimizationsRequired}
+            </p>
+            <p className="text-[10px] font-bold uppercase tracking-wide text-amber-800">Optimize</p>
+          </div>
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-center">
+            <p className="text-sm font-black tabular-nums text-rose-800">
+              {s.shutdownAdvisory}
+            </p>
+            <p className="text-[10px] font-bold uppercase tracking-wide text-rose-700">Stop</p>
+          </div>
         </div>
       </div>
 
-      {/* 1) Testing Tasks of the Day */}
-      {plan.testingNetworks.length > 0 && (
-        <div className="space-y-2">
-          <GroupHeader color="sky">Testing Tasks of the Day</GroupHeader>
-          {plan.testingNetworks.map((n, i) => (
-            <TestingNetworkAccordion
-              key={n.network}
-              plan={n}
-              defaultOpen={i === 0}
-              canComplete={enabled}
-              isNetworkDone={isDone(testingNetworkKey(n.network))}
-              isGeoDone={(geo) => isDone(testingGeoKey(n.network, geo))}
-              onToggleNetwork={() => toggle(testingNetworkKey(n.network))}
-              onToggleGeo={(geo) => toggle(testingGeoKey(n.network, geo))}
-              onOpenTests={() =>
-                openFocusNav(
-                  onSelectFocus,
-                  "/testing-batches",
-                  "Open tests",
-                  `Open ${n.todayRequired} tests on ${n.network}`,
-                  "Open test",
-                )
+      {/* ===== 1) Testing Tasks of the Day (primary work block) ===== */}
+      <div className="space-y-2">
+        <GroupHeader
+          color="sky"
+          icon={FlaskConical}
+          primary
+          title="Testing Tasks of the Day"
+          doneLabel={`${s.testsDone}/${s.testsRequired} done`}
+          collapsed={collapsed.testing}
+          onToggle={() => toggleGroup("testing")}
+        />
+        {!collapsed.testing &&
+          (visibleTestingNetworks.length > 0 ? (
+            visibleTestingNetworks.map(({ net, topGeos, doneToday, targetMet }) => (
+              <TestingNetworkCard
+                key={net.network}
+                plan={net}
+                topGeos={topGeos}
+                doneToday={doneToday}
+                targetMet={targetMet}
+                onRefresh={onRefreshCampaigns}
+                isRefreshing={campaignsRefreshing}
+                isPrimaryGeo={(geo) => primaryGeoKey === testingGeoKey(net.network, geo)}
+              />
+            ))
+          ) : (
+            <EmptyState
+              color="sky"
+              message={
+                plan.testingNetworks.length > 0
+                  ? "All testing tasks done for today. Nice work!"
+                  : "No testing tasks required today."
               }
             />
           ))}
-        </div>
-      )}
+      </div>
 
-      {/* 2) Campaigns We Should Scale Today */}
-      {scalingAll.length > 0 && (
-        <div className="space-y-2">
-          <GroupHeader color="emerald">Campaigns We Should Scale Today</GroupHeader>
-          {scalingAll.map((c) => (
-            <ScalingCard
-              key={`${c.kind}:${c.id}`}
-              candidate={c}
-              canComplete={enabled}
-              done={isDone(scalingKey(c.kind, c.id))}
-              onToggle={() => toggle(scalingKey(c.kind, c.id))}
-              onReview={() =>
-                openFocusNav(
-                  onSelectFocus,
-                  "/live-campaigns",
-                  c.kind === "scaling" ? "Scaling" : "Move to working",
-                  `Review ${c.name}`,
-                  "Open Live Campaigns",
-                )
-              }
+      {/* ===== 2) Campaigns We Should Scale Today ===== */}
+      <div className="space-y-2">
+        <GroupHeader
+          color="emerald"
+          icon={TrendingUp}
+          title="Campaigns We Should Scale Today"
+          doneLabel={`${scalingAll.length} to review`}
+          collapsed={collapsed.scale}
+          onToggle={() => toggleGroup("scale")}
+        />
+        {!collapsed.scale &&
+          (scalingAll.length > 0 ? (
+            scalingAll.map((c) => (
+              <ScalingCard
+                key={`${c.kind}:${c.id}`}
+                candidate={c}
+                onReview={() =>
+                  openFocusNav(
+                    onSelectFocus,
+                    "/live-campaigns",
+                    c.kind === "scaling" ? "Scaling" : "Move to working",
+                    `Review ${c.name}`,
+                    "Open Live Campaigns",
+                  )
+                }
+              />
+            ))
+          ) : (
+            <EmptyState
+              color="emerald"
+              message="No campaigns are ready to scale today."
             />
           ))}
-        </div>
-      )}
+      </div>
 
-      {/* 3) Campaigns We Should Optimize Today */}
-      {plan.optimizations.length > 0 && (
-        <div className="space-y-2">
-          <GroupHeader color="amber">Campaigns We Should Optimize Today</GroupHeader>
-          {plan.optimizations.map((g) => (
-            <OptimizationCard
-              key={g.issueType}
-              group={g}
-              canComplete={enabled}
-              done={isDone(optimizationKey(g.issueType))}
-              onToggle={() => toggle(optimizationKey(g.issueType))}
-              onReview={() =>
-                openFocusNav(
-                  onSelectFocus,
-                  "/live-campaigns",
-                  "Review campaigns",
-                  g.label,
-                  "Review campaigns",
-                )
-              }
+      {/* ===== 3) Campaigns We Should Optimize Today ===== */}
+      <div className="space-y-2">
+        <GroupHeader
+          color="amber"
+          icon={Puzzle}
+          title="Campaigns We Should Optimize Today"
+          doneLabel={`${s.optimizationsDone}/${s.optimizationsRequired} done`}
+          collapsed={collapsed.optimize}
+          onToggle={() => toggleGroup("optimize")}
+        />
+        {!collapsed.optimize &&
+          (optimizeAll.length > 0 ? (
+            optimizeAll.map((g) => (
+              <OptimizationCard
+                key={g.issueType}
+                group={g}
+                onReview={() =>
+                  openFocusNav(
+                    onSelectFocus,
+                    "/live-campaigns",
+                    "Review campaigns",
+                    g.label,
+                    "Review campaigns",
+                  )
+                }
+              />
+            ))
+          ) : (
+            <EmptyState
+              color="amber"
+              message="No campaigns need optimization right now."
             />
           ))}
-        </div>
-      )}
+      </div>
+
+      {/* ===== 4) Campaigns We Should STOP ===== */}
+      <div className="space-y-2">
+        <GroupHeader
+          color="amber"
+          icon={OctagonX}
+          title="Campaigns We Should STOP"
+          doneLabel={`${shutdownAll.length} to review`}
+          collapsed={collapsed.stop}
+          onToggle={() => toggleGroup("stop")}
+        />
+        {!collapsed.stop &&
+          (shutdownAll.length > 0 ? (
+            shutdownAll.map((c) => (
+              <ShutdownCard
+                key={c.id}
+                candidate={c}
+                onReview={() =>
+                  openFocusNav(
+                    onSelectFocus,
+                    "/live-campaigns",
+                    "Stop campaign",
+                    `Review ${c.name} to stop`,
+                    "Open Live Campaigns",
+                  )
+                }
+              />
+            ))
+          ) : (
+            <EmptyState
+              color="amber"
+              message="No campaigns need stopping right now."
+            />
+          ))}
+      </div>
     </div>
   );
 }
 
+/** Completion band → color. Green ≥70%, Orange 30–70%, Red <30%. */
+function completionBand(pct: number): "green" | "orange" | "red" {
+  if (pct >= 70) return "green";
+  if (pct >= 30) return "orange";
+  return "red";
+}
+
+/**
+ * One labelled daily-progress bar (Tests / Optimize / Scale). Bar fill color
+ * reflects completion: green ≥70%, orange 30–70%, red <30%. Nothing required
+ * today renders neutral (no work = not "critical").
+ */
+function StatBar({ label, done, total }: { label: string; done: number; total: number }) {
+  const hasWork = total > 0;
+  const pct = hasWork ? Math.min(100, Math.round((done / total) * 100)) : 100;
+  const band = completionBand(pct);
+  const fill = !hasWork
+    ? "bg-slate-300"
+    : band === "green"
+      ? "bg-emerald-500"
+      : band === "orange"
+        ? "bg-amber-500"
+        : "bg-rose-500";
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-16 shrink-0 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+        {label}
+      </span>
+      <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+        <div
+          className={cn("h-full rounded-full transition-all duration-500", fill)}
+          style={{ width: `${hasWork ? pct : 0}%` }}
+        />
+      </div>
+      <span className="w-10 shrink-0 text-right text-[11px] font-bold tabular-nums text-slate-700">
+        {done}/{total}
+      </span>
+    </div>
+  );
+}
+
+const STATUS_META: Record<
+  "green" | "orange" | "red",
+  { label: string; badge: string }
+> = {
+  green: { label: "On track", badge: "bg-emerald-100 text-emerald-700" },
+  orange: { label: "Behind pace", badge: "bg-amber-100 text-amber-800" },
+  red: { label: "Critical", badge: "bg-rose-100 text-rose-700" },
+};
+
+/**
+ * Admin daily control panel — one row per employee with clean daily progress
+ * bars (Tests / Optimize / Scale). No GEO breakdown, no dropdowns: admins see
+ * instantly who is behind today.
+ */
 function TeamPlanBoard({
   workers,
   onSelectFocus,
@@ -550,72 +868,61 @@ function TeamPlanBoard({
   workers: WorkerDailyPlanSummary[];
   onSelectFocus: (item: FocusItem) => void;
 }) {
-  const [openId, setOpenId] = useState<number | null>(workers[0]?.employeeId ?? null);
-
   if (workers.length === 0) {
     return <SuccessState onSelectFocus={onSelectFocus} />;
   }
 
+  // Priority sort: biggest remaining gap (required - done) first, so admins
+  // instantly see who is furthest behind at the top.
+  const ranked = [...workers].sort(
+    (a, b) => remainingGap(b) - remainingGap(a),
+  );
+
   return (
-    <div className="space-y-2">
-      {workers.map((w) => {
-        const open = openId === w.employeeId;
+    <div className="space-y-2.5">
+      {ranked.map((w) => {
+        const sm = w.plan.summary;
+        const status = STATUS_META[completionBand(sm.progressPct)];
         return (
           <div
             key={w.employeeId}
-            className="overflow-hidden rounded-2xl border border-indigo-200/80 bg-white shadow-sm"
+            className="rounded-2xl border border-slate-200 bg-white px-3.5 py-3 shadow-sm"
           >
-            <button
-              type="button"
-              onClick={() => setOpenId(open ? null : w.employeeId)}
-              className="flex w-full items-center gap-2 px-3.5 py-3 text-left hover:bg-indigo-50/40"
-            >
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-indigo-700">
-                <Users className="h-4 w-4" />
+            <div className="mb-2 flex items-center gap-2">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700">
+                <Users className="h-3.5 w-3.5" />
               </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-extrabold text-slate-900">{w.headline}</p>
-                <p className="mt-0.5 text-[11px] tabular-nums text-slate-500">
-                  Tests {w.plan.summary.testsRequired} · Scaling {w.plan.summary.scalingAdvisory} ·
-                  Opts {w.plan.summary.optimizationsRequired}
-                </p>
-              </div>
-              {open ? (
-                <ChevronDown className="h-4 w-4 text-slate-400" />
-              ) : (
-                <ChevronRight className="h-4 w-4 text-slate-400" />
-              )}
-            </button>
-            {open && (
-              <div className="space-y-1.5 border-t border-indigo-100 bg-indigo-50/20 px-3 py-2.5">
-                {w.plan.testingNetworks.map((n) => (
-                  <p key={n.network} className="text-[12px] text-slate-700">
-                    <span className="font-bold">{n.network}</span>: Open {n.todayRequired} test
-                    {n.todayRequired === 1 ? "" : "s"} · Monthly goal {Math.round(n.monthlyGoal)}
-                  </p>
-                ))}
-                {w.plan.scalingCandidates.length + w.plan.moveToWorkingCandidates.length > 0 && (
-                  <p className="text-[12px] text-emerald-800">
-                    Scale review:{" "}
-                    {w.plan.scalingCandidates.length + w.plan.moveToWorkingCandidates.length}{" "}
-                    campaign
-                    {w.plan.scalingCandidates.length + w.plan.moveToWorkingCandidates.length === 1
-                      ? ""
-                      : "s"}
-                  </p>
+              <p className="min-w-0 flex-1 truncate text-sm font-extrabold text-slate-900">
+                {w.employeeName}
+              </p>
+              <span
+                className={cn(
+                  "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+                  status.badge,
                 )}
-                {w.plan.optimizations.map((g) => (
-                  <p key={g.issueType} className="text-[12px] text-amber-900">
-                    {g.label}
-                  </p>
-                ))}
-              </div>
-            )}
+              >
+                {status.label}
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              <StatBar label="Tests" done={sm.testsDone} total={sm.testsRequired} />
+              <StatBar
+                label="Optimize"
+                done={sm.optimizationsDone}
+                total={sm.optimizationsRequired}
+              />
+              <StatBar label="Scale" done={0} total={sm.scalingAdvisory} />
+            </div>
           </div>
         );
       })}
     </div>
   );
+}
+
+/** Total remaining daily work for a worker = required − done across all groups. */
+function remainingGap(w: WorkerDailyPlanSummary): number {
+  return Math.max(0, w.plan.summary.total - w.plan.summary.completed);
 }
 
 export function TodaysFocusCard({
@@ -630,6 +937,9 @@ export function TodaysFocusCard({
   monthKey,
   testingSlices = [],
   teamWorkers,
+  onRefreshCampaigns,
+  campaignsRefreshing = false,
+  lastRefreshedAt = null,
 }: {
   /** Legacy Focus payload — kept for call-site compatibility; board uses plan builders. */
   focus?: unknown;
@@ -649,21 +959,25 @@ export function TodaysFocusCard({
     testingSlices: MetricSliceBundle["testing"];
     campaigns?: OpsCampaignRowLite[];
   }[];
+  onRefreshCampaigns?: () => void;
+  campaignsRefreshing?: boolean;
+  lastRefreshedAt?: Date | null;
 }) {
   void _focus;
   void isWorker;
-  const { rules, workspaceId } = useAlertRules();
+  const { rules } = useAlertRules();
 
   const scopedCampaigns = useMemo(() => {
-    if (employeeId == null) return campaigns;
-    return campaigns.filter((c) => c.employeeId == null || c.employeeId === employeeId);
+    const list = campaigns ?? [];
+    if (employeeId == null) return list;
+    return list.filter((c) => c != null && (c.employeeId == null || c.employeeId === employeeId));
   }, [campaigns, employeeId]);
 
   const workerPlan = useMemo(() => {
     if (isAdminAllEmployees) return null;
     return buildDailyActionPlan({
       monthKey,
-      testingSlices,
+      testingSlices: testingSlices ?? [],
       campaigns: scopedCampaigns,
       rules,
     });
@@ -674,7 +988,7 @@ export function TodaysFocusCard({
     return buildTeamDailyPlans(teamWorkers ?? [], monthKey, new Date(), rules);
   }, [isAdminAllEmployees, teamWorkers, monthKey, rules]);
 
-  const title = isAdminAllEmployees ? "Team Daily Focus" : "What we need to do today";
+  const title = isAdminAllEmployees ? "Team Daily Focus" : "Daily Board";
   const subtitle = isAdminAllEmployees
     ? `${teamPlans.length} worker${teamPlans.length === 1 ? "" : "s"} need action today`
     : employeeName
@@ -721,8 +1035,10 @@ export function TodaysFocusCard({
           <WorkerPlanBoard
             plan={workerPlan}
             onSelectFocus={onSelectFocus}
-            workspaceId={workspaceId ?? null}
-            employeeId={employeeId}
+            onRefreshCampaigns={onRefreshCampaigns ?? (() => {})}
+            campaignsRefreshing={campaignsRefreshing}
+            lastRefreshedAt={lastRefreshedAt}
+            campaigns={scopedCampaigns}
           />
         ) : (
           <SuccessState onSelectFocus={onSelectFocus} />

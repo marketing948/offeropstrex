@@ -7,6 +7,9 @@ import assert from "node:assert/strict";
 import {
   allocateTodayRequiredAcrossGeos,
   buildDailyActionPlan,
+  buildScalingCandidates,
+  buildShutdownCandidates,
+  buildOptimizationGroups,
   buildTeamDailyPlans,
   buildTestingNetworkPlans,
   computeNetworkTodayRequired,
@@ -18,7 +21,7 @@ import {
   evaluateWorkingDayPace,
   remainingWorkingDaysInMonth,
 } from "./ops-v2-metrics.ts";
-import { DEFAULT_ALERT_RULES } from "@workspace/alert-rules";
+import { DEFAULT_ALERT_RULES, evaluateCampaign } from "@workspace/alert-rules";
 
 const NOW = new Date("2026-07-08T12:00:00");
 const MONTH = "2026-07";
@@ -549,5 +552,293 @@ describe("buildTeamDailyPlans", () => {
     assert.ok(sara.plan.testingNetworks.length >= 1);
     assert.match(kida.headline, /Kida/);
     assert.ok(kida.plan.optimizations.some((g) => g.issueType === "missing_offer_count"));
+  });
+
+  test("each worker summary exposes daily bar fields (Tests / Optimize / Scale)", () => {
+    const team = buildTeamDailyPlans(
+      [
+        {
+          employeeId: 1,
+          employeeName: "Sara",
+          testingSlices: [{ network: "SHOPLOOKS PAP", geo: "FR", current: 2, target: 40 }],
+          campaigns: [],
+        },
+        {
+          employeeId: 2,
+          employeeName: "Kida",
+          testingSlices: [],
+          campaigns: [
+            { id: 9, status: "live", campaignPurpose: "working", offerCount: null },
+            { id: 10, status: "live", campaignPurpose: "working", offerCount: null },
+          ],
+        },
+      ],
+      MONTH,
+      NOW,
+    );
+    for (const w of team) {
+      const sm = w.plan.summary;
+      // Bars render done/total for all three groups — required must be >= done >= 0.
+      assert.ok(sm.testsRequired >= sm.testsDone && sm.testsDone >= 0);
+      assert.ok(sm.optimizationsRequired >= sm.optimizationsDone && sm.optimizationsDone >= 0);
+      assert.ok(sm.scalingAdvisory >= 0);
+      // Only workers with real work today are surfaced to admins.
+      assert.ok(sm.total > 0);
+    }
+  });
+});
+
+describe("alert-rules engine: winner / shutdown / traffic / priority", () => {
+  const winnerCampaign = {
+    id: 100,
+    status: "live",
+    campaignPurpose: "working",
+    offerCount: 2,
+    revenue: 500,
+    cost: 100,
+    roi: 60,
+    conversions: 8,
+    clicks: 100,
+    liveStartedAt: "2026-07-04T00:00:00", // 4 days live
+    affiliateNetworkName: "N",
+    geo: "US",
+  };
+
+  test("winning rule flags a WINNER and surfaces it in Scale", () => {
+    const { scaling } = buildScalingCandidates([winnerCampaign], { now: NOW });
+    const winner = scaling.find((c) => c.id === 100);
+    assert.ok(winner);
+    assert.equal(winner!.isWinner, true);
+  });
+
+  test("winner shows in Scale even if it misses the scale bar", () => {
+    // Raise scale bar so it would NOT qualify by scale rule, but winning still does.
+    const rules = {
+      ...DEFAULT_ALERT_RULES,
+      scaling: { ...DEFAULT_ALERT_RULES.scaling, minRevenueForScale: 100_000 },
+    };
+    const { scaling } = buildScalingCandidates([winnerCampaign], { now: NOW, rules });
+    assert.ok(scaling.some((c) => c.id === 100 && c.isWinner));
+  });
+
+  test("changing the winning rule updates who is a winner (no hardcoded threshold)", () => {
+    const strict = {
+      ...DEFAULT_ALERT_RULES,
+      winning: { minConversions: 50, minRevenue: 1_000, minROI: 500 },
+    };
+    const { scaling } = buildScalingCandidates([winnerCampaign], { now: NOW, rules: strict });
+    const c = scaling.find((x) => x.id === 100);
+    // May still be a scale candidate, but must NOT be flagged winner under strict rule.
+    assert.ok(!c || c.isWinner === false);
+  });
+
+  test("shutdown rule surfaces long-running low-performance campaigns", () => {
+    const dead = {
+      id: 101,
+      status: "live",
+      campaignPurpose: "working",
+      offerCount: 2,
+      revenue: 0,
+      cost: 80,
+      roi: -100,
+      conversions: 0,
+      clicks: 500,
+      liveStartedAt: "2026-06-20T00:00:00", // long live
+      affiliateNetworkName: "N",
+      geo: "US",
+    };
+    const stops = buildShutdownCandidates([dead], { now: NOW });
+    assert.equal(stops.length, 1);
+    assert.equal(stops[0]!.id, 101);
+  });
+
+  test("shutdown is settings-driven: raising minDaysLive removes it", () => {
+    const dead = {
+      id: 102,
+      status: "live",
+      campaignPurpose: "working",
+      offerCount: 2,
+      revenue: 0,
+      cost: 50,
+      roi: -100,
+      conversions: 0,
+      liveStartedAt: "2026-07-01T00:00:00", // 7 days
+      affiliateNetworkName: "N",
+      geo: "US",
+    };
+    const base = buildShutdownCandidates([dead], { now: NOW });
+    assert.equal(base.length, 1);
+    const strict = {
+      ...DEFAULT_ALERT_RULES,
+      shutdown: { ...DEFAULT_ALERT_RULES.shutdown, minDaysLive: 60 },
+    };
+    assert.equal(buildShutdownCandidates([dead], { now: NOW, rules: strict }).length, 0);
+  });
+
+  test("winner is never a shutdown candidate", () => {
+    const stops = buildShutdownCandidates([winnerCampaign], { now: NOW });
+    assert.equal(stops.length, 0);
+  });
+
+  test("traffic rule surfaces abnormal (excess) visits-per-offer as optimize", () => {
+    const rules = {
+      ...DEFAULT_ALERT_RULES,
+      traffic: { ...DEFAULT_ALERT_RULES.traffic, maxExpectedVisitsPerOffer: 1_000 },
+    };
+    const flooded = {
+      id: 103,
+      status: "live",
+      campaignPurpose: "working",
+      offerCount: 1,
+      // VPO 20000: ratio (>= target 15000) clears off/behind bands, then exceeds
+      // maxExpectedVisitsPerOffer 1000 → abnormal traffic.
+      clicks: 20_000,
+      revenue: 10,
+      cost: 5,
+      roi: 2,
+      affiliateNetworkName: "N",
+      geo: "US",
+    };
+    const groups = buildOptimizationGroups([flooded], { now: NOW, rules });
+    assert.ok(groups.some((g) => g.issueType === "abnormal_traffic"));
+  });
+
+  test("scale priority: winners first, then highest profit", () => {
+    const midProfit = {
+      id: 201,
+      status: "live",
+      campaignPurpose: "working",
+      offerCount: 2,
+      revenue: 300,
+      cost: 100,
+      roi: 30,
+      conversions: 0, // not a winner (0 conv)
+      liveStartedAt: "2026-07-04T00:00:00",
+      affiliateNetworkName: "N",
+      geo: "US",
+    };
+    const bigProfit = {
+      id: 202,
+      status: "live",
+      campaignPurpose: "working",
+      offerCount: 2,
+      revenue: 2_000,
+      cost: 100,
+      roi: 90,
+      conversions: 0, // not a winner (0 conv)
+      liveStartedAt: "2026-07-04T00:00:00",
+      affiliateNetworkName: "N",
+      geo: "US",
+    };
+    const { scaling } = buildScalingCandidates([midProfit, bigProfit, winnerCampaign], {
+      now: NOW,
+    });
+    assert.equal(scaling[0]!.id, 100); // winner first
+    // Among non-winners, bigger profit ranks above smaller.
+    const nonWinners = scaling.filter((c) => !c.isWinner).map((c) => c.id);
+    assert.deepEqual(nonWinners, [202, 201]);
+  });
+
+  test("STEP 9 validation: legacy board classification matches the evaluator for 60 campaigns", () => {
+    // Deterministic synthetic matrix covering purpose/status/metrics/age.
+    const purposes = ["working", "scaling", "testing"];
+    const statuses = ["live", "paused"];
+    const money = [
+      { revenue: 0, cost: 80 },
+      { revenue: 150, cost: 50 },
+      { revenue: 2_000, cost: 100 },
+    ];
+    const rois = [-30, 0, 25];
+    const offers = [null, 2];
+    const ages = [1, 5, 20];
+
+    const campaigns: any[] = [];
+    let id = 1;
+    for (const purpose of purposes)
+      for (const status of statuses)
+        for (const m of money)
+          for (const roi of rois)
+            for (const offerCount of offers)
+              for (const age of ages) {
+                campaigns.push({
+                  id: id++,
+                  status,
+                  campaignPurpose: purpose,
+                  offerCount,
+                  revenue: m.revenue,
+                  cost: m.cost,
+                  roi,
+                  conversions: m.revenue > 500 ? 5 : 0,
+                  clicks: 30_000,
+                  liveStartedAt: new Date(NOW.getTime() - age * 86_400_000).toISOString(),
+                  affiliateNetworkName: "N",
+                  geo: "US",
+                });
+              }
+    assert.ok(campaigns.length >= 60);
+
+    let compared = 0;
+    let mismatches = 0;
+    for (const c of campaigns) {
+      // Legacy (flag off) board membership, per-campaign.
+      const { scaling } = buildScalingCandidates([c], { now: NOW });
+      const optGroups = buildOptimizationGroups([c], { now: NOW });
+      const stops = buildShutdownCandidates([c], { now: NOW });
+      const legacyScale = scaling.some((s) => s.id === c.id);
+      const legacyWinner = scaling.some((s) => s.id === c.id && s.isWinner);
+      const legacyOptimize = optGroups.some((g) => g.campaigns.some((x) => x.id === c.id));
+      const legacyShutdown = stops.some((s) => s.id === c.id);
+
+      // New engine decision.
+      const out = evaluateCampaign(
+        {
+          purpose: c.campaignPurpose,
+          status: c.status,
+          liveStartedAt: c.liveStartedAt,
+          createdAt: c.createdAt,
+        },
+        {
+          revenue: c.revenue,
+          cost: c.cost,
+          roi: c.roi,
+          conversions: c.conversions,
+          clicks: c.clicks,
+          offerCount: c.offerCount,
+        },
+        DEFAULT_ALERT_RULES,
+        NOW,
+      );
+
+      compared++;
+      if ((out.isScaling || out.isWinner) !== legacyScale) mismatches++;
+      if (out.isWinner !== legacyWinner) mismatches++;
+      if (out.isOptimize !== legacyOptimize) mismatches++;
+      if (out.isShutdown !== legacyShutdown) mismatches++;
+    }
+    assert.ok(compared >= 60);
+    assert.equal(mismatches, 0, `legacy vs evaluator diverged on ${mismatches} decisions`);
+  });
+
+  test("plan exposes shutdownCandidates and summary.shutdownAdvisory", () => {
+    const dead = {
+      id: 300,
+      status: "live",
+      campaignPurpose: "working",
+      offerCount: 2,
+      revenue: 0,
+      cost: 30,
+      conversions: 0,
+      liveStartedAt: "2026-06-20T00:00:00",
+      affiliateNetworkName: "N",
+      geo: "US",
+    };
+    const plan = buildDailyActionPlan({
+      monthKey: MONTH,
+      now: NOW,
+      testingSlices: [],
+      campaigns: [dead],
+    });
+    assert.equal(plan.shutdownCandidates.length, 1);
+    assert.equal(plan.summary.shutdownAdvisory, 1);
   });
 });

@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { eq, and, ne } from "drizzle-orm";
-import { db, todoTasksTable, employeesTable, testingBatchesTable, employeeWorkspaceAssignmentsTable } from "@workspace/db";
+import { db, todoTasksTable, employeesTable, testingBatchesTable, campaignsTable, employeeWorkspaceAssignmentsTable } from "@workspace/db";
 import { z } from "zod/v4";
 import {
   CreateTodoTaskBody,
@@ -433,6 +433,7 @@ router.patch("/todo-tasks/:id", async (req, res): Promise<void> => {
 const createVoluumCampaignSchema = z.object({
   voluumCampaignId: z.string().trim().min(1).max(256),
   campaignUrl: z.string().trim().min(1),
+  campaignName: z.string().trim().min(1).max(256).optional(),
 });
 const takeCampaignLiveSchema = z.object({
   trafficSourceCampaignId: z.string().trim().min(1),
@@ -546,7 +547,27 @@ router.post("/todo-tasks/:id/complete", async (req, res): Promise<void> => {
       )
       .limit(1);
     const batchLabel = batch?.batchName?.trim() || `Batch #${task.relatedBatchId}`;
-    const campaignDisplayName = composeCampaignDisplayName(batchLabel, platformFromType);
+
+    const [existingCampaign] = await db
+      .select({
+        campaignName: campaignsTable.campaignName,
+        voluumCampaignName: campaignsTable.voluumCampaignName,
+      })
+      .from(campaignsTable)
+      .where(
+        and(
+          eq(campaignsTable.workspaceId, task.workspaceId),
+          eq(campaignsTable.batchId, task.relatedBatchId),
+          eq(campaignsTable.platform, platformFromType),
+        ),
+      )
+      .limit(1);
+
+    const campaignDisplayName =
+      parsed.data.campaignName?.trim() ||
+      existingCampaign?.campaignName?.trim() ||
+      existingCampaign?.voluumCampaignName?.trim() ||
+      composeCampaignDisplayName(batchLabel, platformFromType);
     completion = {
       kind: "create_voluum_campaign",
       platform: platformFromType,

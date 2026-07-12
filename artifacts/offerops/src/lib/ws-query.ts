@@ -18,6 +18,7 @@ export type PartialQueryOpts = {
   enabled?: boolean;
   refetchInterval?: number | false;
   staleTime?: number;
+  refetchOnWindowFocus?: boolean;
 };
 
 /**

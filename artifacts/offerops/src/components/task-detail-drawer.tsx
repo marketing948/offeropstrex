@@ -47,6 +47,12 @@ import { useWorkspace } from "@/lib/workspace-context";
 import { useAuth } from "@/lib/auth";
 import { refetchWorkerRankAndGoals } from "@/lib/performance-engine/use-worker-monthly-goals";
 import { wsQueryOpts } from "@/lib/ws-query";
+import {
+  invalidateWorkspaceCampaigns,
+  markBatchCampaignsLiveInCache,
+  syncCampaignsAfterMutation,
+  type CampaignListRow,
+} from "@/lib/campaign-query-cache";
 import { useToast } from "@/hooks/use-toast";
 import { authedJson } from "@/lib/api-fetch";
 import {
@@ -125,7 +131,7 @@ export function TaskDetailDrawer({
     if (!activeWorkspaceId) return;
     qc.invalidateQueries({ queryKey: getListTodoTasksQueryKey({ workspace_id: activeWorkspaceId }) });
     if (task?.relatedBatchId) {
-      qc.invalidateQueries({ queryKey: getListCampaignsQueryKey({ workspace_id: activeWorkspaceId, batch_id: task.relatedBatchId }) });
+      invalidateWorkspaceCampaigns(qc, activeWorkspaceId, task.relatedBatchId);
       qc.invalidateQueries({ queryKey: getListBatchResultsQueryKey({ workspace_id: activeWorkspaceId, batch_id: task.relatedBatchId }) });
       qc.invalidateQueries({ queryKey: getGetTestingBatchQueryKey(task.relatedBatchId) });
     }
@@ -400,7 +406,7 @@ function CampaignForm({
     }
     try {
       if (existing) {
-        await update.mutateAsync({
+        const updated = await update.mutateAsync({
           id: existing.id,
           data: {
             campaignName: name.trim(),
@@ -408,8 +414,9 @@ function CampaignForm({
             trafficSourceId: tsId ? Number(tsId) : null,
           },
         });
+        syncCampaignsAfterMutation(qc, activeWorkspaceId, updated as CampaignListRow, batchId);
       } else {
-        await create.mutateAsync({
+        const created = await create.mutateAsync({
           data: {
             workspaceId: activeWorkspaceId,
             batchId,
@@ -420,9 +427,14 @@ function CampaignForm({
             status: "draft",
           },
         });
+        syncCampaignsAfterMutation(
+          qc,
+          activeWorkspaceId,
+          { ...created, campaignPurpose: "testing" },
+          batchId,
+        );
       }
-      qc.invalidateQueries({ queryKey: getListCampaignsQueryKey({ workspace_id: activeWorkspaceId, batch_id: batchId }) });
-      toast({ title: existing ? "Campaign updated" : "Campaign created" });
+      toast({ title: existing ? "Campaign updated" : "Campaign created ✅" });
       await onDone();
     } catch (e: unknown) {
       toast({
@@ -545,9 +557,11 @@ function GoLiveForm({ task, onDone, onCancel }: { task: TodoTask; onDone: () => 
       // is idempotent (campaigns already live -> no-op).
       await goLive.mutateAsync({ id: batchId });
       if (activeWorkspaceId) {
-        qc.invalidateQueries({ queryKey: getListCampaignsQueryKey({ workspace_id: activeWorkspaceId, batch_id: batchId }) });
+        markBatchCampaignsLiveInCache(qc, activeWorkspaceId, batchId);
+        invalidateWorkspaceCampaigns(qc, activeWorkspaceId, batchId);
         qc.invalidateQueries({ queryKey: getGetTestingBatchQueryKey(batchId) });
       }
+      toast({ title: "Campaigns are live ✅" });
       await onDone();
     } catch (e: unknown) {
       toast({

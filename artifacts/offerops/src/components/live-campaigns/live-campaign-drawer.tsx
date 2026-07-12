@@ -19,7 +19,6 @@ import {
   deriveTrafficPacing,
   metricTone,
   metricToneClass,
-  roiPercent,
   summaryHealthBadgeClass,
 } from "@/components/live-campaigns/live-campaign-health";
 import {
@@ -43,7 +42,8 @@ import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { authedJson } from "@/lib/api-fetch";
-import { isScalingOpportunity } from "@/components/operations-hub/scaling-opportunity";
+import { useWorkspace } from "@/lib/workspace-context";
+import { resolveDisplayRoiPercent, profitFromCostRevenue } from "@/lib/campaign-metrics";
 
 function fmtMoney(v: string | number | null | undefined): string {
   if (v == null || v === "") return "—";
@@ -67,7 +67,8 @@ function fmtDate(iso: string | null): string {
 }
 
 function toReviewInput(c: MonitoringCampaign): ReviewCampaignInput {
-  const roiNum = Number(c.roi ?? 0);
+  const cost = Number(c.cost ?? 0);
+  const revenue = Number(c.revenue ?? 0);
   return {
     id: c.id,
     campaignName: c.campaignName,
@@ -81,9 +82,10 @@ function toReviewInput(c: MonitoringCampaign): ReviewCampaignInput {
     liveStartedAt: c.liveStartedAt,
     clicks: Number(c.clicks ?? 0),
     conversions: Number(c.conversions ?? 0),
-    revenue: Number(c.revenue ?? 0),
-    cost: Number(c.cost ?? 0),
-    roi: Math.abs(roiNum) <= 1 ? roiNum * 100 : roiNum,
+    revenue,
+    cost,
+    roi: resolveDisplayRoiPercent(cost, revenue, c.roi) ?? 0,
+    voluumCampaignId: c.voluumCampaignId,
   };
 }
 
@@ -107,6 +109,8 @@ export function LiveCampaignDrawer({
   onImportCsv,
   onCloseCampaign,
   onCampaignUpdated,
+  isReviewedToday = false,
+  onMarkedReviewed,
 }: {
   campaign: MonitoringCampaign | null;
   rangeMetrics: DailyMetricRow | undefined;
@@ -118,10 +122,14 @@ export function LiveCampaignDrawer({
   onImportCsv: () => void;
   onCloseCampaign: (c: { id: number; name: string }) => void;
   onCampaignUpdated?: () => void;
+  isReviewedToday?: boolean;
+  onMarkedReviewed?: () => void;
 }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const { activeWorkspaceId } = useWorkspace();
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [markingReviewed, setMarkingReviewed] = useState(false);
   const [offerCountDraft, setOfferCountDraft] = useState(offerCount > 0 ? String(offerCount) : "");
   const [savingOfferCount, setSavingOfferCount] = useState(false);
 
@@ -140,17 +148,24 @@ export function LiveCampaignDrawer({
           conversions: rangeMetrics.conversions,
           cost: Number(rangeMetrics.cost),
           revenue: Number(rangeMetrics.revenue),
-          profit: Number(rangeMetrics.profit),
-          roi: roiPercent(rangeMetrics.roi),
+          profit: profitFromCostRevenue(rangeMetrics.cost, rangeMetrics.revenue),
+          roi: resolveDisplayRoiPercent(
+            rangeMetrics.cost,
+            rangeMetrics.revenue,
+            rangeMetrics.roi,
+          ),
         }
       : null;
   const health = deriveSummaryHealth(range, reviewInput, offerCount, rules);
   const pacing = deriveTrafficPacing(Number(campaign.clicks ?? 0), monitoring.targetPct, offerCount);
-  const lifetimeRoi = roiPercent(campaign.roi);
+  const lifetimeRoi = resolveDisplayRoiPercent(
+    campaign.cost,
+    campaign.revenue,
+    campaign.roi,
+  );
   const visitsPerOffer = offerCount > 0 ? Number(campaign.clicks ?? 0) / offerCount : null;
   const rangeProfit = range?.profit ?? null;
-  const lifetimeProfit =
-    Number(campaign.revenue ?? 0) - Number(campaign.cost ?? 0);
+  const lifetimeProfit = profitFromCostRevenue(campaign.cost, campaign.revenue);
   const scaling = isScalingOpportunity({
     campaignPurpose: campaign.campaignPurpose,
     status: campaign.status,
@@ -199,6 +214,28 @@ export function LiveCampaignDrawer({
     }
   }
 
+  async function markCampaignReviewed() {
+    if (!campaign || !activeWorkspaceId) return;
+    setMarkingReviewed(true);
+    try {
+      await authedJson(`/api/campaigns/${campaign.id}/mark-reviewed`, {
+        method: "POST",
+        body: JSON.stringify({ workspaceId: activeWorkspaceId }),
+      });
+      toast({ title: "Campaign marked as reviewed" });
+      onMarkedReviewed?.();
+      onCampaignUpdated?.();
+    } catch (e: unknown) {
+      toast({
+        title: "Could not mark reviewed",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    } finally {
+      setMarkingReviewed(false);
+    }
+  }
+
   return (
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
       <SheetContent side="right" className="flex w-full flex-col overflow-y-auto sm:max-w-lg">
@@ -223,6 +260,11 @@ export function LiveCampaignDrawer({
               <Badge variant="outline" className="text-[10px] capitalize">
                 {campaign.status.replace(/_/g, " ")}
               </Badge>
+              {isReviewedToday && (
+                <Badge className="border-emerald-300 bg-emerald-100 text-[10px] font-bold text-emerald-800">
+                  Reviewed today
+                </Badge>
+              )}
             </div>
           </SheetDescription>
         </SheetHeader>
@@ -394,6 +436,15 @@ export function LiveCampaignDrawer({
         <section className="mt-6 space-y-2 border-t border-slate-200 pt-4">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Actions</h3>
           <div className="flex flex-col gap-2">
+            <Button
+              variant={isReviewedToday ? "secondary" : "default"}
+              className="justify-start"
+              disabled={markingReviewed || isReviewedToday}
+              onClick={() => void markCampaignReviewed()}
+            >
+              <ClipboardCheck className="mr-2 h-4 w-4" />
+              {isReviewedToday ? "Campaign reviewed" : "Mark campaign reviewed"}
+            </Button>
             <Button
               variant="outline"
               className="justify-start"

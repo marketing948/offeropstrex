@@ -255,6 +255,55 @@ export function countTestingCreatedToday(
   };
 }
 
+/** Testing campaigns created today for a worker (real completion source). */
+export function getTestingCampaignsCreatedToday(
+  campaigns: MissionCampaignRow[] | OpsCampaignRowLite[],
+  opts: { employeeId?: number | null; now?: Date } = {},
+): MissionCampaignRow[] {
+  const now = opts.now ?? new Date();
+  return toMissionCampaignRows(campaigns).filter((c) => {
+    if (c.campaignPurpose !== "testing") return false;
+    if (
+      opts.employeeId != null &&
+      c.employeeId != null &&
+      c.employeeId !== opts.employeeId
+    ) {
+      return false;
+    }
+    const stamp = c.createdAt || c.liveStartedAt;
+    return Boolean(stamp && isSameLocalDay(stamp, now));
+  });
+}
+
+/** At least one testing campaign created today for this network + GEO. */
+export function isGeoCompletedToday(
+  campaigns: MissionCampaignRow[] | OpsCampaignRowLite[],
+  network: string,
+  geo: string,
+  opts: { employeeId?: number | null; now?: Date } = {},
+): boolean {
+  return (
+    countTestingCreatedToday(campaigns, { ...opts, network, geo }).count > 0
+  );
+}
+
+/** Per-network count of GEOs with at least one testing campaign created today. */
+export function countCompletedGeosTodayFromCampaigns(
+  plan: { testingNetworks: { network: string; geos: { geo: string; todayRequired: number }[] }[] },
+  campaigns: MissionCampaignRow[] | OpsCampaignRowLite[],
+  opts: { employeeId?: number | null; now?: Date } = {},
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const net of plan.testingNetworks) {
+    result[net.network] = net.geos.filter(
+      (g) =>
+        g.todayRequired > 0 &&
+        isGeoCompletedToday(campaigns, net.network, g.geo, opts),
+    ).length;
+  }
+  return result;
+}
+
 /**
  * Working mission completion: only purpose === working (or scaling live launches),
  * not testing. Prefer createdAt today; else liveStartedAt today; else updatedAt today

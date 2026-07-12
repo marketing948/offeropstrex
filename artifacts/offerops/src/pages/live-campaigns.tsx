@@ -24,7 +24,9 @@ import {
   getListOffersQueryKey,
 } from "@workspace/api-client-react";
 import { wsQueryOpts } from "@/lib/ws-query";
+import { resolveCampaignOfferCount } from "@/components/live-campaigns/live-campaign-health";
 import { useAlertRules } from "@/hooks/use-alert-rules";
+import { persistOfferCountBackfill } from "@/lib/offer-count-persist";
 import { invalidateGoalSurfaces } from "@/lib/performance-engine/invalidate-goal-surfaces";
 import type { MonitoringCampaign } from "@/components/live-campaigns/live-campaigns-monitoring-table";
 import { LiveCampaignsSummaryTable } from "@/components/live-campaigns/live-campaigns-summary-table";
@@ -179,6 +181,17 @@ export default function LiveCampaigns() {
   const campaignItems = response?.items;
   const campaigns = campaignItems ?? [];
   const pagination = response?.pagination;
+
+  const { data: reviewedTodayData } = useQuery<{ items: Array<{ campaignId: number }> }>({
+    queryKey: ["campaign-reviewed-today", activeWorkspaceId],
+    enabled: !!activeWorkspaceId,
+    queryFn: () =>
+      authedJson(`/api/campaign-review/reviewed-today?workspace_id=${activeWorkspaceId}`),
+  });
+  const reviewedCampaignIds = useMemo(
+    () => new Set((reviewedTodayData?.items ?? []).map((i) => i.campaignId)),
+    [reviewedTodayData?.items],
+  );
   const loadErrorMessage = operationalErrorMessage(
     error,
     "Couldn't load live campaigns.",
@@ -226,6 +239,18 @@ export default function LiveCampaigns() {
     }
     return m;
   }, [offers]);
+
+  const onOfferCountBackfill = useMemo(
+    () => (campaignId: number, offerCount: number) => {
+      persistOfferCountBackfill(campaignId, offerCount, async (id, count) => {
+        await authedJson(`/api/campaigns/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ offerCount: count }),
+        });
+      });
+    },
+    [],
+  );
 
   const trafficSourceOptions = useMemo(
     () =>
@@ -285,9 +310,12 @@ export default function LiveCampaigns() {
     "Some filter options could not be loaded.",
   );
 
-  const selectedOfferCount =
-    selectedCampaign?.offerCount
-      ?? (selectedCampaign?.batchId != null ? offersPerBatch.get(selectedCampaign.batchId) ?? 0 : 0);
+  const selectedOfferCount = selectedCampaign
+    ? resolveCampaignOfferCount(selectedCampaign, {
+        offersPerBatch,
+        onBackfillPersist: onOfferCountBackfill,
+      })
+    : 1;
 
   return (
     <div className="space-y-5">
@@ -423,6 +451,7 @@ export default function LiveCampaigns() {
         campaigns={filtered}
         metricsByCampaignId={metricsByCampaignId}
         offersPerBatch={offersPerBatch}
+        onOfferCountBackfill={onOfferCountBackfill}
         performanceRangeLabel={performanceRangeLabel}
         rules={rules}
         isLoading={isLoading}
@@ -432,6 +461,7 @@ export default function LiveCampaigns() {
         onRetry={() => void refetch()}
         retrying={isFetching}
         onSelectCampaign={setSelectedCampaign}
+        reviewedCampaignIds={reviewedCampaignIds}
       />
 
       <LiveCampaignDrawer
@@ -447,9 +477,14 @@ export default function LiveCampaigns() {
           setImportOpen(true);
         }}
         onCloseCampaign={setCloseTarget}
+        isReviewedToday={selectedCampaign != null && reviewedCampaignIds.has(selectedCampaign.id)}
+        onMarkedReviewed={() => {
+          void queryClient.invalidateQueries({ queryKey: ["campaign-reviewed-today", activeWorkspaceId] });
+        }}
         onCampaignUpdated={() => {
           void queryClient.invalidateQueries({ queryKey: ["live-campaigns"] });
           void queryClient.invalidateQueries({ queryKey: ["live-campaign-filter-options"] });
+          void queryClient.invalidateQueries({ queryKey: ["campaign-reviewed-today", activeWorkspaceId] });
           if (activeWorkspaceId) invalidateGoalSurfaces(queryClient, activeWorkspaceId);
         }}
       />
