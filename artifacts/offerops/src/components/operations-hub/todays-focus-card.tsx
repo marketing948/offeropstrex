@@ -10,7 +10,7 @@
  * "Done for today" (worker + date scoped convenience layer, not campaign truth).
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { FocusItem } from "@/components/operations-hub/ops-hub-drilldown-data";
 import type {
@@ -37,7 +37,7 @@ import {
   isTestingNetworkVisibleFromPlan,
   selectFocusTestingNetworksFromPlan,
   selectNextActionFromPlan,
-  selectTopGeosFromPlan,
+  selectRotatingGeosFromPlan,
   testingGeoKey,
 } from "@/components/operations-hub/daily-mission-completion";
 import {
@@ -55,7 +55,7 @@ import {
   Trophy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { geoFlagLabel } from "@/lib/geo-flag";
+import { GeoCodeLabel } from "@/components/geo-code-label";
 
 type ColorKey = "sky" | "emerald" | "amber";
 
@@ -103,7 +103,7 @@ function GeoLine({
             completed && "text-emerald-800",
           )}
         >
-          {geoFlagLabel(geo.geo)} —{" "}
+          <GeoCodeLabel geo={geo.geo} className="mr-1.5" />—{" "}
           {completed
             ? "Done today ✅"
             : `Open ${geo.todayRequired} test${geo.todayRequired === 1 ? "" : "s"}`}
@@ -540,19 +540,39 @@ function WorkerPlanBoard({
   plan,
   onSelectFocus,
   onRefreshCampaigns,
-  campaignsRefreshing = false,
   campaigns = [],
   lastRefreshedAt = null,
 }: {
   plan: DailyActionPlan;
   onSelectFocus: (item: FocusItem) => void;
-  onRefreshCampaigns: () => void;
-  campaignsRefreshing?: boolean;
+  onRefreshCampaigns: () => void | Promise<void>;
   campaigns?: import("./ops-goal-focus.ts").OpsCampaignRowLite[];
   lastRefreshedAt?: Date | null;
 }) {
   const geoContext = useMemo(() => ({ campaigns }), [campaigns]);
   const s = useMemo(() => effectiveSummaryFromPlan(plan), [plan]);
+
+  // Per-network suggestion rotation + independent refresh state. Each network's
+  // Refresh advances only its own window and spins only its own button — no
+  // shared loading flag, no stale closure over the first network.
+  const [refreshCounts, setRefreshCounts] = useState<Record<string, number>>({});
+  const [refreshingNetwork, setRefreshingNetwork] = useState<string | null>(null);
+
+  const refreshNetwork = useCallback(
+    async (networkKey: string) => {
+      setRefreshCounts((prev) => ({
+        ...prev,
+        [networkKey]: (prev[networkKey] ?? 0) + 1,
+      }));
+      setRefreshingNetwork(networkKey);
+      try {
+        await Promise.resolve(onRefreshCampaigns());
+      } finally {
+        setRefreshingNetwork((cur) => (cur === networkKey ? null : cur));
+      }
+    },
+    [onRefreshCampaigns],
+  );
 
   const visibleTestingNetworks = useMemo(
     () =>
@@ -560,11 +580,16 @@ function WorkerPlanBoard({
         .filter((net) => isTestingNetworkVisibleFromPlan(net))
         .map((net) => ({
           net,
-          topGeos: selectTopGeosFromPlan(net, 3, geoContext),
+          topGeos: selectRotatingGeosFromPlan(
+            net,
+            3,
+            refreshCounts[net.network] ?? 0,
+            geoContext,
+          ),
           doneToday: countCompletedGeosTodayFromPlan(net),
           targetMet: isTestingNetworkDailyTargetMetFromPlan(net),
         })),
-    [plan.testingNetworks, geoContext],
+    [plan.testingNetworks, geoContext, refreshCounts],
   );
 
   const scalingAll = useMemo(
@@ -681,8 +706,8 @@ function WorkerPlanBoard({
                 topGeos={topGeos}
                 doneToday={doneToday}
                 targetMet={targetMet}
-                onRefresh={onRefreshCampaigns}
-                isRefreshing={campaignsRefreshing}
+                onRefresh={() => void refreshNetwork(net.network)}
+                isRefreshing={refreshingNetwork === net.network}
                 isPrimaryGeo={(geo) => primaryGeoKey === testingGeoKey(net.network, geo)}
               />
             ))
@@ -938,7 +963,6 @@ export function TodaysFocusCard({
   testingSlices = [],
   teamWorkers,
   onRefreshCampaigns,
-  campaignsRefreshing = false,
   lastRefreshedAt = null,
 }: {
   /** Legacy Focus payload — kept for call-site compatibility; board uses plan builders. */
@@ -959,8 +983,7 @@ export function TodaysFocusCard({
     testingSlices: MetricSliceBundle["testing"];
     campaigns?: OpsCampaignRowLite[];
   }[];
-  onRefreshCampaigns?: () => void;
-  campaignsRefreshing?: boolean;
+  onRefreshCampaigns?: () => void | Promise<void>;
   lastRefreshedAt?: Date | null;
 }) {
   void _focus;
@@ -1036,7 +1059,6 @@ export function TodaysFocusCard({
             plan={workerPlan}
             onSelectFocus={onSelectFocus}
             onRefreshCampaigns={onRefreshCampaigns ?? (() => {})}
-            campaignsRefreshing={campaignsRefreshing}
             lastRefreshedAt={lastRefreshedAt}
             campaigns={scopedCampaigns}
           />

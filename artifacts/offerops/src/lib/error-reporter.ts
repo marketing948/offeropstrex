@@ -1,5 +1,9 @@
 export type ClientErrorContext = {
-  source: "error-boundary" | "window-error" | "window-unhandledrejection";
+  source:
+    | "error-boundary"
+    | "drawer-error-boundary"
+    | "window-error"
+    | "window-unhandledrejection";
   requestId?: string | null;
 };
 

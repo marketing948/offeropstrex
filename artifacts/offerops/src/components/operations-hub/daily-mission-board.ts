@@ -12,6 +12,7 @@ import type {
   OpsCampaignRowLite,
   TodaysFocus,
 } from "./ops-goal-focus.ts";
+import { normalizeGeoCode } from "../../lib/geo-flag.ts";
 
 /** Narrow typed row for Mission Board completion math (Option B adapter). */
 export type MissionCampaignRow = {
@@ -167,15 +168,32 @@ export function missionCategoryLabel(cat: MissionCategory): string {
   return "Admin";
 }
 
+/** Canonical affiliate-network key: trimmed, lowercased, whitespace-collapsed. */
+export function canonicalNetworkKey(name: string | null | undefined): string {
+  return (name ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Canonical GEO key. Prefers the 2-letter ISO code (so `us`, `US`, `US US`,
+ * `🇺🇸 US`, and whitespace all resolve to `US`); falls back to trimmed
+ * lowercase text when the value is not a recognizable 2-letter code.
+ */
+export function canonicalGeoKey(geo: string | null | undefined): string {
+  if (!geo?.trim()) return "";
+  const code = normalizeGeoCode(geo);
+  if (code) return code;
+  return geo.trim().toLowerCase();
+}
+
 function networkMatches(a: string | null, b: string): boolean {
   if (!a) return false;
-  return a.trim().toLowerCase() === b.trim().toLowerCase();
+  return canonicalNetworkKey(a) === canonicalNetworkKey(b);
 }
 
 function geoMatches(a: string | null, b?: string | null): boolean {
   if (!b?.trim()) return true;
   if (!a) return false;
-  return a.trim().toLowerCase() === b.trim().toLowerCase();
+  return canonicalGeoKey(a) === canonicalGeoKey(b);
 }
 
 function matchesScope(
@@ -252,6 +270,76 @@ export function countTestingCreatedToday(
     count: matched,
     source: matched > 0 ? "createdAt" : "none",
     scoped: scopedLabel(opts),
+  };
+}
+
+export type DailyMissionMatchExplanation = {
+  employeeMatch: boolean;
+  networkMatch: boolean;
+  geoMatch: boolean;
+  purposeMatch: boolean;
+  dateMatch: boolean;
+  finalMatch: boolean;
+  normalized: {
+    campaignNetwork: string;
+    planNetwork: string;
+    campaignGeo: string;
+    planGeo: string;
+  };
+};
+
+/**
+ * Pure, dev/test-only diagnostic that explains why a campaign does (or does not)
+ * count toward a Network/GEO testing completion. Never logged in production.
+ */
+export function explainDailyMissionCampaignMatch(
+  campaign: unknown,
+  employee: { id?: number | null; name?: string | null } | null,
+  network: string,
+  geo: string | null | undefined,
+  now: Date = new Date(),
+): DailyMissionMatchExplanation {
+  const row = toMissionCampaignRow(campaign);
+  const normalized = {
+    campaignNetwork: canonicalNetworkKey(row?.network ?? null),
+    planNetwork: canonicalNetworkKey(network),
+    campaignGeo: canonicalGeoKey(row?.geo ?? null),
+    planGeo: canonicalGeoKey(geo ?? null),
+  };
+
+  if (!row) {
+    return {
+      employeeMatch: false,
+      networkMatch: false,
+      geoMatch: false,
+      purposeMatch: false,
+      dateMatch: false,
+      finalMatch: false,
+      normalized,
+    };
+  }
+
+  const employeeMatch =
+    employee?.id != null && row.employeeId != null
+      ? row.employeeId === employee.id
+      : employee?.name && row.employeeName
+        ? row.employeeName.trim().toLowerCase() === employee.name.trim().toLowerCase()
+        : true;
+  const networkMatch = networkMatches(row.network, network);
+  const geoMatch = geoMatches(row.geo, geo);
+  const purposeMatch = row.campaignPurpose === "testing";
+  const stamp = row.createdAt || row.liveStartedAt;
+  const dateMatch = Boolean(stamp && isSameLocalDay(stamp, now));
+
+  return {
+    employeeMatch,
+    networkMatch,
+    geoMatch,
+    purposeMatch,
+    dateMatch,
+    finalMatch:
+      employeeMatch && networkMatch && geoMatch && purposeMatch && dateMatch,
+    normalized,
   };
 }
 
