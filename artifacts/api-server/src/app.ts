@@ -45,6 +45,10 @@ app.use(
 );
 app.use(createSecurityHeadersMiddleware());
 app.use(createCorsMiddleware());
+// AI Optimizer receives two raw CSVs as JSON text, which can exceed the small
+// default body limit. Mount a larger JSON parser scoped to that path BEFORE the
+// global parser; once it sets req._body the global express.json() is a no-op.
+app.use("/api/ai-optimizer", express.json({ limit: "25mb" }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

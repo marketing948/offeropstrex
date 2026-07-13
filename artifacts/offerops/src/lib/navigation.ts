@@ -9,6 +9,7 @@ import {
   Layers,
   Radio,
   Settings,
+  Sparkles,
   Trophy,
   Users,
 } from "lucide-react";
@@ -50,6 +51,7 @@ export function getNavigationSections(isAdmin: boolean): NavSection[] {
       items: [
         { href: "/dashboard", label: "Executive Overview", icon: BarChart3 },
         { href: "/performance/monthly-goals", label: "Performance Engine", icon: Trophy },
+        { href: "/ai-optimizer", label: "AI Optimizer", icon: Sparkles },
         { href: "/employees", label: "Team", icon: Users },
         { href: "/settings", label: "Settings", icon: Settings },
       ],
