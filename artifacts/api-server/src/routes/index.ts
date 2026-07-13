@@ -31,6 +31,7 @@ import campaignWinnersReportRouter from "./campaign-winners-report";
 import campaignDailyMetricsRouter from "./campaign-daily-metrics";
 import campaignReviewRouter from "./campaign-review";
 import performanceEngineRouter from "./performance-engine";
+import aiOptimizerRouter from "./ai-optimizer";
 
 const router: IRouter = Router();
 
@@ -101,5 +102,6 @@ router.use(campaignWinnersReportRouter);
 router.use(campaignDailyMetricsRouter);
 router.use(campaignReviewRouter);
 router.use(performanceEngineRouter);
+router.use(aiOptimizerRouter);
 
 export default router;

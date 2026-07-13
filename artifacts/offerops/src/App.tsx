@@ -27,6 +27,7 @@ import RouteRedirect from "@/pages/route-redirect";
 import Dashboard from "@/pages/dashboard";
 import CampaignReview from "@/pages/campaign-review";
 import PerformanceEnginePage from "@/pages/performance-engine";
+import AiOptimizer from "@/pages/ai-optimizer";
 
 const queryClient = new QueryClient();
 
@@ -140,6 +141,10 @@ function Router() {
       </Route>
       <Route path="/weekly-reports">
         {() => <ProtectedRoute component={() => <RouteRedirect to="/reports" />} />}
+      </Route>
+
+      <Route path="/ai-optimizer">
+        {() => <ProtectedRoute component={AiOptimizer} adminOnly={true} />}
       </Route>
 
       <Route path="/settings">
